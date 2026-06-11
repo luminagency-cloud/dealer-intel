@@ -1,0 +1,60 @@
+import { z } from "zod";
+
+/**
+ * All variables are optional at parse time so the app can build and boot
+ * before credentials exist. Subsystems that need a variable call
+ * `requireEnv` at request time and fail with a descriptive error.
+ */
+const envSchema = z.object({
+  DATABASE_URL: z.string().min(1).optional(),
+  AUTH_SECRET: z.string().min(1).optional(),
+  ADMIN_EMAIL: z.email().optional(),
+  ADMIN_PASSWORD: z.string().min(8).optional(),
+  R2_ACCOUNT_ID: z.string().min(1).optional(),
+  R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  R2_BUCKET: z.string().min(1).optional(),
+});
+
+export type Env = z.infer<typeof envSchema>;
+
+function readEnv(): Env {
+  const parsed = envSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join("; ");
+    throw new Error(`Invalid environment configuration — ${issues}`);
+  }
+  return parsed.data;
+}
+
+export function getEnv(): Env {
+  return readEnv();
+}
+
+export function requireEnv(key: keyof Env): string {
+  const value = readEnv()[key];
+  if (!value) {
+    throw new Error(
+      `Missing required environment variable ${key}. ` +
+        `Copy .env.example to .env.local and fill it in.`
+    );
+  }
+  return value;
+}
+
+export const isDatabaseConfigured = () => Boolean(process.env.DATABASE_URL);
+export const isAuthConfigured = () =>
+  Boolean(
+    process.env.AUTH_SECRET &&
+      process.env.ADMIN_EMAIL &&
+      process.env.ADMIN_PASSWORD
+  );
+export const isR2Configured = () =>
+  Boolean(
+    process.env.R2_ACCOUNT_ID &&
+      process.env.R2_ACCESS_KEY_ID &&
+      process.env.R2_SECRET_ACCESS_KEY &&
+      process.env.R2_BUCKET
+  );
