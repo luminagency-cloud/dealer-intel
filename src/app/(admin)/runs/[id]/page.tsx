@@ -10,7 +10,9 @@ import {
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { EvidenceSection } from "@/components/evidence-section";
+import { CollectEvidenceForm } from "@/components/collect-evidence-form";
 import {
+  collectEvidence,
   deleteRunEvidence,
   updateRunStatus,
   uploadRunEvidence,
@@ -24,10 +26,13 @@ function formatDate(date: Date | null) {
 
 export default async function RunDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ collected?: string; collectError?: string }>;
 }) {
   const { id } = await params;
+  const { collected, collectError } = await searchParams;
 
   const run = await getCollectionRun(id);
   if (!run) notFound();
@@ -100,6 +105,17 @@ export default async function RunDetailPage({
           </div>
         </dl>
       </div>
+
+      {(run.status === "pending" || run.status === "running") && (
+        <div className="mb-8">
+          <CollectEvidenceForm
+            action={collectEvidence.bind(null, run.id)}
+            siteOptions={siteOptions}
+            collected={collected}
+            collectError={collectError}
+          />
+        </div>
+      )}
 
       <div className="mb-8">
         <EvidenceSection
