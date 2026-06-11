@@ -1,0 +1,1 @@
+ALTER TABLE "missions" ADD COLUMN "alternate_urls" text[] DEFAULT '{}' NOT NULL;

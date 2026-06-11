@@ -5,12 +5,11 @@ import { redirect } from "next/navigation";
 import {
   createCollectionRun,
   getCollectionRun,
+  listExecutableMissions,
   updateCollectionRunStatus,
 } from "@/lib/db/repository";
 import { removeEvidence, uploadEvidence } from "@/lib/evidence";
-import { collectSiteEvidence } from "@/lib/collector";
-import { getDb, sites } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { runMission, type MissionRunResult } from "@/lib/collector";
 import {
   evidenceTypeEnum,
   missionTypeEnum,
@@ -21,9 +20,12 @@ import {
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { requireSession } from "@/lib/session";
 
-export async function createRun() {
+export async function createRun(formData?: FormData) {
   await requireSession();
-  const run = await createCollectionRun();
+  const groupValue = formData?.get("runGroupId");
+  const runGroupId =
+    typeof groupValue === "string" && groupValue ? groupValue : null;
+  const run = await createCollectionRun({ runGroupId });
   revalidatePath("/runs");
   redirect(`/runs/${run.id}`);
 }
@@ -81,8 +83,7 @@ export async function uploadRunEvidence(runId: string, formData: FormData) {
   revalidatePath(`/runs/${runId}`);
 }
 
-export async function collectEvidence(runId: string, formData: FormData) {
-  await requireSession();
+async function requireCollectableRun(runId: string) {
   const run = await getCollectionRun(runId);
   if (!run) {
     throw new Error("Run not found");
@@ -90,38 +91,68 @@ export async function collectEvidence(runId: string, formData: FormData) {
   if (run.status !== "pending" && run.status !== "running") {
     throw new Error(`Cannot collect on a ${run.status} run`);
   }
+  return run;
+}
 
-  const siteId = formData.get("siteId");
-  const missionType = formData.get("missionType");
-  if (
-    typeof siteId !== "string" ||
-    !siteId ||
-    !missionTypeEnum.enumValues.includes(missionType as MissionType)
-  ) {
-    throw new Error("Site and mission type are required");
-  }
-  const [site] = await getDb()
-    .select({ id: sites.id, url: sites.url })
-    .from(sites)
-    .where(eq(sites.id, siteId));
-  if (!site) {
-    throw new Error("Site not found");
+function summarizeResults(runId: string, results: MissionRunResult[]): string {
+  const ok = results.filter((r) => r.status === "success");
+  const failed = results.filter((r) => r.status === "failure");
+  const pages = ok.reduce((n, r) => n + r.pagesCaptured, 0);
+  const params = new URLSearchParams({
+    ok: String(ok.length),
+    failed: String(failed.length),
+    pages: String(pages),
+  });
+  const firstError = failed.find((r) => r.error)?.error;
+  if (firstError) params.set("error", firstError);
+  return `/runs/${runId}?${params}`;
+}
+
+export async function executeMission(runId: string, missionId: string) {
+  await requireSession();
+  const run = await requireCollectableRun(runId);
+
+  // Scoped to the run's group (when set) — a grouped run only ever
+  // executes its member sites' missions.
+  const row = (await listExecutableMissions(run.runGroupId)).find(
+    (r) => r.mission.id === missionId
+  );
+  if (!row) {
+    throw new Error("Mission not found in this run's scope");
   }
 
-  const result = await collectSiteEvidence({
+  const result = await runMission({
     collectionRunId: runId,
-    site,
-    missionType: missionType as MissionType,
+    mission: row.mission,
+    site: row.site,
   });
 
   revalidatePath(`/runs/${runId}`);
-  redirect(
-    result.status === "success"
-      ? `/runs/${runId}?collected=${result.evidence.length}`
-      : `/runs/${runId}?collectError=${encodeURIComponent(
-          result.error ?? "Collection failed"
-        )}`
-  );
+  redirect(summarizeResults(runId, [result]));
+}
+
+export async function executeAllMissions(runId: string) {
+  await requireSession();
+  const run = await requireCollectableRun(runId);
+
+  const rows = await listExecutableMissions(run.runGroupId);
+  if (rows.length === 0) {
+    redirect(`/runs/${runId}?error=${encodeURIComponent("No active missions")}`);
+  }
+
+  const results: MissionRunResult[] = [];
+  for (const row of rows) {
+    results.push(
+      await runMission({
+        collectionRunId: runId,
+        mission: row.mission,
+        site: row.site,
+      })
+    );
+  }
+
+  revalidatePath(`/runs/${runId}`);
+  redirect(summarizeResults(runId, results));
 }
 
 export async function deleteRunEvidence(runId: string, evidenceId: string) {

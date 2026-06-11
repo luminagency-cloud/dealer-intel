@@ -13,6 +13,19 @@ const missionSchema = z.object({
   lastKnownUrl: z
     .union([z.url("Last known URL must be a valid URL"), z.literal("")])
     .transform((v) => (v === "" ? null : v)),
+  alternateUrls: z
+    .string()
+    .transform((v) =>
+      v
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    )
+    .pipe(
+      z
+        .array(z.url("Each additional URL must be a valid URL"))
+        .max(5, "At most 5 additional URLs per mission")
+    ),
 });
 
 function parseMissionForm(formData: FormData) {
@@ -20,6 +33,7 @@ function parseMissionForm(formData: FormData) {
     siteId: formData.get("siteId"),
     missionType: formData.get("missionType"),
     lastKnownUrl: formData.get("lastKnownUrl") ?? "",
+    alternateUrls: formData.get("alternateUrls") ?? "",
   });
 }
 

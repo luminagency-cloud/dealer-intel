@@ -41,6 +41,8 @@ export default async function SitesPage() {
               <tr>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">URL</th>
+                <th className="px-4 py-3">Brand</th>
+                <th className="px-4 py-3">State</th>
                 <th className="px-4 py-3">Platform</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
@@ -61,6 +63,12 @@ export default async function SitesPage() {
                     >
                       {site.url}
                     </a>
+                  </td>
+                  <td className="px-4 py-3 text-zinc-600">
+                    {site.brand ?? "—"}
+                  </td>
+                  <td className="px-4 py-3 text-zinc-600">
+                    {site.state ?? "—"}
                   </td>
                   <td className="px-4 py-3 text-zinc-600">
                     {site.platform ?? "—"}

@@ -1,19 +1,21 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { asc } from "drizzle-orm";
-import { RUN_STATUS_LABELS, getDb, sites } from "@/lib/db";
+import { asc, eq } from "drizzle-orm";
+import { RUN_STATUS_LABELS, getDb, runGroups, sites } from "@/lib/db";
 import {
   getCollectionRun,
   listEvidenceForRun,
+  listExecutableMissions,
   listOffersForRun,
 } from "@/lib/db/repository";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { EvidenceSection } from "@/components/evidence-section";
-import { CollectEvidenceForm } from "@/components/collect-evidence-form";
+import { MissionRunPanel } from "@/components/mission-run-panel";
 import {
-  collectEvidence,
   deleteRunEvidence,
+  executeAllMissions,
+  executeMission,
   updateRunStatus,
   uploadRunEvidence,
 } from "../actions";
@@ -29,22 +31,35 @@ export default async function RunDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ collected?: string; collectError?: string }>;
+  searchParams: Promise<{
+    ok?: string;
+    failed?: string;
+    pages?: string;
+    error?: string;
+  }>;
 }) {
   const { id } = await params;
-  const { collected, collectError } = await searchParams;
+  const summary = await searchParams;
 
   const run = await getCollectionRun(id);
   if (!run) notFound();
 
-  const [runEvidence, runOffers, siteOptions] = await Promise.all([
-    listEvidenceForRun(run.id),
-    listOffersForRun(run.id),
-    getDb()
-      .select({ id: sites.id, name: sites.name })
-      .from(sites)
-      .orderBy(asc(sites.name)),
-  ]);
+  const [runEvidence, runOffers, siteOptions, missionRows, [runGroup]] =
+    await Promise.all([
+      listEvidenceForRun(run.id),
+      listOffersForRun(run.id),
+      getDb()
+        .select({ id: sites.id, name: sites.name })
+        .from(sites)
+        .orderBy(asc(sites.name)),
+      listExecutableMissions(run.runGroupId),
+      run.runGroupId
+        ? getDb()
+            .select()
+            .from(runGroups)
+            .where(eq(runGroups.id, run.runGroupId))
+        : Promise.resolve([undefined]),
+    ]);
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
   const nextStatuses = RUN_TRANSITIONS[run.status];
 
@@ -61,6 +76,11 @@ export default async function RunDetailPage({
           <h1 className="text-xl font-semibold text-zinc-900">
             Run {run.id.slice(0, 8)}
           </h1>
+          {runGroup && (
+            <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-700">
+              {runGroup.name}
+            </span>
+          )}
           <RunStatusBadge status={run.status} />
         </div>
         {nextStatuses.length > 0 && (
@@ -108,11 +128,11 @@ export default async function RunDetailPage({
 
       {(run.status === "pending" || run.status === "running") && (
         <div className="mb-8">
-          <CollectEvidenceForm
-            action={collectEvidence.bind(null, run.id)}
-            siteOptions={siteOptions}
-            collected={collected}
-            collectError={collectError}
+          <MissionRunPanel
+            missionRows={missionRows}
+            executeMissionAction={executeMission.bind(null, run.id)}
+            executeAllAction={executeAllMissions.bind(null, run.id)}
+            summary={summary}
           />
         </div>
       )}

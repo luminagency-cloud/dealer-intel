@@ -15,6 +15,27 @@
       "when": 1781199214422,
       "tag": "0001_lush_logan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781217854354,
+      "tag": "0002_nebulous_kate_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781218906314,
+      "tag": "0003_flowery_swordsman",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781220197906,
+      "tag": "0004_greedy_maddog",
+      "breakpoints": true
     }
   ]
 }

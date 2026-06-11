@@ -33,6 +33,10 @@ export const sites = pgTable("sites", {
   name: text("name").notNull(),
   url: text("url").notNull(),
   platform: text("platform"),
+  /** Vehicle brand(s) sold, e.g. "Kia" or "Chrysler, Dodge, Jeep, Ram". */
+  brand: text("brand"),
+  /** Two-letter US state code. */
+  state: text("state"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -51,6 +55,9 @@ export const missions = pgTable("missions", {
     .references(() => sites.id, { onDelete: "cascade" }),
   missionType: missionTypeEnum("mission_type").notNull(),
   lastKnownUrl: text("last_known_url"),
+  /** Additional pages to capture — some missions need several pages for the
+   *  full picture. All configured URLs are visited every collection. */
+  alternateUrls: text("alternate_urls").array().notNull().default([]),
   successRate: real("success_rate"),
   lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
   active: boolean("active").notNull().default(true),
@@ -102,6 +109,39 @@ export const siteRelationships = pgTable(
   ]
 );
 
+/** Named operational batches of sites — a first-order dealer plus its
+ *  related dealers. Scopes which missions a run executes; the collector
+ *  itself stays competition-blind (AD-002). Reporting may later treat a
+ *  group's primary sites as the comparison anchor. */
+export const runGroups = pgTable("run_groups", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const runGroupMembers = pgTable(
+  "run_group_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runGroupId: uuid("run_group_id")
+      .notNull()
+      .references(() => runGroups.id, { onDelete: "cascade" }),
+    siteId: uuid("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    /** First-order dealer(s) the group is built around. */
+    isPrimary: boolean("is_primary").notNull().default(false),
+  },
+  (table) => [
+    uniqueIndex("run_group_members_unique").on(table.runGroupId, table.siteId),
+  ]
+);
+
 // Statuses follow the roadmap's Phase 3 run lifecycle rather than the
 // shorter list in Docs/Data Model.md ("completed" -> review/published).
 export const runStatusEnum = pgEnum("run_status", [
@@ -125,6 +165,10 @@ export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
 /** A complete collection attempt. Orchestration arrives in Phase 3. */
 export const collectionRuns = pgTable("collection_runs", {
   id: uuid("id").defaultRandom().primaryKey(),
+  /** When set, the run only executes missions for the group's sites. */
+  runGroupId: uuid("run_group_id").references(() => runGroups.id, {
+    onDelete: "set null",
+  }),
   status: runStatusEnum("status").notNull().default("pending"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -220,6 +264,10 @@ export type Mission = typeof missions.$inferSelect;
 export type NewMission = typeof missions.$inferInsert;
 export type SiteRelationship = typeof siteRelationships.$inferSelect;
 export type NewSiteRelationship = typeof siteRelationships.$inferInsert;
+export type RunGroup = typeof runGroups.$inferSelect;
+export type NewRunGroup = typeof runGroups.$inferInsert;
+export type RunGroupMember = typeof runGroupMembers.$inferSelect;
+export type NewRunGroupMember = typeof runGroupMembers.$inferInsert;
 export type CollectionRun = typeof collectionRuns.$inferSelect;
 export type NewCollectionRun = typeof collectionRuns.$inferInsert;
 export type Evidence = typeof evidence.$inferSelect;

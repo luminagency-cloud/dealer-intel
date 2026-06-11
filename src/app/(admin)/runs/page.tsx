@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { isDatabaseConfigured, RUN_STATUS_LABELS } from "@/lib/db";
+import { asc } from "drizzle-orm";
+import {
+  RUN_STATUS_LABELS,
+  getDb,
+  isDatabaseConfigured,
+  runGroups,
+} from "@/lib/db";
 import { listCollectionRuns } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { RunStatusBadge } from "@/components/run-status-badge";
@@ -21,13 +27,29 @@ export default async function RunsPage() {
     );
   }
 
-  const runs = await listCollectionRuns();
+  const [runs, groups] = await Promise.all([
+    listCollectionRuns(),
+    getDb().select().from(runGroups).orderBy(asc(runGroups.name)),
+  ]);
+  const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]));
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900">Runs</h1>
-        <form action={createRun}>
+        <form action={createRun} className="flex items-center gap-2">
+          <select
+            name="runGroupId"
+            defaultValue=""
+            className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
+          >
+            <option value="">All sites</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                Group: {group.name}
+              </option>
+            ))}
+          </select>
           <button
             type="submit"
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
@@ -47,6 +69,7 @@ export default async function RunsPage() {
             <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="px-4 py-3">Run</th>
+                <th className="px-4 py-3">Scope</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Created</th>
                 <th className="px-4 py-3">Started</th>
@@ -64,6 +87,11 @@ export default async function RunsPage() {
                     >
                       {run.id.slice(0, 8)}
                     </Link>
+                  </td>
+                  <td className="px-4 py-3 text-zinc-600">
+                    {run.runGroupId
+                      ? groupNames[run.runGroupId] ?? "(deleted group)"
+                      : "All sites"}
                   </td>
                   <td className="px-4 py-3">
                     <RunStatusBadge status={run.status} />
@@ -84,8 +112,8 @@ export default async function RunsPage() {
         </div>
       )}
       <p className="mt-4 text-xs text-zinc-400">
-        Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Collection
-        itself arrives in Phase 5; until then runs are managed manually.
+        Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Pick a run
+        group to collect just that group&apos;s sites.
       </p>
     </div>
   );

@@ -29,6 +29,9 @@ export default async function AdminLayout({
               <Link href="/missions" className="hover:text-zinc-900">
                 Missions
               </Link>
+              <Link href="/groups" className="hover:text-zinc-900">
+                Run Groups
+              </Link>
               <Link href="/runs" className="hover:text-zinc-900">
                 Runs
               </Link>

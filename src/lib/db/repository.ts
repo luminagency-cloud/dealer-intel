@@ -1,11 +1,16 @@
-import { desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   collectionRuns,
   evidence,
+  missions,
   offers,
   reportSnapshots,
+  runGroupMembers,
   siteRelationships,
+  sites,
+  type Mission,
+  type Site,
   type CollectionRun,
   type Evidence,
   type NewCollectionRun,
@@ -87,6 +92,34 @@ export async function updateCollectionRunStatus(
     .where(eq(collectionRuns.id, id))
     .returning();
   return row;
+}
+
+/** Active missions on active sites, optionally scoped to a run group's
+ *  member sites. This is the work list a run executes. */
+export async function listExecutableMissions(
+  runGroupId?: string | null
+): Promise<{ mission: Mission; site: Site }[]> {
+  const db = getDb();
+  const baseQuery = db
+    .select({ mission: missions, site: sites })
+    .from(missions)
+    .innerJoin(sites, eq(missions.siteId, sites.id));
+
+  const rows = runGroupId
+    ? await baseQuery
+        .innerJoin(
+          runGroupMembers,
+          and(
+            eq(runGroupMembers.siteId, sites.id),
+            eq(runGroupMembers.runGroupId, runGroupId)
+          )
+        )
+        .where(and(eq(missions.active, true), eq(sites.active, true)))
+        .orderBy(asc(sites.name))
+    : await baseQuery
+        .where(and(eq(missions.active, true), eq(sites.active, true)))
+        .orderBy(asc(sites.name));
+  return rows;
 }
 
 // --- Evidence -----------------------------------------------------------

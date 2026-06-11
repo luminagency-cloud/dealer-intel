@@ -15,6 +15,17 @@ const siteSchema = z.object({
     .trim()
     .transform((v) => (v === "" ? null : v))
     .nullable(),
+  brand: z
+    .string()
+    .trim()
+    .transform((v) => (v === "" ? null : v))
+    .nullable(),
+  state: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .transform((v) => (v === "" ? null : v))
+    .nullable(),
 });
 
 function parseSiteForm(formData: FormData) {
@@ -22,6 +33,8 @@ function parseSiteForm(formData: FormData) {
     name: formData.get("name"),
     url: formData.get("url"),
     platform: formData.get("platform") ?? "",
+    brand: formData.get("brand") ?? "",
+    state: formData.get("state") ?? "",
   });
 }
 

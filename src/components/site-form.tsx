@@ -54,6 +54,31 @@ export function SiteForm({
           className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
         />
       </label>
+      <div className="mt-4 grid grid-cols-[1fr_8rem] gap-3">
+        <label className="block text-sm font-medium text-zinc-700">
+          Brand{" "}
+          <span className="font-normal text-zinc-400">(optional)</span>
+          <input
+            type="text"
+            name="brand"
+            defaultValue={site?.brand ?? ""}
+            placeholder="Kia"
+            className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+          />
+        </label>
+        <label className="block text-sm font-medium text-zinc-700">
+          State{" "}
+          <span className="font-normal text-zinc-400">(optional)</span>
+          <input
+            type="text"
+            name="state"
+            maxLength={2}
+            defaultValue={site?.state ?? ""}
+            placeholder="RI"
+            className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm uppercase shadow-sm focus:border-zinc-500 focus:outline-none"
+          />
+        </label>
+      </div>
       <div className="mt-6 flex items-center gap-3">
         <button
           type="submit"

@@ -1,8 +1,9 @@
-import { CollectionError, capturePage } from "./engine";
+import { CollectionError, capturePage, cleanErrorMessage } from "./engine";
 import { uploadEvidence } from "@/lib/evidence";
 import type { Evidence, MissionType, Site } from "@/lib/db";
 
 export { CollectionError, capturePage } from "./engine";
+export { runMission, type MissionRunResult } from "./mission-runner";
 
 export interface CollectionResult {
   status: "success" | "failure";
@@ -11,19 +12,10 @@ export interface CollectionResult {
   error?: string;
 }
 
-// Strips ANSI styling (ESC [ ... m) — Playwright error messages embed
-// terminal escape codes. Built via fromCharCode so no raw control
-// character lives in this source file.
-const ANSI_PATTERN = new RegExp(
-  String.fromCharCode(27) + "\\[[0-9;]*m",
-  "g"
-);
-
 /**
- * Visits a site and stores the captured evidence against a run (Phase 5
- * success criteria). The mission type is a label supplied by the caller —
- * the collector itself attaches no meaning to it (AD-003); URL selection
- * beyond the site homepage arrives with the mission framework in Phase 6.
+ * Generic single-page collection (Phase 5): visits a site's URL and stores
+ * the captured evidence against a run. Kept for ad-hoc captures; mission
+ * execution (Phase 6) lives in mission-runner.ts.
  */
 export async function collectSiteEvidence(input: {
   collectionRunId: string;
@@ -69,12 +61,6 @@ export async function collectSiteEvidence(input: {
         // Evidence storage failing must not mask the original error.
       }
     }
-    // First line only, without ANSI codes — Playwright errors append a
-    // multi-line call log meant for terminals.
-    const message = (err instanceof Error ? err.message : String(err))
-      .split("\n")[0]
-      .replace(ANSI_PATTERN, "")
-      .trim();
-    return { status: "failure", evidence, error: message };
+    return { status: "failure", evidence, error: cleanErrorMessage(err) };
   }
 }
