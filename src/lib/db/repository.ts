@@ -96,6 +96,11 @@ export async function createEvidence(data: NewEvidence): Promise<Evidence> {
   return row;
 }
 
+export async function getEvidence(id: string): Promise<Evidence | undefined> {
+  const [row] = await getDb().select().from(evidence).where(eq(evidence.id, id));
+  return row;
+}
+
 export async function listEvidenceForRun(
   collectionRunId: string
 ): Promise<Evidence[]> {

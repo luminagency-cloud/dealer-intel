@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { RUN_STATUS_LABELS } from "@/lib/db";
+import { asc } from "drizzle-orm";
+import { RUN_STATUS_LABELS, getDb, sites } from "@/lib/db";
 import {
   getCollectionRun,
   listEvidenceForRun,
@@ -8,7 +9,12 @@ import {
 } from "@/lib/db/repository";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
-import { updateRunStatus } from "../actions";
+import { EvidenceSection } from "@/components/evidence-section";
+import {
+  deleteRunEvidence,
+  updateRunStatus,
+  uploadRunEvidence,
+} from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -26,10 +32,15 @@ export default async function RunDetailPage({
   const run = await getCollectionRun(id);
   if (!run) notFound();
 
-  const [runEvidence, runOffers] = await Promise.all([
+  const [runEvidence, runOffers, siteOptions] = await Promise.all([
     listEvidenceForRun(run.id),
     listOffersForRun(run.id),
+    getDb()
+      .select({ id: sites.id, name: sites.name })
+      .from(sites)
+      .orderBy(asc(sites.name)),
   ]);
+  const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
   const nextStatuses = RUN_TRANSITIONS[run.status];
 
   return (
@@ -90,17 +101,18 @@ export default async function RunDetailPage({
         </dl>
       </div>
 
+      <div className="mb-8">
+        <EvidenceSection
+          evidence={runEvidence}
+          siteOptions={siteOptions}
+          siteNames={siteNames}
+          uploadAction={uploadRunEvidence.bind(null, run.id)}
+          deleteAction={deleteRunEvidence.bind(null, run.id)}
+          canUpload={run.status !== "published"}
+        />
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold text-zinc-900">Evidence</h2>
-          <p className="mt-1 text-2xl font-semibold text-zinc-900">
-            {runEvidence.length}
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">
-            Captured screenshots and HTML snapshots. Evidence services arrive
-            in Phase 4.
-          </p>
-        </div>
         <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
           <h2 className="text-sm font-semibold text-zinc-900">Offers</h2>
           <p className="mt-1 text-2xl font-semibold text-zinc-900">

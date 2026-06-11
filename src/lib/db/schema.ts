@@ -142,6 +142,13 @@ export const evidenceTypeEnum = pgEnum("evidence_type", [
 
 export type EvidenceType = (typeof evidenceTypeEnum.enumValues)[number];
 
+export const EVIDENCE_TYPE_LABELS: Record<EvidenceType, string> = {
+  screenshot: "Screenshot",
+  html_snapshot: "HTML Snapshot",
+  failure_screenshot: "Failure Screenshot",
+  disclaimer_screenshot: "Disclaimer Screenshot",
+};
+
 /** Screenshots, disclaimers, and HTML captures (AD-005, AD-010). URLs point
  *  at object storage; upload/retrieval services arrive in Phase 4. */
 export const evidence = pgTable("evidence", {
