@@ -19,7 +19,12 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 function readEnv(): Env {
-  const parsed = envSchema.safeParse(process.env);
+  // Treat empty strings as unset so placeholder lines in .env
+  // (e.g. `R2_BUCKET=`) don't fail validation for unrelated subsystems.
+  const source = Object.fromEntries(
+    Object.entries(process.env).filter(([, v]) => v !== "")
+  );
+  const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `${i.path.join(".")}: ${i.message}`)
