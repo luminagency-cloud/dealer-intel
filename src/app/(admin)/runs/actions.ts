@@ -13,6 +13,7 @@ import {
   retryMissionResult,
   startRunExecution,
 } from "@/lib/run-executor";
+import { startAnalysis } from "@/lib/analysis";
 import { deleteRunDeep } from "@/lib/deep-delete";
 import {
   collectionRunMissions,
@@ -84,6 +85,24 @@ export async function createRun(formData?: FormData) {
 export async function deleteRun(runId: string) {
   await requireSession();
   await deleteRunDeep(runId);
+  revalidatePath("/runs");
+  redirect("/runs");
+}
+
+export async function deleteSelectedRuns(formData: FormData) {
+  await requireSession();
+  const runIds = formData
+    .getAll("runIds")
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (runIds.length === 0) {
+    redirect(`/runs?error=${encodeURIComponent("Pick at least one run to delete")}`);
+  }
+
+  for (const runId of runIds) {
+    await deleteRunDeep(runId);
+  }
+
   revalidatePath("/runs");
   redirect("/runs");
 }
@@ -181,6 +200,23 @@ export async function executeAllMissions(runId: string) {
       ? `/runs/${runId}?error=${encodeURIComponent("Run is already executing")}`
       : queued === 0
         ? `/runs/${runId}?error=${encodeURIComponent("No active missions")}`
+        : `/runs/${runId}`
+  );
+}
+
+export async function runAnalysis(runId: string) {
+  await requireSession();
+  const run = await getCollectionRun(runId);
+  if (!run) {
+    throw new Error("Run not found");
+  }
+  const queued = await startAnalysis(runId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(
+    queued === null
+      ? `/runs/${runId}?error=${encodeURIComponent("Analysis is already running")}`
+      : queued === 0
+        ? `/runs/${runId}?error=${encodeURIComponent("No HTML evidence to analyze yet")}`
         : `/runs/${runId}`
   );
 }

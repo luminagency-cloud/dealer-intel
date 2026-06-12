@@ -63,17 +63,18 @@ export function RunScopePicker({
         name="scope"
         value={scope}
         onChange={(e) => setScope(e.target.value)}
+        aria-label="Run scope"
         className="max-w-56 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
       >
-        <option value="">All sites</option>
-        <optgroup label="Run Groups">
+        <option value="">Scope: All sites</option>
+        <optgroup label="Saved run groups">
           {groups.map((group) => (
             <option key={group.id} value={`group:${group.id}`}>
               {group.name}
             </option>
           ))}
         </optgroup>
-        <option value="custom">Pick dealers…</option>
+        <option value="custom">Pick dealers to run together…</option>
       </select>
 
       {scope === "custom" && (
@@ -82,6 +83,10 @@ export function RunScopePicker({
             {checked.size} selected
           </span>
           <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
+            <p className="px-2 pb-2 pt-1 text-xs text-zinc-500">
+              Check the dealers to collect in this one run — a throwaway group,
+              nothing saved.
+            </p>
             {sites.map((site) => (
               <label
                 key={site.id}

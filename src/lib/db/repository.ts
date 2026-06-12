@@ -4,6 +4,7 @@ import {
   collectionRunMissions,
   collectionRunSites,
   collectionRuns,
+  complianceGrades,
   siteMissions,
   evidence,
   missionResults,
@@ -13,6 +14,7 @@ import {
   runGroupMembers,
   siteRelationships,
   sites,
+  type ComplianceGrade,
   type Mission,
   type SiteMission,
   type MissionResult,
@@ -269,6 +271,17 @@ export async function updateOffer(
 
 export async function deleteOffer(id: string): Promise<void> {
   await getDb().delete(offers).where(eq(offers.id, id));
+}
+
+// --- Compliance Grades ----------------------------------------------------
+
+export async function listComplianceGradesForRun(
+  collectionRunId: string
+): Promise<ComplianceGrade[]> {
+  return getDb()
+    .select()
+    .from(complianceGrades)
+    .where(eq(complianceGrades.collectionRunId, collectionRunId));
 }
 
 // --- Report Snapshots -----------------------------------------------------

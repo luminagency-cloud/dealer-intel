@@ -16,7 +16,7 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 6 Mission Framework | Done | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
 | 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
 | 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
-| 9 | Not started | Evidence Analysis: classification, normalization, external compliance API call. |
+| 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
 | 10 | Not started | Snapshot Publishing — the wall between analysis and reporting. |
 | 11 | Not started | Reporting Engine — pure reads from published snapshots, links to R2 images. |
 | 12 | Not started | AI-Assisted Analysis — improves edge-case classification and normalization. |
@@ -112,6 +112,34 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
 - `src/lib/freshness.ts` — 7-day freshness window over
   `sites.last_collected_at` (fresh / stale / never); rendered by
   `components/freshness-badge.tsx` on the sites list.
+- `src/lib/analysis/` — Phase 9 evidence analysis (no site visits, reads
+  stored evidence):
+  - `extract.ts` — deterministic rule-based extraction over HTML-snapshot
+    text. Classifies offer type (lease/finance/cash/service/promotional) +
+    vehicle (known-make list, brand prior from the site), normalizes monthly
+    payment / APR / term / due-at-signing / cash, plus a service-special
+    price/discount path; emits a 0..1 confidence. v1 is one offer per evidence
+    (returns an array so multi-offer can drop in).
+    DISCLAIMER RULE (operator, hard): a disclaimer is tied to a SPECIFIC ad and
+    sits with it (just below, or text within the ad image). It is never the
+    site-wide footer legalese (Terms of Use / Privacy / © / "do not sell").
+    `extractDisclaimerNear` enforces this — it only searches the text right
+    after the offer anchor, requires offer-specific fine-print wording, and
+    cuts at any site-wide/footer marker; no ad anchor ⇒ null. Carry this rule
+    into Phase 12 AI extraction.
+  - `compliance.ts` — `ComplianceGrader` interface + `StubComplianceGrader`
+    (deterministic: a priced offer needs a disclaimer) + `getComplianceGrader`
+    factory. The real external service replaces the stub here; the platform
+    only sends/stores (AD: compliance logic is external).
+  - `runner.ts` — background, re-runnable analysis per run. Loads the run's
+    html_snapshot evidence (joined to site brand), extracts offers → `offers`
+    rows (with `source_evidence_id`), grades each ad → `compliance_grades`
+    (upsert, one per evidence). Idempotent: clears the run's prior offers +
+    grades first. Guarded by a globalThis active set like the collector;
+    `isAnalysisRunning(runId)` drives the run page's live refresh.
+  Triggered by the **Run Analysis** button on the run page
+  (`components/analysis-section.tsx`), which shows the extracted offers
+  (type, vehicle, terms, confidence) and compliance grades.
 - `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`

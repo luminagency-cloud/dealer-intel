@@ -76,6 +76,25 @@ export function evidenceKey(row: Evidence): string | null {
   return row.htmlUrl ?? row.screenshotUrl;
 }
 
+/** Reads an evidence row's stored object bytes straight from R2. Used by the
+ *  Phase 9 analysis passes, which read stored evidence (no presigned round
+ *  trip, no site visits). Returns null when the row has no stored object. */
+export async function getEvidenceBody(row: Evidence): Promise<Buffer | null> {
+  const key = evidenceKey(row);
+  if (!key) return null;
+  const response = await getR2Client().send(
+    new GetObjectCommand({ Bucket: getR2Bucket(), Key: key })
+  );
+  const bytes = await response.Body?.transformToByteArray();
+  return bytes ? Buffer.from(bytes) : null;
+}
+
+/** Convenience for HTML-snapshot evidence: the rendered markup as a string. */
+export async function getEvidenceText(row: Evidence): Promise<string | null> {
+  const body = await getEvidenceBody(row);
+  return body ? body.toString("utf-8") : null;
+}
+
 /** Short-lived presigned GET URL for an evidence row's stored object. */
 export async function getEvidenceDownloadUrl(row: Evidence): Promise<string> {
   const key = evidenceKey(row);

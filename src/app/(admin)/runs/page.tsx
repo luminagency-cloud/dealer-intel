@@ -14,7 +14,8 @@ import { RunScopePicker } from "@/components/run-scope-picker";
 import { listCollectionRuns } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { RunStatusBadge } from "@/components/run-status-badge";
-import { createRun } from "./actions";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { createRun, deleteSelectedRuns } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -97,54 +98,74 @@ export default async function RunsPage({
           No runs yet. Create the first collection run.
         </p>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="px-4 py-3">Run</th>
-                <th className="px-4 py-3">Scope</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Created</th>
-                <th className="px-4 py-3">Started</th>
-                <th className="px-4 py-3">Completed</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {runs.map((run) => (
-                <tr key={run.id}>
-                  <td className="px-4 py-3 font-medium text-zinc-900">
-                    <Link
-                      href={`/runs/${run.id}`}
-                      className="hover:underline"
-                      title={run.id}
-                    >
-                      {run.id.slice(0, 8)}
-                    </Link>
-                  </td>
-                  <td className="max-w-56 truncate px-4 py-3 text-zinc-600">
-                    {run.runGroupId
-                      ? groupNames[run.runGroupId] ?? "(deleted group)"
-                      : adHocNames.has(run.id)
-                        ? adHocNames.get(run.id)!.join(", ")
-                        : "All sites"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <RunStatusBadge status={run.status} />
-                  </td>
-                  <td className="px-4 py-3 text-zinc-600">
-                    {formatDate(run.createdAt)}
-                  </td>
-                  <td className="px-4 py-3 text-zinc-600">
-                    {formatDate(run.startedAt)}
-                  </td>
-                  <td className="px-4 py-3 text-zinc-600">
-                    {formatDate(run.completedAt)}
-                  </td>
+        <form action={deleteSelectedRuns}>
+          <div className="mb-3 flex justify-end">
+            <ConfirmSubmitButton
+              confirmMessage="Delete the selected runs? Their evidence (including files in R2), results, and offers are permanently removed."
+              className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+            >
+              Delete Selected
+            </ConfirmSubmitButton>
+          </div>
+          <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+                <tr>
+                  <th className="px-4 py-3">Run</th>
+                  <th className="px-4 py-3">Scope</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Created</th>
+                  <th className="px-4 py-3">Started</th>
+                  <th className="px-4 py-3">Completed</th>
+                  <th className="px-4 py-3 text-center">Delete</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {runs.map((run) => (
+                  <tr key={run.id}>
+                    <td className="px-4 py-3 font-medium text-zinc-900">
+                      <Link
+                        href={`/runs/${run.id}`}
+                        className="hover:underline"
+                        title={run.id}
+                      >
+                        {run.id.slice(0, 8)}
+                      </Link>
+                    </td>
+                    <td className="max-w-56 truncate px-4 py-3 text-zinc-600">
+                      {run.runGroupId
+                        ? groupNames[run.runGroupId] ?? "(deleted group)"
+                        : adHocNames.has(run.id)
+                          ? adHocNames.get(run.id)!.join(", ")
+                          : "All sites"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <RunStatusBadge status={run.status} />
+                    </td>
+                    <td className="px-4 py-3 text-zinc-600">
+                      {formatDate(run.createdAt)}
+                    </td>
+                    <td className="px-4 py-3 text-zinc-600">
+                      {formatDate(run.startedAt)}
+                    </td>
+                    <td className="px-4 py-3 text-zinc-600">
+                      {formatDate(run.completedAt)}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        name="runIds"
+                        value={run.id}
+                        aria-label={`Select run ${run.id.slice(0, 8)} for deletion`}
+                        className="h-4 w-4 rounded border-zinc-300 text-red-600 focus:ring-red-500"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </form>
       )}
       <p className="mt-4 text-xs text-zinc-400">
         Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Pick a run

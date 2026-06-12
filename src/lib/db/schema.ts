@@ -361,8 +361,18 @@ export const offerTypeEnum = pgEnum("offer_type", [
 
 export type OfferType = (typeof offerTypeEnum.enumValues)[number];
 
-/** Normalized offer records. Discovery/normalization arrive in Phases 9-10;
- *  normalized_json holds the structured fields until those phases firm up. */
+export const OFFER_TYPE_LABELS: Record<OfferType, string> = {
+  lease: "Lease",
+  finance: "Finance",
+  cash: "Cash",
+  service: "Service",
+  promotional: "Promotional",
+};
+
+/** Normalized offer records produced by the Phase 9 analysis passes
+ *  (classification + normalization) over stored evidence. Derived and
+ *  re-runnable: re-analysis replaces a run's offers. normalized_json keeps
+ *  extras and the raw regex matches alongside the typed columns. */
 export const offers = pgTable("offers", {
   id: uuid("id").defaultRandom().primaryKey(),
   collectionRunId: uuid("collection_run_id")
@@ -371,7 +381,22 @@ export const offers = pgTable("offers", {
   siteId: uuid("site_id")
     .notNull()
     .references(() => sites.id, { onDelete: "cascade" }),
+  /** Evidence this offer was extracted from. Null for manual/legacy offers. */
+  sourceEvidenceId: uuid("source_evidence_id").references(() => evidence.id, {
+    onDelete: "set null",
+  }),
   offerType: offerTypeEnum("offer_type").notNull(),
+  /** Classification: vehicle context where present. */
+  vehicleMake: text("vehicle_make"),
+  vehicleModel: text("vehicle_model"),
+  vehicleTrim: text("vehicle_trim"),
+  /** Normalization: the roadmap's core offer fields. Dollars and percent as
+   *  plain numbers; term in whole months. */
+  monthlyPayment: real("monthly_payment"),
+  apr: real("apr"),
+  cashIncentive: real("cash_incentive"),
+  termMonths: integer("term_months"),
+  dueAtSigning: real("due_at_signing"),
   rawText: text("raw_text"),
   normalizedJson: jsonb("normalized_json"),
   disclaimerText: text("disclaimer_text"),
@@ -380,6 +405,33 @@ export const offers = pgTable("offers", {
     .notNull()
     .defaultNow(),
 });
+
+/** Compliance grades from the external compliance service (Phase 9). The
+ *  grading logic lives entirely in that service; we send evidence + disclaimer
+ *  + ad type and store what comes back, one current grade per evidence record
+ *  (re-analysis upserts). */
+export const complianceGrades = pgTable(
+  "compliance_grades",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    evidenceId: uuid("evidence_id")
+      .notNull()
+      .references(() => evidence.id, { onDelete: "cascade" }),
+    collectionRunId: uuid("collection_run_id")
+      .notNull()
+      .references(() => collectionRuns.id, { onDelete: "cascade" }),
+    /** Service-defined grade, e.g. "pass" / "warn" / "fail" or a letter. */
+    grade: text("grade").notNull(),
+    /** Full service response payload for drill-down. */
+    detailsJson: jsonb("details_json"),
+    gradedAt: timestamp("graded_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("compliance_grades_evidence_unique").on(table.evidenceId),
+  ]
+);
 
 /** Approved reporting datasets (AD-006). Reports only ever read snapshots,
  *  never live collection data. */
@@ -417,5 +469,7 @@ export type Evidence = typeof evidence.$inferSelect;
 export type NewEvidence = typeof evidence.$inferInsert;
 export type Offer = typeof offers.$inferSelect;
 export type NewOffer = typeof offers.$inferInsert;
+export type ComplianceGrade = typeof complianceGrades.$inferSelect;
+export type NewComplianceGrade = typeof complianceGrades.$inferInsert;
 export type ReportSnapshot = typeof reportSnapshots.$inferSelect;
 export type NewReportSnapshot = typeof reportSnapshots.$inferInsert;

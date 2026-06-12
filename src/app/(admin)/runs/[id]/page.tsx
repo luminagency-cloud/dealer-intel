@@ -10,16 +10,19 @@ import {
 } from "@/lib/db";
 import {
   getCollectionRun,
+  listComplianceGradesForRun,
   listEvidenceForRun,
   listOffersForRun,
   listResultsForRun,
   listWorkItemsForRun,
 } from "@/lib/db/repository";
 import { isRunExecuting } from "@/lib/run-executor";
+import { isAnalysisRunning } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { EvidenceSection } from "@/components/evidence-section";
 import { MissionRunPanel } from "@/components/mission-run-panel";
+import { AnalysisSection } from "@/components/analysis-section";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
@@ -28,6 +31,7 @@ import {
   executeAllMissions,
   executeWorkItem,
   retryResult,
+  runAnalysis,
   updateRunStatus,
   uploadRunEvidence,
 } from "../actions";
@@ -54,6 +58,7 @@ export default async function RunDetailPage({
   const [
     runEvidence,
     runOffers,
+    runGrades,
     siteOptions,
     missionRows,
     runResults,
@@ -61,6 +66,7 @@ export default async function RunDetailPage({
   ] = await Promise.all([
     listEvidenceForRun(run.id),
     listOffersForRun(run.id),
+    listComplianceGradesForRun(run.id),
     getDb()
       .select({ id: sites.id, name: sites.name })
       .from(sites)
@@ -99,10 +105,15 @@ export default async function RunDetailPage({
   const executing =
     isRunExecuting(run.id) ||
     runResults.some((r) => r.status === "pending" || r.status === "running");
+  const analyzing = isAnalysisRunning(run.id);
+  // Analysis needs captured HTML evidence; offer it once anything's collected.
+  const canAnalyze =
+    run.status !== "failed" &&
+    runEvidence.some((e) => e.evidenceType === "html_snapshot");
 
   return (
     <div>
-      <AutoRefresh active={executing} />
+      <AutoRefresh active={executing || analyzing} />
       <div className="mb-6">
         <Link href="/runs" className="text-sm text-zinc-500 hover:underline">
           ← Runs
@@ -195,16 +206,15 @@ export default async function RunDetailPage({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold text-zinc-900">Offers</h2>
-          <p className="mt-1 text-2xl font-semibold text-zinc-900">
-            {runOffers.length}
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">
-            Normalized offer records. Offer discovery arrives in Phase 9.
-          </p>
-        </div>
+      <div className="mb-8">
+        <AnalysisSection
+          offers={runOffers}
+          grades={runGrades}
+          siteNames={siteNames}
+          analyzing={analyzing}
+          runAnalysisAction={runAnalysis.bind(null, run.id)}
+          canAnalyze={canAnalyze}
+        />
       </div>
     </div>
   );
