@@ -1,8 +1,12 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./index";
 import {
+  collectionRunMissions,
+  collectionRunSites,
   collectionRuns,
+  siteMissions,
   evidence,
+  missionResults,
   missions,
   offers,
   reportSnapshots,
@@ -10,6 +14,8 @@ import {
   siteRelationships,
   sites,
   type Mission,
+  type SiteMission,
+  type MissionResult,
   type Site,
   type CollectionRun,
   type Evidence,
@@ -94,32 +100,118 @@ export async function updateCollectionRunStatus(
   return row;
 }
 
-/** Active missions on active sites, optionally scoped to a run group's
- *  member sites. This is the work list a run executes. */
-export async function listExecutableMissions(
-  runGroupId?: string | null
-): Promise<{ mission: Mission; site: Site }[]> {
-  const db = getDb();
-  const baseQuery = db
-    .select({ mission: missions, site: sites })
-    .from(missions)
-    .innerJoin(sites, eq(missions.siteId, sites.id));
+/** A unit of collection work: one global mission applied to one site, with
+ *  the site's URL config/memory when it exists. */
+export interface WorkItem {
+  site: Site;
+  mission: Mission;
+  siteMission: SiteMission | null;
+}
 
-  const rows = runGroupId
-    ? await baseQuery
-        .innerJoin(
-          runGroupMembers,
-          and(
-            eq(runGroupMembers.siteId, sites.id),
-            eq(runGroupMembers.runGroupId, runGroupId)
-          )
+async function listScopedSites(scope?: {
+  runGroupId?: string | null;
+  siteIds?: string[];
+}): Promise<Site[]> {
+  const db = getDb();
+  if (scope?.siteIds && scope.siteIds.length > 0) {
+    return db
+      .select()
+      .from(sites)
+      .where(and(eq(sites.active, true), inArray(sites.id, scope.siteIds)))
+      .orderBy(asc(sites.name));
+  }
+  if (scope?.runGroupId) {
+    return db
+      .select({ sites })
+      .from(sites)
+      .innerJoin(
+        runGroupMembers,
+        and(
+          eq(runGroupMembers.siteId, sites.id),
+          eq(runGroupMembers.runGroupId, scope.runGroupId)
         )
-        .where(and(eq(missions.active, true), eq(sites.active, true)))
-        .orderBy(asc(sites.name))
-    : await baseQuery
-        .where(and(eq(missions.active, true), eq(sites.active, true)))
-        .orderBy(asc(sites.name));
-  return rows;
+      )
+      .where(eq(sites.active, true))
+      .orderBy(asc(sites.name))
+      .then((rows) => rows.map((r) => r.sites));
+  }
+  return db
+    .select()
+    .from(sites)
+    .where(eq(sites.active, true))
+    .orderBy(asc(sites.name));
+}
+
+/** The work list a run executes: scoped sites x selected active missions,
+ *  with per-site config attached where it exists. */
+export async function listWorkItemsForRun(run: {
+  id: string;
+  runGroupId: string | null;
+}): Promise<WorkItem[]> {
+  const db = getDb();
+
+  const adHoc = run.runGroupId
+    ? []
+    : await db
+        .select({ siteId: collectionRunSites.siteId })
+        .from(collectionRunSites)
+        .where(eq(collectionRunSites.collectionRunId, run.id));
+
+  const [scopedSites, allMissions, selectedMissionRows] = await Promise.all([
+    listScopedSites({
+      runGroupId: run.runGroupId,
+      siteIds: adHoc.map((r) => r.siteId),
+    }),
+    db
+      .select()
+      .from(missions)
+      .where(eq(missions.active, true))
+      .orderBy(asc(missions.name)),
+    db
+      .select({ missionId: collectionRunMissions.missionId })
+      .from(collectionRunMissions)
+      .where(eq(collectionRunMissions.collectionRunId, run.id)),
+  ]);
+
+  const selected = new Set(selectedMissionRows.map((r) => r.missionId));
+  const runMissions =
+    selected.size > 0
+      ? allMissions.filter((m) => selected.has(m.id))
+      : allMissions;
+
+  const siteIds = scopedSites.map((s) => s.id);
+  const configs =
+    siteIds.length > 0
+      ? await db
+          .select()
+          .from(siteMissions)
+          .where(inArray(siteMissions.siteId, siteIds))
+      : [];
+  const configByKey = new Map(
+    configs.map((c) => [`${c.siteId}:${c.missionId}`, c])
+  );
+
+  const items: WorkItem[] = [];
+  for (const site of scopedSites) {
+    for (const mission of runMissions) {
+      const config = configByKey.get(`${site.id}:${mission.id}`) ?? null;
+      // A per-site disable opts the pair out of runs.
+      if (config && !config.active) continue;
+      items.push({ site, mission, siteMission: config });
+    }
+  }
+  return items;
+}
+
+// --- Mission Results ------------------------------------------------------
+
+export async function listResultsForRun(
+  collectionRunId: string
+): Promise<MissionResult[]> {
+  return getDb()
+    .select()
+    .from(missionResults)
+    .where(eq(missionResults.collectionRunId, collectionRunId));
 }
 
 // --- Evidence -----------------------------------------------------------

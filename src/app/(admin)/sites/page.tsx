@@ -2,7 +2,8 @@ import Link from "next/link";
 import { asc } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, sites } from "@/lib/db";
 import { DbNotConfigured } from "@/components/db-not-configured";
-import { setSiteActive } from "./actions";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { deleteSite, setSiteActive } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -101,6 +102,14 @@ export default async function SitesPage() {
                         >
                           {site.active ? "Disable" : "Enable"}
                         </button>
+                      </form>
+                      <form action={deleteSite.bind(null, site.id)}>
+                        <ConfirmSubmitButton
+                          confirmMessage={`Delete "${site.name}"? This permanently removes its mission configs, run results, and ALL captured evidence (including files in R2).`}
+                          className="text-red-700 hover:underline"
+                        >
+                          Delete
+                        </ConfirmSubmitButton>
                       </form>
                     </div>
                   </td>

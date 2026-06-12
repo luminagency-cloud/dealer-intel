@@ -1,14 +1,15 @@
 import Link from "next/link";
-import { asc, eq } from "drizzle-orm";
+import { asc, count } from "drizzle-orm";
 import {
   getDb,
   isDatabaseConfigured,
   MISSION_TYPE_LABELS,
   missions,
-  sites,
+  siteMissions,
 } from "@/lib/db";
 import { DbNotConfigured } from "@/components/db-not-configured";
-import { setMissionActive } from "./actions";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { deleteMission, setMissionActive } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,11 +23,17 @@ export default async function MissionsPage() {
     );
   }
 
-  const rows = await getDb()
-    .select({ mission: missions, siteName: sites.name })
-    .from(missions)
-    .innerJoin(sites, eq(missions.siteId, sites.id))
-    .orderBy(asc(sites.name), asc(missions.missionType));
+  const db = getDb();
+  const [rows, configCounts] = await Promise.all([
+    db.select().from(missions).orderBy(asc(missions.name)),
+    db
+      .select({ missionId: siteMissions.missionId, n: count() })
+      .from(siteMissions)
+      .groupBy(siteMissions.missionId),
+  ]);
+  const configured = Object.fromEntries(
+    configCounts.map((c) => [c.missionId, c.n])
+  );
 
   return (
     <div>
@@ -39,44 +46,43 @@ export default async function MissionsPage() {
           Add Mission
         </Link>
       </div>
+      <p className="mb-4 text-sm text-zinc-500">
+        Missions define what to collect — they apply across every dealer in a
+        run&apos;s scope. Per-dealer URLs are configured on each site&apos;s
+        edit page.
+      </p>
 
       {rows.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
-          No missions yet. A mission defines what to collect from a site, e.g.
-          Homepage Offers.
+          No missions yet. A mission defines what to collect, e.g. “collect
+          the service specials.”
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="px-4 py-3">Site</th>
-                <th className="px-4 py-3">Mission</th>
-                <th className="px-4 py-3">Last Known URL</th>
-                <th className="px-4 py-3">Success Rate</th>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Behavior</th>
+                <th className="px-4 py-3">Dealers Configured</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
-              {rows.map(({ mission, siteName }) => (
+              {rows.map((mission) => (
                 <tr
                   key={mission.id}
                   className={mission.active ? "" : "opacity-60"}
                 >
                   <td className="px-4 py-3 font-medium text-zinc-900">
-                    {siteName}
+                    {mission.name}
                   </td>
                   <td className="px-4 py-3 text-zinc-600">
                     {MISSION_TYPE_LABELS[mission.missionType]}
                   </td>
-                  <td className="max-w-xs truncate px-4 py-3 text-zinc-600">
-                    {mission.lastKnownUrl ?? "—"}
-                  </td>
                   <td className="px-4 py-3 text-zinc-600">
-                    {mission.successRate != null
-                      ? `${Math.round(mission.successRate * 100)}%`
-                      : "—"}
+                    {configured[mission.id] ?? 0}
                   </td>
                   <td className="px-4 py-3">
                     <span
@@ -110,6 +116,14 @@ export default async function MissionsPage() {
                         >
                           {mission.active ? "Disable" : "Enable"}
                         </button>
+                      </form>
+                      <form action={deleteMission.bind(null, mission.id)}>
+                        <ConfirmSubmitButton
+                          confirmMessage={`Delete mission "${mission.name}"? Its per-dealer URL configs and run results are removed; captured evidence stays.`}
+                          className="text-red-700 hover:underline"
+                        >
+                          Delete
+                        </ConfirmSubmitButton>
                       </form>
                     </div>
                   </td>

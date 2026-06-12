@@ -1,5 +1,12 @@
-import { eq } from "drizzle-orm";
-import { getDb, missions, type Evidence, type Mission, type Site } from "@/lib/db";
+import { sql } from "drizzle-orm";
+import {
+  getDb,
+  siteMissions,
+  type Evidence,
+  type Mission,
+  type Site,
+  type SiteMission,
+} from "@/lib/db";
 import { uploadEvidence } from "@/lib/evidence";
 import {
   CollectionError,
@@ -16,24 +23,37 @@ import {
 
 /**
  * Mission-driven collection (Phase 6, AD-004): deterministic URL resolution
- * first — configured URLs, then platform-default paths, then navigation
- * discovery. AI fallback is reserved for Phase 13.
+ * first — the site's configured URLs, then platform-default paths, then
+ * navigation discovery. AI fallback is reserved for Phase 13. Learning is
+ * written back to site_missions (the per-dealer config/memory).
  */
 
 const MAX_PAGES_PER_MISSION = 6;
 
 export interface MissionRunResult {
   missionId: string;
+  siteId: string;
   status: "success" | "failure";
   pagesCaptured: number;
+  /** How many URLs the mission tried to capture. */
+  pagesAttempted: number;
+  /** True when no URL was configured and discovery found nothing. */
+  notFound: boolean;
   evidence: Evidence[];
   /** URL that produced the first successful capture. */
   successfulUrl?: string;
   error?: string;
 }
 
-function configuredUrls(mission: Mission, site: Site): string[] {
-  const urls = [mission.lastKnownUrl, ...(mission.alternateUrls ?? [])]
+function configuredUrls(
+  mission: Mission,
+  siteMission: SiteMission | null,
+  site: Site
+): string[] {
+  const urls = [
+    siteMission?.lastKnownUrl,
+    ...(siteMission?.alternateUrls ?? []),
+  ]
     .map((u) => u?.trim())
     .filter((u): u is string => Boolean(u));
   if (urls.length === 0 && missionTargetsHomepage(mission.missionType)) {
@@ -65,12 +85,40 @@ async function discoverUrl(
   return null;
 }
 
+/** Site memory: remember what worked for this dealer+mission. Creates the
+ *  site_missions row when collection succeeded purely via discovery. */
+async function recordSuccess(
+  site: Site,
+  mission: Mission,
+  discoveredUrl: string | null
+): Promise<void> {
+  await getDb()
+    .insert(siteMissions)
+    .values({
+      siteId: site.id,
+      missionId: mission.id,
+      lastKnownUrl: discoveredUrl,
+      lastSuccessAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [siteMissions.siteId, siteMissions.missionId],
+      set: {
+        lastSuccessAt: new Date(),
+        updatedAt: new Date(),
+        ...(discoveredUrl
+          ? { lastKnownUrl: sql`coalesce(${siteMissions.lastKnownUrl}, ${discoveredUrl})` }
+          : {}),
+      },
+    });
+}
+
 export async function runMission(input: {
   collectionRunId: string;
   mission: Mission;
   site: Site;
+  siteMission: SiteMission | null;
 }): Promise<MissionRunResult> {
-  const { collectionRunId, mission, site } = input;
+  const { collectionRunId, mission, site, siteMission } = input;
   const base = {
     collectionRunId,
     siteId: site.id,
@@ -79,23 +127,25 @@ export async function runMission(input: {
   const explore = MISSION_EXPLORATION[mission.missionType];
 
   return withCollectorSession(async (session) => {
-    let urls = configuredUrls(mission, site);
-    let discovered = false;
+    let urls = configuredUrls(mission, siteMission, site);
+    let discoveredUrl: string | null = null;
     if (urls.length === 0) {
-      const found = await discoverUrl(session, mission, site);
-      if (!found) {
+      discoveredUrl = await discoverUrl(session, mission, site);
+      if (!discoveredUrl) {
         return {
           missionId: mission.id,
+          siteId: site.id,
           status: "failure",
           pagesCaptured: 0,
+          pagesAttempted: 0,
+          notFound: true,
           evidence: [],
           error:
             "No URL configured and discovery found no matching page. " +
-            "Set a Last Known URL on the mission.",
+            "Set a URL on the site's mission config.",
         };
       }
-      urls = [found];
-      discovered = true;
+      urls = [discoveredUrl];
     }
 
     const evidence: Evidence[] = [];
@@ -152,28 +202,21 @@ export async function runMission(input: {
     }
 
     if (pagesCaptured > 0) {
-      // Site memory (Collector Engine doc): remember what worked. Full
-      // success-rate learning arrives in Phase 8.
-      await getDb()
-        .update(missions)
-        .set({
-          lastSuccessAt: new Date(),
-          updatedAt: new Date(),
-          ...(discovered && successfulUrl
-            ? { lastKnownUrl: successfulUrl }
-            : {}),
-        })
-        .where(eq(missions.id, mission.id));
+      await recordSuccess(site, mission, discoveredUrl);
     }
 
     return {
       missionId: mission.id,
+      siteId: site.id,
       status: pagesCaptured > 0 ? "success" : "failure",
       pagesCaptured,
+      pagesAttempted: urls.length,
+      notFound: false,
       evidence,
       successfulUrl,
-      error: pagesCaptured > 0 ? undefined : firstError,
+      // Surface partial-capture errors too — the executor uses them to
+      // flag results as needs_review.
+      error: firstError,
     };
   });
 }
-

@@ -5,35 +5,18 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, missions, missionTypeEnum } from "@/lib/db";
+import { deleteMissionDeep } from "@/lib/deep-delete";
 import { requireSession } from "@/lib/session";
 
 const missionSchema = z.object({
-  siteId: z.uuid("Select a site"),
+  name: z.string().trim().min(1, "Name is required"),
   missionType: z.enum(missionTypeEnum.enumValues, "Select a mission type"),
-  lastKnownUrl: z
-    .union([z.url("Last known URL must be a valid URL"), z.literal("")])
-    .transform((v) => (v === "" ? null : v)),
-  alternateUrls: z
-    .string()
-    .transform((v) =>
-      v
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-    )
-    .pipe(
-      z
-        .array(z.url("Each additional URL must be a valid URL"))
-        .max(5, "At most 5 additional URLs per mission")
-    ),
 });
 
 function parseMissionForm(formData: FormData) {
   return missionSchema.safeParse({
-    siteId: formData.get("siteId"),
+    name: formData.get("name"),
     missionType: formData.get("missionType"),
-    lastKnownUrl: formData.get("lastKnownUrl") ?? "",
-    alternateUrls: formData.get("alternateUrls") ?? "",
   });
 }
 
@@ -72,5 +55,11 @@ export async function setMissionActive(id: string, active: boolean) {
     .update(missions)
     .set({ active, updatedAt: new Date() })
     .where(eq(missions.id, id));
+  revalidatePath("/missions");
+}
+
+export async function deleteMission(id: string) {
+  await requireSession();
+  await deleteMissionDeep(id);
   revalidatePath("/missions");
 }

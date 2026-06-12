@@ -1,9 +1,14 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { MISSION_TYPE_LABELS, getDb, missions, sites } from "@/lib/db";
+import { asc, eq } from "drizzle-orm";
+import {
+  MISSION_TYPE_LABELS,
+  getDb,
+  missions,
+  siteMissions,
+  sites,
+} from "@/lib/db";
 import { SiteForm } from "@/components/site-form";
-import { updateSite } from "../../actions";
+import { saveSiteMission, updateSite } from "../../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -16,11 +21,14 @@ export default async function EditSitePage({
 }) {
   const [{ id }, { error }] = await Promise.all([params, searchParams]);
 
-  const [[site], siteMissions] = await Promise.all([
-    getDb().select().from(sites).where(eq(sites.id, id)),
-    getDb().select().from(missions).where(eq(missions.siteId, id)),
+  const db = getDb();
+  const [[site], allMissions, configs] = await Promise.all([
+    db.select().from(sites).where(eq(sites.id, id)),
+    db.select().from(missions).orderBy(asc(missions.name)),
+    db.select().from(siteMissions).where(eq(siteMissions.siteId, id)),
   ]);
   if (!site) notFound();
+  const configByMission = new Map(configs.map((c) => [c.missionId, c]));
 
   return (
     <div>
@@ -34,60 +42,77 @@ export default async function EditSitePage({
         submitLabel="Save Changes"
       />
 
-      <div className="mt-8 max-w-lg rounded-lg border border-zinc-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
+      <div className="mt-8 max-w-2xl rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="border-b border-zinc-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-zinc-900">
-            Missions &amp; Collection URLs
+            Collection URLs per Mission
           </h2>
-          <Link
-            href="/missions/new"
-            className="text-sm text-zinc-600 hover:underline"
-          >
-            Add Mission
-          </Link>
-        </div>
-        {siteMissions.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-zinc-500">
-            No missions yet for this site.
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Where on this dealer&apos;s site each mission collects. Leave the
+            URL blank and the collector will discover one and remember it.
+            Every listed URL is captured on each run.
           </p>
-        ) : (
-          <ul className="divide-y divide-zinc-100">
-            {siteMissions.map((mission) => (
-              <li key={mission.id} className="px-4 py-3 text-sm">
+        </div>
+        <div className="divide-y divide-zinc-100">
+          {allMissions.map((mission) => {
+            const config = configByMission.get(mission.id);
+            return (
+              <form
+                key={mission.id}
+                action={saveSiteMission.bind(null, site.id, mission.id)}
+                className="px-4 py-4"
+              >
                 <div className="flex items-center justify-between">
-                  <span className="font-medium text-zinc-900">
-                    {MISSION_TYPE_LABELS[mission.missionType]}
-                    {!mission.active && (
-                      <span className="ml-2 text-xs font-normal text-zinc-400">
-                        (disabled)
-                      </span>
-                    )}
-                  </span>
-                  <Link
-                    href={`/missions/${mission.id}/edit`}
-                    className="text-zinc-600 hover:underline"
-                  >
-                    Edit URLs
-                  </Link>
+                  <h3 className="text-sm font-medium text-zinc-900">
+                    {mission.name}{" "}
+                    <span className="text-xs font-normal text-zinc-400">
+                      ({MISSION_TYPE_LABELS[mission.missionType]}
+                      {!mission.active && ", mission disabled"})
+                    </span>
+                  </h3>
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-600">
+                    <input
+                      type="checkbox"
+                      name="active"
+                      defaultChecked={config?.active ?? true}
+                      className="h-3.5 w-3.5 rounded border-zinc-300"
+                    />
+                    collect on this dealer
+                  </label>
                 </div>
-                <ul className="mt-1 space-y-0.5 text-xs text-zinc-500">
-                  {mission.lastKnownUrl ? (
-                    <li className="truncate">{mission.lastKnownUrl}</li>
-                  ) : (
-                    <li className="italic">
-                      No URL set — collector will discover one
-                    </li>
-                  )}
-                  {(mission.alternateUrls ?? []).map((url) => (
-                    <li key={url} className="truncate">
-                      {url}
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        )}
+                <div className="mt-2 grid gap-2">
+                  <input
+                    type="url"
+                    name="lastKnownUrl"
+                    defaultValue={config?.lastKnownUrl ?? ""}
+                    placeholder="Primary URL (blank = discover)"
+                    className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+                  />
+                  <textarea
+                    name="alternateUrls"
+                    rows={2}
+                    defaultValue={(config?.alternateUrls ?? []).join("\n")}
+                    placeholder="Additional URLs, one per line (optional)"
+                    className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-xs text-zinc-400">
+                    {config?.lastSuccessAt
+                      ? `Last success: ${config.lastSuccessAt.toLocaleString()}`
+                      : "Never collected"}
+                  </span>
+                  <button
+                    type="submit"
+                    className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
+                  >
+                    Save
+                  </button>
+                </div>
+              </form>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

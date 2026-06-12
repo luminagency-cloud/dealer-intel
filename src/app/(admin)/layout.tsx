@@ -35,6 +35,9 @@ export default async function AdminLayout({
               <Link href="/runs" className="hover:text-zinc-900">
                 Runs
               </Link>
+              <Link href="/review" className="hover:text-zinc-900">
+                Review
+              </Link>
             </nav>
           </div>
           <div className="flex items-center gap-4">

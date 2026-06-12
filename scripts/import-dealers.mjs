@@ -11,10 +11,11 @@
 //   group's competitors. Dealers may repeat across blocks — sites dedupe by
 //   name, group memberships overlap.
 // - Sites are keyed by dealer name: existing sites are updated, new ones created.
-// - Each site gets three missions (homepage_offers, service_specials,
-//   finance_offers). service_path -> service mission URL; "other paths"
-//   (pipe-separated) -> finance mission URL + alternates. Existing missions
-//   are updated to the CSV's URLs (the CSV is the curated source of truth).
+// - Global missions (Homepage Offers / Service Specials / Finance Offers)
+//   are created if missing. Per-site URL config goes into site_missions:
+//   service_path -> Service Specials URL; "other paths" (pipe-separated) ->
+//   Finance Offers URL + alternates. The CSV is the curated source of truth
+//   for those URLs and overwrites existing config on re-import.
 // - Group membership is replaced to match the CSV on each run.
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -110,43 +111,47 @@ for (const d of dealers) {
   }
 }
 
-// --- Missions -----------------------------------------------------------------
+// --- Global missions + per-site URL config ----------------------------------
 
-let missionsCreated = 0;
-let missionsUpdated = 0;
+const GLOBAL_MISSIONS = {
+  homepage_offers: "Homepage Offers",
+  service_specials: "Service Specials",
+  finance_offers: "Finance Offers",
+};
 
-async function upsertMission(siteId, missionType, lastKnownUrl, alternateUrls) {
-  const [existing] = await sql`
-    select id from missions
-    where site_id = ${siteId} and mission_type = ${missionType}`;
-  if (existing) {
-    if (lastKnownUrl !== undefined) {
-      await sql`
-        update missions
-        set last_known_url = ${lastKnownUrl},
-            alternate_urls = ${alternateUrls ?? []},
-            updated_at = now()
-        where id = ${existing.id}`;
-      missionsUpdated++;
-    }
-  } else {
-    await sql`
-      insert into missions (site_id, mission_type, last_known_url, alternate_urls)
-      values (${siteId}, ${missionType}, ${lastKnownUrl ?? null}, ${alternateUrls ?? []})`;
-    missionsCreated++;
+const missionIds = {};
+for (const [missionType, name] of Object.entries(GLOBAL_MISSIONS)) {
+  let [m] = await sql`
+    select id from missions where mission_type = ${missionType} limit 1`;
+  if (!m) {
+    [m] = await sql`
+      insert into missions (name, mission_type) values (${name}, ${missionType})
+      returning id`;
   }
+  missionIds[missionType] = m.id;
+}
+
+let configsWritten = 0;
+
+async function upsertSiteMission(siteId, missionType, lastKnownUrl, alternateUrls) {
+  await sql`
+    insert into site_missions (site_id, mission_id, last_known_url, alternate_urls)
+    values (${siteId}, ${missionIds[missionType]}, ${lastKnownUrl}, ${alternateUrls})
+    on conflict (site_id, mission_id) do update set
+      last_known_url = excluded.last_known_url,
+      alternate_urls = excluded.alternate_urls,
+      updated_at = now()`;
+  configsWritten++;
 }
 
 for (const d of dealers) {
   const siteId = siteIds.get(d.name);
-  // Homepage mission needs no URL (the collector targets the site URL);
-  // never overwrite whatever it may have learned.
-  await upsertMission(siteId, "homepage_offers", undefined, undefined);
+  // Homepage needs no config row (the collector targets the site URL).
   if (d.serviceUrl) {
-    await upsertMission(siteId, "service_specials", d.serviceUrl, []);
+    await upsertSiteMission(siteId, "service_specials", d.serviceUrl, []);
   }
   if (d.financeUrls.length > 0) {
-    await upsertMission(
+    await upsertSiteMission(
       siteId,
       "finance_offers",
       d.financeUrls[0],
@@ -197,6 +202,5 @@ for (const block of blocks) {
 
 console.log(
   `\nsites: ${sitesCreated} created, ${sitesUpdated} updated | ` +
-    `missions: ${missionsCreated} created, ${missionsUpdated} updated | ` +
-    `groups: ${groupsTouched}`
+    `site-mission configs: ${configsWritten} | groups: ${groupsTouched}`
 );

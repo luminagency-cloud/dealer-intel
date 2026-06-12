@@ -1,5 +1,6 @@
 import {
   boolean,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -46,20 +47,14 @@ export const sites = pgTable("sites", {
     .defaultNow(),
 });
 
-/** Business information to collect from a site. success_rate and
- *  last_success_at are written by the collector (Phase 5+). */
+/** The global mission layer: what business information to collect ("collect
+ *  the service specials"), independent of any dealer. The mission_type maps
+ *  to collection behavior in src/lib/collector/mission-knowledge.ts.
+ *  Per-dealer URLs/learning live in site_missions. */
 export const missions = pgTable("missions", {
   id: uuid("id").defaultRandom().primaryKey(),
-  siteId: uuid("site_id")
-    .notNull()
-    .references(() => sites.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
   missionType: missionTypeEnum("mission_type").notNull(),
-  lastKnownUrl: text("last_known_url"),
-  /** Additional pages to capture — some missions need several pages for the
-   *  full picture. All configured URLs are visited every collection. */
-  alternateUrls: text("alternate_urls").array().notNull().default([]),
-  successRate: real("success_rate"),
-  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -68,6 +63,36 @@ export const missions = pgTable("missions", {
     .notNull()
     .defaultNow(),
 });
+
+/** Per-site collection config + memory for a global mission: which URLs to
+ *  visit on this dealer and what the collector has learned. Managed from the
+ *  site's edit page, not as standalone missions. */
+export const siteMissions = pgTable(
+  "site_missions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    siteId: uuid("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    missionId: uuid("mission_id")
+      .notNull()
+      .references(() => missions.id, { onDelete: "cascade" }),
+    lastKnownUrl: text("last_known_url"),
+    alternateUrls: text("alternate_urls").array().notNull().default([]),
+    successRate: real("success_rate"),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("site_missions_unique").on(table.siteId, table.missionId),
+  ]
+);
 
 export const relationshipTypeEnum = pgEnum("relationship_type", [
   "competitor",
@@ -177,6 +202,117 @@ export const collectionRuns = pgTable("collection_runs", {
     .defaultNow(),
 });
 
+/** Mission selection for a run. No rows = all active missions; otherwise
+ *  the run only executes the listed missions across its site scope. */
+export const collectionRunMissions = pgTable(
+  "collection_run_missions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    collectionRunId: uuid("collection_run_id")
+      .notNull()
+      .references(() => collectionRuns.id, { onDelete: "cascade" }),
+    missionId: uuid("mission_id")
+      .notNull()
+      .references(() => missions.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("collection_run_missions_unique").on(
+      table.collectionRunId,
+      table.missionId
+    ),
+  ]
+);
+
+export type CollectionRunMission = typeof collectionRunMissions.$inferSelect;
+
+/** Ad-hoc run scope: an unsaved, temporary "group" of dealers picked at run
+ *  creation. A run with rows here (and no run_group_id) only executes these
+ *  sites' missions. */
+export const collectionRunSites = pgTable(
+  "collection_run_sites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    collectionRunId: uuid("collection_run_id")
+      .notNull()
+      .references(() => collectionRuns.id, { onDelete: "cascade" }),
+    siteId: uuid("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("collection_run_sites_unique").on(
+      table.collectionRunId,
+      table.siteId
+    ),
+  ]
+);
+
+export type CollectionRunSite = typeof collectionRunSites.$inferSelect;
+
+// Phase 7 status types (success / needs review / failure / not found) plus
+// queue states for background execution and the operator's "content removed"
+// resolution.
+export const missionResultStatusEnum = pgEnum("mission_result_status", [
+  "pending",
+  "running",
+  "success",
+  "needs_review",
+  "failure",
+  "not_found",
+  "content_removed",
+]);
+
+export type MissionResultStatus =
+  (typeof missionResultStatusEnum.enumValues)[number];
+
+export const MISSION_RESULT_STATUS_LABELS: Record<MissionResultStatus, string> =
+  {
+    pending: "Pending",
+    running: "Running",
+    success: "Success",
+    needs_review: "Needs Review",
+    failure: "Failure",
+    not_found: "Not Found",
+    content_removed: "Content Removed",
+  };
+
+/** One row per mission per run: the execution outcome that drives the
+ *  review workflow (Phase 7) and live run progress. */
+export const missionResults = pgTable(
+  "mission_results",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    collectionRunId: uuid("collection_run_id")
+      .notNull()
+      .references(() => collectionRuns.id, { onDelete: "cascade" }),
+    missionId: uuid("mission_id")
+      .notNull()
+      .references(() => missions.id, { onDelete: "cascade" }),
+    siteId: uuid("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    missionType: missionTypeEnum("mission_type").notNull(),
+    status: missionResultStatusEnum("status").notNull().default("pending"),
+    pagesCaptured: integer("pages_captured").notNull().default(0),
+    successfulUrl: text("successful_url"),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Mission ids are global (one row per type), so uniqueness includes the
+    // site: one result per run per site per mission.
+    uniqueIndex("mission_results_run_site_mission_unique").on(
+      table.collectionRunId,
+      table.siteId,
+      table.missionId
+    ),
+  ]
+);
+
 export const evidenceTypeEnum = pgEnum("evidence_type", [
   "screenshot",
   "html_snapshot",
@@ -262,6 +398,8 @@ export type Site = typeof sites.$inferSelect;
 export type NewSite = typeof sites.$inferInsert;
 export type Mission = typeof missions.$inferSelect;
 export type NewMission = typeof missions.$inferInsert;
+export type SiteMission = typeof siteMissions.$inferSelect;
+export type NewSiteMission = typeof siteMissions.$inferInsert;
 export type SiteRelationship = typeof siteRelationships.$inferSelect;
 export type NewSiteRelationship = typeof siteRelationships.$inferInsert;
 export type RunGroup = typeof runGroups.$inferSelect;
@@ -270,6 +408,8 @@ export type RunGroupMember = typeof runGroupMembers.$inferSelect;
 export type NewRunGroupMember = typeof runGroupMembers.$inferInsert;
 export type CollectionRun = typeof collectionRuns.$inferSelect;
 export type NewCollectionRun = typeof collectionRuns.$inferInsert;
+export type MissionResult = typeof missionResults.$inferSelect;
+export type NewMissionResult = typeof missionResults.$inferInsert;
 export type Evidence = typeof evidence.$inferSelect;
 export type NewEvidence = typeof evidence.$inferInsert;
 export type Offer = typeof offers.$inferSelect;

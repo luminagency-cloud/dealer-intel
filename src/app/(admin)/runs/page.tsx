@@ -1,11 +1,16 @@
 import Link from "next/link";
 import { asc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   RUN_STATUS_LABELS,
+  collectionRunSites,
   getDb,
   isDatabaseConfigured,
+  missions,
   runGroups,
+  sites,
 } from "@/lib/db";
+import { RunScopePicker } from "@/components/run-scope-picker";
 import { listCollectionRuns } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { RunStatusBadge } from "@/components/run-status-badge";
@@ -17,7 +22,12 @@ function formatDate(date: Date | null) {
   return date ? date.toLocaleString() : "—";
 }
 
-export default async function RunsPage() {
+export default async function RunsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
   if (!isDatabaseConfigured()) {
     return (
       <div>
@@ -27,29 +37,46 @@ export default async function RunsPage() {
     );
   }
 
-  const [runs, groups] = await Promise.all([
-    listCollectionRuns(),
-    getDb().select().from(runGroups).orderBy(asc(runGroups.name)),
-  ]);
+  const [runs, groups, allSites, adHocRows, activeMissions] =
+    await Promise.all([
+      listCollectionRuns(),
+      getDb().select().from(runGroups).orderBy(asc(runGroups.name)),
+      getDb()
+        .select({ id: sites.id, name: sites.name, active: sites.active })
+        .from(sites)
+        .orderBy(asc(sites.name)),
+      getDb()
+        .select({
+          runId: collectionRunSites.collectionRunId,
+          siteId: collectionRunSites.siteId,
+        })
+        .from(collectionRunSites),
+      getDb()
+        .select({ id: missions.id, name: missions.name })
+        .from(missions)
+        .where(eq(missions.active, true))
+        .orderBy(asc(missions.name)),
+    ]);
   const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]));
+  const siteNames = Object.fromEntries(allSites.map((s) => [s.id, s.name]));
+  const activeSites = allSites.filter((s) => s.active);
+  const adHocNames = new Map<string, string[]>();
+  for (const row of adHocRows) {
+    const list = adHocNames.get(row.runId) ?? [];
+    list.push(siteNames[row.siteId] ?? "?");
+    adHocNames.set(row.runId, list);
+  }
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900">Runs</h1>
         <form action={createRun} className="flex items-center gap-2">
-          <select
-            name="runGroupId"
-            defaultValue=""
-            className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
-          >
-            <option value="">All sites</option>
-            {groups.map((group) => (
-              <option key={group.id} value={group.id}>
-                Group: {group.name}
-              </option>
-            ))}
-          </select>
+          <RunScopePicker
+            groups={groups.map((g) => ({ id: g.id, name: g.name }))}
+            sites={activeSites.map((s) => ({ id: s.id, name: s.name }))}
+            missions={activeMissions}
+          />
           <button
             type="submit"
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
@@ -58,6 +85,12 @@ export default async function RunsPage() {
           </button>
         </form>
       </div>
+
+      {error && (
+        <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      )}
 
       {runs.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
@@ -88,10 +121,12 @@ export default async function RunsPage() {
                       {run.id.slice(0, 8)}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-zinc-600">
+                  <td className="max-w-56 truncate px-4 py-3 text-zinc-600">
                     {run.runGroupId
                       ? groupNames[run.runGroupId] ?? "(deleted group)"
-                      : "All sites"}
+                      : adHocNames.has(run.id)
+                        ? adHocNames.get(run.id)!.join(", ")
+                        : "All sites"}
                   </td>
                   <td className="px-4 py-3">
                     <RunStatusBadge status={run.status} />

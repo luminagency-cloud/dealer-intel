@@ -2,18 +2,17 @@ import {
   MISSION_TYPE_LABELS,
   missionTypeEnum,
   type Mission,
-  type Site,
 } from "@/lib/db";
 
+/** Global mission definition: what to collect, independent of any dealer.
+ *  Per-dealer URLs are configured on each site's edit page. */
 export function MissionForm({
   action,
-  siteOptions,
   mission,
   error,
   submitLabel,
 }: {
   action: (formData: FormData) => Promise<void>;
-  siteOptions: Pick<Site, "id" | "name">[];
   mission?: Mission;
   error?: string;
   submitLabel: string;
@@ -29,25 +28,18 @@ export function MissionForm({
         </p>
       )}
       <label className="block text-sm font-medium text-zinc-700">
-        Site
-        <select
-          name="siteId"
+        Name
+        <input
+          type="text"
+          name="name"
           required
-          defaultValue={mission?.siteId ?? ""}
-          className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
-        >
-          <option value="" disabled>
-            Select a site…
-          </option>
-          {siteOptions.map((site) => (
-            <option key={site.id} value={site.id}>
-              {site.name}
-            </option>
-          ))}
-        </select>
+          defaultValue={mission?.name ?? ""}
+          placeholder="Service Specials"
+          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+        />
       </label>
       <label className="mt-4 block text-sm font-medium text-zinc-700">
-        Mission Type
+        Collection Behavior
         <select
           name="missionType"
           required
@@ -55,7 +47,7 @@ export function MissionForm({
           className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
         >
           <option value="" disabled>
-            Select a mission type…
+            Select a behavior…
           </option>
           {missionTypeEnum.enumValues.map((value) => (
             <option key={value} value={value}>
@@ -63,39 +55,9 @@ export function MissionForm({
             </option>
           ))}
         </select>
-      </label>
-      <label className="mt-4 block text-sm font-medium text-zinc-700">
-        Last Known URL{" "}
-        <span className="font-normal text-zinc-400">(optional)</span>
-        <input
-          type="url"
-          name="lastKnownUrl"
-          defaultValue={mission?.lastKnownUrl ?? ""}
-          placeholder="https://www.smithhonda.com/specials"
-          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
-        />
         <span className="mt-1 block text-xs font-normal text-zinc-400">
-          Left blank, the collector tries common platform paths and the
-          site&apos;s navigation, then remembers what worked.
-        </span>
-      </label>
-      <label className="mt-4 block text-sm font-medium text-zinc-700">
-        Additional URLs{" "}
-        <span className="font-normal text-zinc-400">
-          (optional, one per line)
-        </span>
-        <textarea
-          name="alternateUrls"
-          rows={3}
-          defaultValue={(mission?.alternateUrls ?? []).join("\n")}
-          placeholder={
-            "https://www.smithhonda.com/service-coupons\nhttps://www.smithhonda.com/parts-specials"
-          }
-          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
-        />
-        <span className="mt-1 block text-xs font-normal text-zinc-400">
-          Every URL listed is captured on each collection — use this when the
-          full picture spans several pages.
+          Determines URL discovery paths and page exploration (carousels,
+          tabs, accordions, disclaimers).
         </span>
       </label>
       <div className="mt-6 flex items-center gap-3">

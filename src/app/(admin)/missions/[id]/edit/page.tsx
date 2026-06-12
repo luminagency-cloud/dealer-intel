@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { asc, eq } from "drizzle-orm";
-import { getDb, missions, sites } from "@/lib/db";
+import { eq } from "drizzle-orm";
+import { getDb, missions } from "@/lib/db";
 import { MissionForm } from "@/components/mission-form";
 import { updateMission } from "../../actions";
 
@@ -15,11 +15,10 @@ export default async function EditMissionPage({
 }) {
   const [{ id }, { error }] = await Promise.all([params, searchParams]);
 
-  const db = getDb();
-  const [[mission], siteOptions] = await Promise.all([
-    db.select().from(missions).where(eq(missions.id, id)),
-    db.select({ id: sites.id, name: sites.name }).from(sites).orderBy(asc(sites.name)),
-  ]);
+  const [mission] = await getDb()
+    .select()
+    .from(missions)
+    .where(eq(missions.id, id));
   if (!mission) notFound();
 
   return (
@@ -29,7 +28,6 @@ export default async function EditMissionPage({
       </h1>
       <MissionForm
         action={updateMission.bind(null, mission.id)}
-        siteOptions={siteOptions}
         mission={mission}
         error={error}
         submitLabel="Save Changes"

@@ -1,0 +1,2 @@
+ALTER TABLE "collection_runs" ADD COLUMN "site_id" uuid;--> statement-breakpoint
+ALTER TABLE "collection_runs" ADD CONSTRAINT "collection_runs_site_id_sites_id_fk" FOREIGN KEY ("site_id") REFERENCES "public"."sites"("id") ON DELETE set null ON UPDATE no action;
