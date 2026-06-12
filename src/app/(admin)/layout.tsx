@@ -17,7 +17,7 @@ export default async function AdminLayout({
   return (
     <div className="min-h-screen bg-zinc-50">
       <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
+        <div className="app-shell flex h-14 items-center justify-between px-4">
           <div className="flex items-center gap-8">
             <Link href="/sites" className="text-sm font-semibold text-zinc-900">
               Dealer Intel
@@ -55,7 +55,7 @@ export default async function AdminLayout({
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+      <main className="app-shell px-4 py-8">{children}</main>
     </div>
   );
 }

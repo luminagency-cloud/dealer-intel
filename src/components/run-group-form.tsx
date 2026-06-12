@@ -20,9 +20,11 @@ export function RunGroupForm({
   const memberMap = new Map(
     (members ?? []).map((m) => [m.siteId, m.isPrimary])
   );
+  const formKey = group?.id ?? "new";
 
   return (
     <form
+      key={formKey}
       action={action}
       className="max-w-2xl rounded-lg border border-zinc-200 bg-white p-6 shadow-sm"
     >

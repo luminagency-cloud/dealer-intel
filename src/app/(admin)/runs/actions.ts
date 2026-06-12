@@ -149,6 +149,9 @@ async function requireCollectableRun(runId: string) {
   if (run.status !== "pending" && run.status !== "running") {
     throw new Error(`Cannot collect on a ${run.status} run`);
   }
+  if (run.status === "pending") {
+    await updateCollectionRunStatus(runId, "running", { startedAt: new Date() });
+  }
   return run;
 }
 

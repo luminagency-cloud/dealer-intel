@@ -71,6 +71,13 @@
       "when": 1781269249684,
       "tag": "0009_hot_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781289505095,
+      "tag": "0010_tense_monster_badoon",
+      "breakpoints": true
     }
   ]
 }

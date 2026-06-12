@@ -90,7 +90,9 @@ export default async function RunDetailPage({
           .join(", ")
       : null;
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
-  const nextStatuses = RUN_TRANSITIONS[run.status];
+  const nextStatuses = RUN_TRANSITIONS[run.status].filter(
+    (s) => !(run.status === "pending" && s === "running")
+  );
   const results = new Map(
     runResults.map((r) => [`${r.siteId}:${r.missionId}`, r])
   );

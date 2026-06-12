@@ -15,7 +15,7 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 5 Collector Engine | Done | Playwright/Chromium; overlay dismissal, page scroller, full-page screenshot + HTML |
 | 6 Mission Framework | Done | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
 | 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
-| 8 | Not started | Collection Consolidation & Site Learning. Partially anticipated: missions already store last_known_url + last_success_at. Scope now includes single-visit-per-site consolidation. |
+| 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
 | 9 | Not started | Evidence Analysis: classification, normalization, external compliance API call. |
 | 10 | Not started | Snapshot Publishing — the wall between analysis and reporting. |
 | 11 | Not started | Reporting Engine — pure reads from published snapshots, links to R2 images. |
@@ -62,9 +62,12 @@ Structure:
   missions (checkboxes, default all; subset stored in
   collection_run_missions).
 
-Note: `homepage_offers` and `promotional_banners` are currently identical in
-collection behavior (both target homepage, both run carousel + disclaimer
-explorers). These should be consolidated when Phase 8 is built.
+Note: `homepage_offers` and `promotional_banners` remain distinct mission
+types but no longer double-fetch. Phase 8's per-site capture cache keys on
+URL + exploration signature, so two missions that resolve to the same page
+with the same explorers (the homepage, carousels + disclaimers) share one
+fetch and each still get their own per-mission evidence + result. A full enum
+merge was deliberately not done — the cache makes it unnecessary.
 
 ## Deletes
 
@@ -86,17 +89,29 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
 - `src/lib/collector/mission-knowledge.ts` — the only place mission types
   influence collection: platform default paths, nav-discovery keywords,
   exploration flags.
-- `src/lib/collector/mission-runner.ts` — executes one work item (site x
-  mission): the site's configured URLs (all captured) → platform defaults →
-  nav discovery; writes learning back to site_missions.
+- `src/lib/collector/mission-runner.ts` — URL resolution + capture for one
+  mission (configured URLs → platform defaults → nav discovery; writes
+  learning back to site_missions). `runMissionInSession` runs inside a
+  caller-provided session + shared capture cache; `collectSite` is the Phase 8
+  single-visit-per-site orchestrator: all of a site's missions in one browser
+  session, then one fresh-session retry of any mission that captured zero
+  pages (the "second swing" for a crashed/blocked/memory-starved browser).
+  `runMission` remains as a one-session wrapper for the ad-hoc collect path.
 - `src/lib/deep-delete.ts` — R2-aware cascade deletes (see Deletes above).
 - `src/lib/run-executor.ts` — background execution. Server actions enqueue
-  and return; a non-awaited queue processes missions sequentially in this
-  Node process, writing progress to mission_results; auto-finalizes the run
-  (running → review, or failed when nothing captured) once the full scope is
-  settled. Guarded against double-starts via a module-level set on
-  globalThis (survives dev HMR; does NOT survive a server restart — an
-  interrupted run's pending/running rows just sit until retried).
+  and return; a non-awaited queue groups the run's work items by site and
+  processes one site at a time via `collectSite` (single visit per site),
+  writing progress to mission_results. On any site success it stamps
+  `sites.last_collected_at`. Auto-finalizes the run once the full scope is
+  settled: `failed` if no site captured anything, `published` if ≥
+  `AUTO_PUBLISH_MIN_SITE_SUCCESS` (0.8) of in-scope sites succeeded, else
+  `review`. The manual Publish / Mark Failed controls on the run page always
+  override. Guarded against double-starts via a module-level set on globalThis
+  (survives dev HMR; not a server restart — an interrupted run's
+  pending/running rows sit until retried).
+- `src/lib/freshness.ts` — 7-day freshness window over
+  `sites.last_collected_at` (fresh / stale / never); rendered by
+  `components/freshness-badge.tsx` on the sites list.
 - `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`
@@ -119,8 +134,11 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   Idempotent — re-run freely. CSV is source of truth for service/finance
   mission URLs; homepage missions keep their learned URLs.
 - **Weekly flow** (roadmap target <15 min operator time): create run per
-  group → Start Run → watch live progress (page auto-refreshes) → triage
-  `/review` (Retry / Fix URL / Content Removed) → move run to Published.
+  group → Start Run (one click; pending→running is automatic, no separate
+  "Move to Running" step) → watch live progress (page auto-refreshes). A
+  clean run (≥80% of sites captured) auto-publishes; otherwise it lands in
+  `review` for triage (Retry / Fix URL / Content Removed) and a manual
+  Publish. Exception-based: the operator only touches runs that fall short.
 
 ## Constraints & gotchas
 

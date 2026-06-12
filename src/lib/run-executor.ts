@@ -3,10 +3,22 @@ import {
   getDb,
   collectionRuns,
   missionResults,
+  sites,
   type MissionResultStatus,
+  type RunStatus,
 } from "@/lib/db";
 import { listWorkItemsForRun, type WorkItem } from "@/lib/db/repository";
-import { runMission, type MissionRunResult } from "@/lib/collector";
+import {
+  collectSite,
+  type MissionRunResult,
+  type SiteMissionWork,
+} from "@/lib/collector";
+
+/** Auto-publish gate (Phase 8): a finished run advances straight to
+ *  published when at least this share of its in-scope sites collected
+ *  something. Below it the run waits in review for the operator; the manual
+ *  Publish / Mark Failed controls on the run page always override. */
+const AUTO_PUBLISH_MIN_SITE_SUCCESS = 0.8;
 
 /**
  * Background run execution. Server actions enqueue work here and return
@@ -80,39 +92,78 @@ async function seedResults(runId: string, items: WorkItem[]): Promise<void> {
 async function processQueue(runId: string, items: WorkItem[]): Promise<void> {
   const db = getDb();
   try {
+    // Phase 8: one browser visit per site. Group the run's work by site and
+    // let collectSite handle the single session + fresh-session retry.
+    const bySite = new Map<string, WorkItem[]>();
     for (const item of items) {
-      const key = { siteId: item.site.id, missionId: item.mission.id };
+      const list = bySite.get(item.site.id) ?? [];
+      list.push(item);
+      bySite.set(item.site.id, list);
+    }
+
+    for (const siteItems of bySite.values()) {
+      const site = siteItems[0].site;
+      const missionIds = siteItems.map((i) => i.mission.id);
+
+      // The whole site goes "running" for the duration of its single visit.
       await db
         .update(missionResults)
         .set({ status: "running", startedAt: new Date() })
-        .where(resultFilter(runId, key));
+        .where(
+          and(
+            eq(missionResults.collectionRunId, runId),
+            eq(missionResults.siteId, site.id),
+            inArray(missionResults.missionId, missionIds)
+          )
+        );
 
-      let update: Partial<typeof missionResults.$inferInsert>;
+      const works: SiteMissionWork[] = siteItems.map((i) => ({
+        mission: i.mission,
+        siteMission: i.siteMission,
+      }));
+
       try {
-        const result = await runMission({
-          collectionRunId: runId,
-          mission: item.mission,
-          site: item.site,
-          siteMission: item.siteMission,
-        });
-        update = {
-          status: outcomeStatus(result),
-          pagesCaptured: result.pagesCaptured,
-          successfulUrl: result.successfulUrl ?? null,
-          error: result.error ?? null,
-        };
+        const { anySuccess } = await collectSite(
+          { collectionRunId: runId, site, works },
+          async (missionId, result) => {
+            await db
+              .update(missionResults)
+              .set({
+                status: outcomeStatus(result),
+                pagesCaptured: result.pagesCaptured,
+                successfulUrl: result.successfulUrl ?? null,
+                error: result.error ?? null,
+                completedAt: new Date(),
+              })
+              .where(resultFilter(runId, { siteId: site.id, missionId }));
+          }
+        );
+        if (anySuccess) {
+          await db
+            .update(sites)
+            .set({ lastCollectedAt: new Date() })
+            .where(eq(sites.id, site.id));
+        }
       } catch (err) {
-        // runMission handles its own failures; this guards infrastructure
-        // errors (R2/database down) so the queue keeps moving.
-        update = {
-          status: "failure",
-          error: err instanceof Error ? err.message : String(err),
-        };
+        // collectSite absorbs browser failures itself; this guards
+        // infrastructure errors (R2/database) so the queue keeps moving —
+        // settle whatever rows are still in flight for this site.
+        await db
+          .update(missionResults)
+          .set({
+            status: "failure",
+            error: err instanceof Error ? err.message : String(err),
+            completedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(missionResults.collectionRunId, runId),
+              eq(missionResults.siteId, site.id),
+              inArray(missionResults.missionId, missionIds),
+              inArray(missionResults.status, ["pending", "running"])
+            )
+          );
       }
-      await db
-        .update(missionResults)
-        .set({ ...update, completedAt: new Date() })
-        .where(resultFilter(runId, key));
     }
 
     await finalizeRunIfDone(runId);
@@ -121,9 +172,11 @@ async function processQueue(runId: string, items: WorkItem[]): Promise<void> {
   }
 }
 
-/** Collection finished: move running -> review (or failed when nothing at
- *  all was captured). Only fires once every work item in the run's scope has
- *  a settled result — single-mission collects leave the run open. */
+/** Collection finished: settle the run's terminal status. Failed when nothing
+ *  captured, auto-published when enough sites succeeded (Phase 8), otherwise
+ *  held in review for the operator. Only fires once every work item in the
+ *  run's scope has a settled result — single-mission collects leave the run
+ *  open. */
 async function finalizeRunIfDone(runId: string): Promise<void> {
   const db = getDb();
   const [run] = await db
@@ -147,15 +200,28 @@ async function finalizeRunIfDone(runId: string): Promise<void> {
   const scope = await listWorkItemsForRun(run);
   if (scope.some((i) => !covered.has(`${i.site.id}:${i.mission.id}`))) return;
 
-  const anyCaptured = results.some(
-    (r) => r.status === "success" || r.status === "needs_review"
+  // A site "succeeded" when at least one of its missions captured something.
+  const sitesInScope = new Set(scope.map((i) => i.site.id));
+  const succeededSites = new Set(
+    results
+      .filter((r) => r.status === "success" || r.status === "needs_review")
+      .map((r) => r.siteId)
   );
+  const total = sitesInScope.size;
+  const ok = [...sitesInScope].filter((s) => succeededSites.has(s)).length;
+
+  let status: RunStatus;
+  if (ok === 0) {
+    status = "failed";
+  } else if (total > 0 && ok / total >= AUTO_PUBLISH_MIN_SITE_SUCCESS) {
+    status = "published";
+  } else {
+    status = "review";
+  }
+
   await db
     .update(collectionRuns)
-    .set({
-      status: anyCaptured ? "review" : "failed",
-      completedAt: new Date(),
-    })
+    .set({ status, completedAt: new Date() })
     .where(eq(collectionRuns.id, runId));
 }
 

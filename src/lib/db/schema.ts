@@ -39,6 +39,9 @@ export const sites = pgTable("sites", {
   /** Two-letter US state code. */
   state: text("state"),
   active: boolean("active").notNull().default(true),
+  /** Last time any mission collected successfully for this site (Phase 8
+   *  freshness). Set by the run executor; drives the fresh/stale indicator. */
+  lastCollectedAt: timestamp("last_collected_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

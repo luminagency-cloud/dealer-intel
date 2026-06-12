@@ -3,6 +3,7 @@ import { asc } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, sites } from "@/lib/db";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FreshnessBadge } from "@/components/freshness-badge";
 import { deleteSite, setSiteActive } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +46,7 @@ export default async function SitesPage() {
                 <th className="px-4 py-3">Brand</th>
                 <th className="px-4 py-3">State</th>
                 <th className="px-4 py-3">Platform</th>
+                <th className="px-4 py-3">Collection</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -73,6 +75,9 @@ export default async function SitesPage() {
                   </td>
                   <td className="px-4 py-3 text-zinc-600">
                     {site.platform ?? "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <FreshnessBadge lastCollectedAt={site.lastCollectedAt} />
                   </td>
                   <td className="px-4 py-3">
                     <span

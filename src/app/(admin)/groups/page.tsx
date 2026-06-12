@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { asc, eq } from "drizzle-orm";
 import { getDb, runGroupMembers, runGroups, sites } from "@/lib/db";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { deleteRunGroup } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -82,12 +83,12 @@ export default async function RunGroupsPage() {
                           Edit
                         </Link>
                         <form action={deleteRunGroup.bind(null, group.id)}>
-                          <button
-                            type="submit"
+                          <ConfirmSubmitButton
+                            confirmMessage={`Delete run group "${group.name}"? This can't be undone.`}
                             className="text-red-700 hover:underline"
                           >
                             Delete
-                          </button>
+                          </ConfirmSubmitButton>
                         </form>
                       </div>
                     </td>

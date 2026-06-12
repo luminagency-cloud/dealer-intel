@@ -3,7 +3,13 @@ import { uploadEvidence } from "@/lib/evidence";
 import type { Evidence, MissionType, Site } from "@/lib/db";
 
 export { CollectionError, capturePage } from "./engine";
-export { runMission, type MissionRunResult } from "./mission-runner";
+export {
+  runMission,
+  collectSite,
+  type MissionRunResult,
+  type SiteMissionWork,
+  type SiteCollectionResult,
+} from "./mission-runner";
 
 export interface CollectionResult {
   status: "success" | "failure";
