@@ -15,17 +15,43 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 5 Collector Engine | Done | Playwright/Chromium; overlay dismissal, page scroller, full-page screenshot + HTML |
 | 6 Mission Framework | Done | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
 | 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
-| 8–13 | Not started | Phase 8 partially anticipated: missions already store last_known_url + last_success_at |
+| 8 | Not started | Collection Consolidation & Site Learning. Partially anticipated: missions already store last_known_url + last_success_at. Scope now includes single-visit-per-site consolidation. |
+| 9 | Not started | Evidence Analysis: classification, normalization, external compliance API call. |
+| 10 | Not started | Snapshot Publishing — the wall between analysis and reporting. |
+| 11 | Not started | Reporting Engine — pure reads from published snapshots, links to R2 images. |
+| 12 | Not started | AI-Assisted Analysis — improves edge-case classification and normalization. |
+
+## Architecture: three-phase pipeline (decided June 2026)
+
+The platform is a **collect → analyze → report** pipeline with a hard wall
+between each phase:
+
+- **Collection** — visit sites, grab everything promotional, store raw evidence
+  in R2. Comprehensive and reliable. A missed collection breaks everything
+  downstream. No interpretation happens here.
+- **Analysis** — independent passes over stored evidence: classification,
+  normalization, compliance (external API call). Passes are re-runnable and
+  many-to-many: one piece of evidence can be consumed by multiple passes
+  (specials report + compliance check) without re-collecting.
+- **Reporting** — pure reads from published analysis snapshots. No site access,
+  no computation.
+
+Collection is **group-scoped** (primary dealer + competitors) and
+**time-gated** (~weekly). A site with a fresh collection is ready for analysis.
+Failed sites are handled separately; they don't block the group.
 
 ## The mission layer (reworked June 2026)
 
-Missions are **global definitions** ("collect the service specials"), not
-per-site rows — with ~70 dealers the per-site model meant ~350 unmanageable
-mission records. Structure:
+Missions are **collection targeting configs**, not business goals. A mission
+answers: where do we look on a site, and how do we explore those pages?
+Business goals (specials comparison, compliance audit) are expressed at the
+analysis and reporting layers, not here.
 
-- `missions` — the global layer (~4 rows): name + mission_type (behavior) +
-  active. CRUD at `/missions`. mission_type maps to discovery paths and
-  exploration in `src/lib/collector/mission-knowledge.ts`.
+Structure:
+
+- `missions` — the global layer (~4 rows): name + mission_type (collection
+  strategy) + active. CRUD at `/missions`. mission_type maps to discovery
+  paths and exploration flags in `src/lib/collector/mission-knowledge.ts`.
 - `site_missions` — per-dealer URL config + collector memory (last_known_url,
   alternate_urls, last_success_at, per-pair active). Edited on the **site's
   edit page**, written to by the collector when it learns a URL.
@@ -35,6 +61,10 @@ mission records. Structure:
 - Run creation picks scope (all / group / ad-hoc dealer checkboxes) AND
   missions (checkboxes, default all; subset stored in
   collection_run_missions).
+
+Note: `homepage_offers` and `promotional_banners` are currently identical in
+collection behavior (both target homepage, both run carousel + disclaimer
+explorers). These should be consolidated when Phase 8 is built.
 
 ## Deletes
 

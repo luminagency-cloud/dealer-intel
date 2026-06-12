@@ -8,15 +8,16 @@ This system is a dealer offer intelligence platform.
 
 It is not a website scraper.
 
-Collection is only one subsystem.
+The platform operates as a three-phase pipeline:
 
-The platform exists to:
+1. **Collect** — visit dealer sites, capture all promotional content, store raw evidence in R2.
+2. **Analyze** — run passes over stored evidence to classify, normalize, and check ads.
+3. **Report** — query analyzed data and render reports. No live site access at this stage.
 
-1. Collect dealership offers.
-2. Preserve evidence.
-3. Normalize offers into structured data.
-4. Maintain historical snapshots.
-5. Generate competitive intelligence reports.
+Collection is the foundation. A missed or partial collection cannot be compensated downstream.
+Analysis passes are independent and re-runnable. An ad can be consumed by multiple passes
+(specials comparison, compliance check) without re-collecting. Report generation reads from
+published analysis snapshots only — deterministic, fast, no site visits.
 
 ---
 
@@ -84,30 +85,26 @@ Reporting does.
 
 ### Missions
 
-Defines business information to collect.
-
-Examples:
-
-* Homepage Offers
-* Service Specials
-* Finance Offers
-* Promotional Banners
+Defines collection targeting: where to look on a site and how to explore those pages.
+A mission is not a business goal — it is a collection configuration.
+Business goals (specials report, compliance audit) are expressed at the analysis and reporting layers.
 
 ### Collection Runs
 
-Represents a complete collection attempt.
+Represents a complete collection attempt across a scoped set of sites.
 
 ### Evidence
 
-Represents screenshots, disclaimers, and HTML captures.
+Represents screenshots, disclaimers, and HTML captures. Raw. Uninterpreted.
+Evidence is the canonical record — analysis reads from it, never re-collects.
 
 ### Offers
 
-Represents normalized offer records.
+Represents normalized offer records produced by the analysis phase.
 
 ### Report Snapshots
 
-Represents approved reporting datasets.
+Represents approved analysis datasets used as reporting inputs.
 
 ## Success Criteria
 
@@ -175,6 +172,7 @@ Supported Evidence Types:
 ## Success Criteria
 
 Evidence can be uploaded, retrieved, and associated with collection runs.
+R2 URLs are permanent and linkable from reports.
 
 ---
 
@@ -204,7 +202,7 @@ Store Evidence
 
 ## Collector Does Not
 
-Understand offer types
+Classify or interpret content
 
 Generate reports
 
@@ -224,23 +222,11 @@ Collector can visit sites and collect evidence.
 
 Make collection mission-driven.
 
-## Initial Missions
-
-Homepage Offers
-
-Finance Offers
-
-Service Specials
-
-Promotional Banners
-
 ## Mission Responsibilities
 
 Define likely URLs
 
 Define discovery rules
-
-Define expected content
 
 Define exploration behavior
 
@@ -292,11 +278,27 @@ Operator can resolve collection issues without code changes.
 
 ---
 
-# Phase 8 - Site Learning
+# Phase 8 - Collection Consolidation & Site Learning
 
 ## Goal
 
-Reduce collection cost over time.
+Make collection reliable, comprehensive, and efficient.
+Each site is visited once per run; all configured pages are collected in a single session.
+A site collected within the past week is considered current.
+
+## Collection Scope
+
+Collection is initiated by run group: a primary dealer plus its competitor set.
+Analysis is only available for sites that have a current collection.
+Failed sites are tracked separately and do not block the rest of the group.
+
+## Collection Order (per page target)
+
+1. Last Successful URL
+2. Site-Specific Alternatives
+3. Platform Defaults
+4. Mission Discovery Rules
+5. AI Fallback (Phase 12)
 
 ## Stored Knowledge
 
@@ -310,79 +312,40 @@ Known Mission Locations
 
 Last Successful Collection
 
-## Collection Order
-
-1. Last Successful URL
-
-2. Site-Specific Alternatives
-
-3. Platform Defaults
-
-4. Mission Discovery Rules
-
-5. AI Fallback (future)
-
 ## Success Criteria
 
-Collector improves over time without additional coding.
+Each site is visited once per run; all content types collected in a single browser session.
+Operator can see which sites have fresh vs stale collections.
+Collector improves over time without code changes.
 
 ---
 
-# Phase 9 - Offer Discovery
+# Phase 9 - Evidence Analysis
 
 ## Goal
 
-Identify candidate offers from collected evidence.
+Extract structured meaning from collected evidence. No site visits at this stage.
 
-## Inputs
+## Analysis Passes
 
-Screenshots
+Analysis passes are independent. A piece of evidence can be consumed by multiple passes
+without re-collection. New pass types can be added and run retroactively over existing evidence.
 
-HTML
+### Classification
 
-Mission Context
+Determine what kind of ad each piece of evidence represents.
 
-## Outputs
+Outputs:
+- Ad type (lease, finance, cash, service, promotional)
+- Vehicle context (make, model, trim where present)
+- Key terms (payment, APR, term, due at signing)
+- Confidence score
 
-Candidate Offers
+### Normalization
 
-Candidate Disclaimers
+Convert classified ads into structured offer records suitable for reporting.
 
-Candidate Promotions
-
-## Responsibilities
-
-Determine:
-
-* Is this an offer?
-* Is this promotional content?
-* Should it be reviewed?
-
-## Success Criteria
-
-Offer candidates can be extracted from evidence.
-
----
-
-# Phase 10 - Offer Normalization
-
-## Goal
-
-Convert discovered offers into structured data.
-
-## Supported Types
-
-Lease Offers
-
-Finance Offers
-
-Cash Offers
-
-Service Offers
-
-Promotional Offers
-
-## Output Fields
+Output Fields:
 
 Offer Type
 
@@ -404,17 +367,33 @@ Raw Content
 
 Confidence Score
 
+### Compliance Check
+
+Send evidence + disclaimer text + ad type to external compliance API.
+Store the returned grade against the evidence record.
+Compliance logic lives entirely in the external service — this platform sends and receives only.
+
+## Inputs
+
+Screenshots
+
+HTML Snapshots
+
+Disclaimer Screenshots
+
 ## Success Criteria
 
-Offers become structured records suitable for reporting.
+Collected evidence becomes structured, queryable offer records.
+Compliance grades are attached to evidence records.
+An ad can carry results from multiple analysis passes simultaneously.
 
 ---
 
-# Phase 11 - Snapshot Publishing
+# Phase 10 - Snapshot Publishing
 
 ## Goal
 
-Separate collection from reporting.
+Separate analysis from reporting.
 
 ## Workflow
 
@@ -448,7 +427,7 @@ Approved snapshots become reporting inputs.
 
 ---
 
-# Phase 12 - Reporting Engine
+# Phase 11 - Reporting Engine
 
 ## Goal
 
@@ -474,29 +453,34 @@ Trend Reports
 
 Exports
 
+## Rules
+
+Reporting is pure data retrieval and formatting.
+No computation, no AI, no site access.
+All thinking happened in the analysis phase.
+
 ## Success Criteria
 
-Reports can be generated without rerunning collection.
+Reports can be generated without rerunning collection or analysis.
+Reports link directly to R2-stored evidence images.
 
 ---
 
-# Phase 13 - AI Enhancements
+# Phase 12 - AI-Assisted Analysis
 
 ## Goal
 
-Improve difficult collection scenarios.
+Improve analysis quality for difficult cases.
 
 ## Appropriate AI Tasks
 
-Offer Classification
+Offer Classification (low-confidence cases)
 
 Visual Offer Detection
 
 Disclaimer Extraction
 
 Offer Normalization Assistance
-
-Complex Discovery Assistance
 
 ## Avoid AI For
 
@@ -508,9 +492,12 @@ Known Mission Paths
 
 Basic Exploration
 
+Report Generation
+
 ## Success Criteria
 
-AI improves collection quality while remaining a secondary system.
+AI improves analysis quality while remaining a secondary system.
+Rule-based analysis handles the routine cases; AI handles edge cases.
 
 ---
 
@@ -556,23 +543,23 @@ Dismiss chat widgets and overlays.
 
 # Weekly Operational Workflow
 
-Scheduled Run
+Scheduled Run (group-scoped)
 
 ↓
 
-Collection
+Collection (single visit per site)
 
 ↓
 
-Review Queue
+Review Queue (fix failed sites, retry misses)
 
 ↓
 
-Operator Corrections
+Analysis Passes (classification, normalization, compliance)
 
 ↓
 
-Retry Failed Missions
+Operator Review
 
 ↓
 
@@ -601,5 +588,7 @@ Not form automation.
 Not AI-driven navigation.
 
 Not real-time monitoring.
+
+Not a compliance engine (compliance logic lives in an external service).
 
 Scope is limited to dealership promotional and offer intelligence.
