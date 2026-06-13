@@ -44,6 +44,55 @@ const KNOWN_MAKES = [
   "Porsche", "Ram", "Subaru", "Tesla", "Toyota", "Volkswagen", "Volvo",
 ];
 
+// Real model names for the brands in the dataset. The extractor emits a model
+// ONLY if it matches one of these — a null model beats junk like "Dealer" or
+// "Safety Sense" grabbed from page chrome. Multi-word models are matched
+// longest-first so "Grand Cherokee" wins over "Cherokee". Lowercased compare.
+const KNOWN_MODELS = [
+  // Toyota
+  "Grand Highlander", "Land Cruiser", "Corolla Cross", "Prius Prime", "RAV4 Prime",
+  "Camry", "Corolla", "RAV4", "Highlander", "Tacoma", "Tundra", "4Runner",
+  "Sienna", "Prius", "Venza", "Sequoia", "Crown", "bZ4X", "GR86", "GR Corolla",
+  "Supra", "C-HR", "Avalon", "Mirai",
+  // Honda
+  "Civic", "Accord", "CR-V", "Pilot", "Odyssey", "HR-V", "Passport",
+  "Ridgeline", "Insight", "Prologue",
+  // Nissan
+  "Altima", "Sentra", "Maxima", "Rogue", "Murano", "Pathfinder", "Kicks",
+  "Frontier", "Titan", "Versa", "Leaf", "Ariya", "Armada",
+  // Subaru
+  "Outback", "Forester", "Crosstrek", "Impreza", "Legacy", "Ascent", "WRX",
+  "BRZ", "Solterra",
+  // Kia
+  "Telluride", "Sportage", "Sorento", "Carnival", "Seltos", "Forte", "Soul",
+  "Niro", "EV6", "EV9", "Stinger", "Rio", "K5", "Optima",
+  // Hyundai
+  "Santa Cruz", "Santa Fe", "Ioniq 5", "Ioniq 6", "Ioniq", "Tucson", "Palisade",
+  "Elantra", "Sonata", "Kona", "Venue", "Accent", "Veloster",
+  // Chrysler / Dodge / Jeep / Ram
+  "Grand Cherokee", "Grand Wagoneer", "Pacifica", "Wrangler", "Cherokee",
+  "Compass", "Renegade", "Gladiator", "Wagoneer", "Durango", "Charger",
+  "Challenger", "Hornet", "ProMaster", "1500", "2500", "3500", "300",
+  // Chevrolet / GMC / Buick
+  "Silverado", "Equinox", "Traverse", "Tahoe", "Suburban", "Malibu", "Trax",
+  "Trailblazer", "Blazer", "Colorado", "Camaro", "Corvette", "Sierra",
+  "Terrain", "Acadia", "Yukon", "Canyon", "Encore", "Enclave", "Envision",
+  "Envista",
+  // Ford
+  "F-150", "Escape", "Explorer", "Edge", "Bronco", "Mustang", "Ranger",
+  "Maverick", "Expedition",
+  // Volvo
+  "XC90", "XC60", "XC40", "S60", "S90", "V60", "V90", "C40",
+  // Volkswagen / Mazda
+  "Jetta", "Passat", "Tiguan", "Atlas", "Taos", "Golf", "ID.4",
+  "CX-90", "CX-50", "CX-30", "CX-5", "Mazda3", "Mazda6", "MX-5",
+].sort((a, b) => b.length - a.length);
+
+// Plausible vehicle cash incentive / rebate band. Below this is service-coupon
+// noise; above it is an MSRP or total price misread as cash.
+const CASH_MIN = 250;
+const CASH_MAX = 25_000;
+
 /** Strip scripts/styles, drop tags, decode the common entities, collapse
  *  whitespace — enough to regex visible offer copy out of a snapshot. */
 export function htmlToText(html: string): string {
@@ -118,7 +167,12 @@ function extractCashIncentive(text: string) {
       /\$\s?([\d,]{2,7})\s*(?:cash back|customer cash|bonus cash|cash allowance|rebate|in (?:total )?savings)/i
     ) ??
     firstMatch(text, /save\s+(?:up to\s+)?\$\s?([\d,]{2,7})/i);
-  return m ? { value: parseAmount(m[1]), match: m[0].trim() } : null;
+  if (!m) return null;
+  const value = parseAmount(m[1]);
+  // Reject service-coupon noise and MSRP/price misreads — a real vehicle cash
+  // incentive sits in a plausible band (see CASH_MIN/CASH_MAX).
+  if (value < CASH_MIN || value > CASH_MAX) return null;
+  return { value, match: m[0].trim() };
 }
 
 /** Service specials price by the job, not by the month: a flat price
@@ -222,23 +276,47 @@ function extractDisclaimerNear(
   return candidate.slice(0, 1000);
 }
 
-function extractVehicle(text: string, hints: ExtractHints) {
-  const brandMake = (hints.brand ?? "")
-    .split(/[,/]/)[0]
-    .trim();
-  // Find a known make in the copy; fall back to the dealer's brand.
-  const makeInText = KNOWN_MAKES.find((mk) =>
-    new RegExp(`\\b${mk.replace(/[-]/g, "\\-")}\\b`, "i").test(text)
-  );
-  const make = makeInText ?? (brandMake || null);
-  if (!make) return { make: null, model: null, trim: null };
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+}
 
-  // Model: the Title-case word(s) right after the (optional year +) make.
-  const modelRe = new RegExp(
-    `(?:20\\d{2}\\s+)?${make.replace(/[-]/g, "\\-")}\\s+([A-Z][\\w-]+(?:\\s[A-Z][\\w-]+)?)`,
-  );
-  const m = text.match(modelRe);
-  const model = m ? m[1].trim() : null;
+/** First known model appearing in `scope`, matched longest-first so multi-word
+ *  models (e.g. "Grand Cherokee") beat their substrings. Null if none. */
+export function findKnownModel(scope: string): string | null {
+  for (const model of KNOWN_MODELS) {
+    if (new RegExp(`\\b${escapeRe(model)}\\b`, "i").test(scope)) return model;
+  }
+  return null;
+}
+
+/** Make + model for the offer. Prefers the offer-anchor context (the copy
+ *  around the price) over page-global text, so we don't grab the make from a
+ *  "Toyota Dealership" nav link. Model must be a KNOWN_MODELS entry — a null
+ *  model is better than junk pulled from page chrome. */
+function extractVehicle(
+  text: string,
+  hints: ExtractHints,
+  anchorContext: string | null
+) {
+  const brandMake = (hints.brand ?? "").split(/[,/]/)[0].trim();
+  const findMake = (scope: string) =>
+    KNOWN_MAKES.find((mk) =>
+      new RegExp(`\\b${escapeRe(mk)}\\b`, "i").test(scope)
+    ) ?? null;
+
+  // Model first — it's the high-signal token. Look near the offer, then page.
+  const model =
+    (anchorContext ? findKnownModel(anchorContext) : null) ??
+    findKnownModel(text);
+
+  // Make: prefer the anchor context, then a make adjacent to the model, then
+  // the dealer's brand prior.
+  const make =
+    (anchorContext ? findMake(anchorContext) : null) ??
+    findMake(text) ??
+    (brandMake || null);
+
+  if (!make && !model) return { make: null, model: null, trim: null };
   return { make, model, trim: null };
 }
 
@@ -311,11 +389,10 @@ export function extractOffers(
   if (signalCount === 0 && !hasServiceSignal) return [];
 
   const offerType = classify(fields, hints);
-  const vehicle = extractVehicle(text, hints);
 
-  // The offer anchor: the strongest priced phrase on the page. Both the
-  // disclaimer search (it must sit with this ad) and the readable context
-  // hang off it.
+  // The offer anchor: the strongest priced phrase on the page. The disclaimer
+  // search (it must sit with this ad), the readable context, and vehicle
+  // extraction all hang off it.
   const anchor =
     payment?.match ??
     cash?.match ??
@@ -324,6 +401,12 @@ export function extractOffers(
     service?.discount?.match ??
     null;
   const anchorIndex = anchor ? text.indexOf(anchor) : -1;
+  // Copy around the price — where this ad's vehicle name actually lives.
+  const anchorContext =
+    anchorIndex >= 0
+      ? text.slice(Math.max(0, anchorIndex - 140), anchorIndex + 160)
+      : null;
+  const vehicle = extractVehicle(text, hints, anchorContext);
   const disclaimer = extractDisclaimerNear(text, anchorIndex);
 
   const matches: Record<string, string> = {};

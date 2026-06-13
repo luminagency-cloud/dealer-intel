@@ -14,6 +14,7 @@ import {
   listEvidenceForRun,
   listOffersForRun,
   listResultsForRun,
+  listSnapshotsForRun,
   listWorkItemsForRun,
 } from "@/lib/db/repository";
 import { isRunExecuting } from "@/lib/run-executor";
@@ -23,6 +24,7 @@ import { RunStatusBadge } from "@/components/run-status-badge";
 import { EvidenceSection } from "@/components/evidence-section";
 import { MissionRunPanel } from "@/components/mission-run-panel";
 import { AnalysisSection } from "@/components/analysis-section";
+import { SnapshotSection } from "@/components/snapshot-section";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
@@ -30,6 +32,7 @@ import {
   deleteRunEvidence,
   executeAllMissions,
   executeWorkItem,
+  publishSnapshot,
   retryResult,
   runAnalysis,
   updateRunStatus,
@@ -59,6 +62,7 @@ export default async function RunDetailPage({
     runEvidence,
     runOffers,
     runGrades,
+    runSnapshots,
     siteOptions,
     missionRows,
     runResults,
@@ -67,6 +71,7 @@ export default async function RunDetailPage({
     listEvidenceForRun(run.id),
     listOffersForRun(run.id),
     listComplianceGradesForRun(run.id),
+    listSnapshotsForRun(run.id),
     getDb()
       .select({ id: sites.id, name: sites.name })
       .from(sites)
@@ -214,6 +219,15 @@ export default async function RunDetailPage({
           analyzing={analyzing}
           runAnalysisAction={runAnalysis.bind(null, run.id)}
           canAnalyze={canAnalyze}
+        />
+      </div>
+
+      <div className="mb-8">
+        <SnapshotSection
+          snapshots={runSnapshots}
+          canPublish={run.status !== "failed"}
+          hasOffers={runOffers.length > 0}
+          publishAction={publishSnapshot.bind(null, run.id)}
         />
       </div>
     </div>

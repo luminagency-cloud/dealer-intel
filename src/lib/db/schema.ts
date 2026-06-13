@@ -346,6 +346,20 @@ export const evidence = pgTable("evidence", {
   evidenceType: evidenceTypeEnum("evidence_type").notNull(),
   screenshotUrl: text("screenshot_url"),
   htmlUrl: text("html_url"),
+  /** Human-readable name captured at collection time so identical-typed rows
+   *  are distinguishable in the viewer: page title + path for page captures,
+   *  slide/tab labels for exploration shots, and — for disclaimer shots — the
+   *  ad-anchor text (vehicle + price from the disclaimer's ad card). That
+   *  anchor is also the join key tying a disclaimer screenshot back to its
+   *  offer for the compliance pass (which pairs ad image + disclaimer text in
+   *  one call). Null on legacy rows captured before labeling existed. */
+  label: text("label"),
+  /** Text scraped from the source at capture time. For disclaimer shots this is
+   *  the disclaimer modal's full text (offer + fine print) — the real
+   *  disclosure the compliance pass needs, captured directly so no OCR is
+   *  required and so it isn't lost when the modal closes before the HTML
+   *  snapshot. Null for captures with no associated text. */
+  textContent: text("text_content"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -433,17 +447,73 @@ export const complianceGrades = pgTable(
   ]
 );
 
-/** Approved reporting datasets (AD-006). Reports only ever read snapshots,
- *  never live collection data. */
+/** Approved reporting datasets (AD-006), the Phase 10 wall between analysis
+ *  and reporting. A snapshot is a FROZEN copy of a run's analysis output at
+ *  approval time: re-running analysis or re-collecting never changes a
+ *  published snapshot. Reports (Phase 11) read only from here and the frozen
+ *  `snapshot_offers`, never from the live offers/grades tables. */
 export const reportSnapshots = pgTable("report_snapshots", {
   id: uuid("id").defaultRandom().primaryKey(),
   collectionRunId: uuid("collection_run_id")
     .notNull()
     .references(() => collectionRuns.id, { onDelete: "cascade" }),
+  /** Scope anchor frozen from the run (group → primary dealer for reporting).
+   *  Set null if the group is later deleted; runGroupName preserves the label. */
+  runGroupId: uuid("run_group_id").references(() => runGroups.id, {
+    onDelete: "set null",
+  }),
+  runGroupName: text("run_group_name"),
+  /** Optional operator label for the snapshot. */
+  label: text("label"),
+  /** Denormalized counts for list display (the frozen offers carry the truth). */
+  offerCount: integer("offer_count").notNull().default(0),
+  siteCount: integer("site_count").notNull().default(0),
   approvedAt: timestamp("approved_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
   approvedBy: text("approved_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Frozen, denormalized copy of one analyzed offer at snapshot time. Carries
+ *  everything a report needs without touching the live analysis tables: site
+ *  identity, normalized offer fields, the compliance grade, and a link back to
+ *  the source evidence (which survives as long as the run, and thus the
+ *  snapshot, does). Immutable once written. */
+export const snapshotOffers = pgTable("snapshot_offers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  snapshotId: uuid("snapshot_id")
+    .notNull()
+    .references(() => reportSnapshots.id, { onDelete: "cascade" }),
+  /** Live site link for relationship joins; the frozen name/brand/state below
+   *  keep the report intact even if the site is later renamed or deleted. */
+  siteId: uuid("site_id").references(() => sites.id, { onDelete: "set null" }),
+  siteName: text("site_name").notNull(),
+  siteBrand: text("site_brand"),
+  siteState: text("site_state"),
+  /** Source evidence for image drill-down; set null if the evidence is gone. */
+  sourceEvidenceId: uuid("source_evidence_id").references(() => evidence.id, {
+    onDelete: "set null",
+  }),
+  missionType: missionTypeEnum("mission_type").notNull(),
+  offerType: offerTypeEnum("offer_type").notNull(),
+  vehicleMake: text("vehicle_make"),
+  vehicleModel: text("vehicle_model"),
+  vehicleTrim: text("vehicle_trim"),
+  monthlyPayment: real("monthly_payment"),
+  apr: real("apr"),
+  cashIncentive: real("cash_incentive"),
+  termMonths: integer("term_months"),
+  dueAtSigning: real("due_at_signing"),
+  rawText: text("raw_text"),
+  normalizedJson: jsonb("normalized_json"),
+  disclaimerText: text("disclaimer_text"),
+  confidence: real("confidence"),
+  /** Frozen compliance grade for this ad (null if ungraded at snapshot time). */
+  complianceGrade: text("compliance_grade"),
+  complianceDetailsJson: jsonb("compliance_details_json"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -473,3 +543,5 @@ export type ComplianceGrade = typeof complianceGrades.$inferSelect;
 export type NewComplianceGrade = typeof complianceGrades.$inferInsert;
 export type ReportSnapshot = typeof reportSnapshots.$inferSelect;
 export type NewReportSnapshot = typeof reportSnapshots.$inferInsert;
+export type SnapshotOffer = typeof snapshotOffers.$inferSelect;
+export type NewSnapshotOffer = typeof snapshotOffers.$inferInsert;

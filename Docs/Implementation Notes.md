@@ -17,7 +17,7 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
 | 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
 | 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
-| 10 | Not started | Snapshot Publishing — the wall between analysis and reporting. |
+| 10 | Done | Snapshot Publishing — the wall between analysis and reporting. Publishing a run **freezes** its current offers + compliance grades into `report_snapshots` + `snapshot_offers` (denormalized, immutable). Re-running analysis or re-collecting never changes a published snapshot. Snapshots list at `/snapshots`; "Publish Snapshot" on the run page. |
 | 11 | Not started | Reporting Engine — pure reads from published snapshots, links to R2 images. |
 | 12 | Not started | AI-Assisted Analysis — improves edge-case classification and normalization. |
 
@@ -86,6 +86,26 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
 - `src/lib/collector/overlays.ts` / `explorers.ts` — best-effort cookie/
   modal/chat handling; carousel/tab/accordion/disclaimer exploration.
   Disclaimer shots are stored as `disclaimer_screenshot` evidence (AD-005).
+  EVIDENCE LABELING (v0.7.1): each shot carries a human-readable `label` so
+  identically-typed captures are distinguishable in the viewer. Page shots get
+  `pageTitle — host/path`; carousel/tab shots get "Carousel slide N"/"Tab N";
+  disclaimer shots get the **ad anchor** — the offer line (vehicle + price)
+  read from the disclaimer modal that opens on click (`modalAdAnchor`), or the
+  ancestor card text for inline offers (`ancestorAdAnchor`). Dealer promos are
+  usually image-based (vehicle/price baked into the image), so the modal —
+  which renders the offer + disclaimer as DOM text — is the reliable source.
+  e.g. "Disclaimer — Lease a 2026 RAM 1500 Hemi V8 big horn $379 /mo Expires
+  06/30/2026". This anchor is also the intended join key tying a disclaimer
+  screenshot back to its offer for the compliance pass (which pairs ad image +
+  disclaimer text in one external call). Labels populate on the NEXT collection
+  of a site; legacy evidence rows keep a null label and fall back to the type
+  name in the viewer.
+  DISCLAIMER TEXT (v0.7.2): `readDisclaimerModal` also returns the modal's FULL
+  text (offer + fine print), stored on `evidence.text_content`. This is the real
+  disclosure the compliance pass needs, captured directly — no OCR — and it
+  isn't lost the way modal-only disclaimers are when the static HTML snapshot is
+  taken after the modal closes. Surfaced as an expandable "Disclaimer text" row
+  in the evidence viewer. See [[compliance-ad-disclaimer-pairing]].
 - `src/lib/collector/mission-knowledge.ts` — the only place mission types
   influence collection: platform default paths, nav-discovery keywords,
   exploration flags.
@@ -104,9 +124,13 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   writing progress to mission_results. On any site success it stamps
   `sites.last_collected_at`. Auto-finalizes the run once the full scope is
   settled: `failed` if no site captured anything, `published` if ≥
-  `AUTO_PUBLISH_MIN_SITE_SUCCESS` (0.8) of in-scope sites succeeded, else
-  `review`. The manual Publish / Mark Failed controls on the run page always
-  override. Guarded against double-starts via a module-level set on globalThis
+  `AUTO_PUBLISH_MIN_SITE_SUCCESS` (default 0.8, env-overridable) of in-scope
+  sites succeeded, else `review`. Set the env var above 1 to disable
+  auto-publish so every run lands in review — used for a full fan-out where the
+  operator wants to triage all per-mission failures (the `/review` queue hides
+  published runs, so an auto-published run's wrong-URL failures would otherwise
+  be invisible). The manual Publish / Mark Failed controls on the run page
+  always override. Guarded against double-starts via a module-level set on globalThis
   (survives dev HMR; not a server restart — an interrupted run's
   pending/running rows sit until retried).
 - `src/lib/freshness.ts` — 7-day freshness window over
@@ -120,6 +144,17 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
     payment / APR / term / due-at-signing / cash, plus a service-special
     price/discount path; emits a 0..1 confidence. v1 is one offer per evidence
     (returns an array so multi-offer can drop in).
+    HARDENING (v0.7.3, after the Toyota of Dartmouth cross-platform shakeout):
+    vehicle model is matched against a curated `KNOWN_MODELS` list (a null
+    model beats junk like "Dealer"/"Safety Sense" pulled from page chrome) and
+    searched in the offer-anchor context (the copy around the price) before the
+    whole page, so the make isn't grabbed from a "Toyota Dealership" nav link.
+    Cash incentive is clamped to a plausible band (`CASH_MIN`..`CASH_MAX`,
+    250..25k) to reject service-coupon noise and MSRP/price misreads.
+    `findKnownModel` is exported for the runner's disclaimer-based correction.
+    Still one-offer-per-page: a multi-offer lineup can mis-pick the model from
+    the anchor window — the runner corrects that from the matched disclaimer
+    (below); the deeper fix is multi-offer segmentation / Phase 12.
     DISCLAIMER RULE (operator, hard): a disclaimer is tied to a SPECIFIC ad and
     sits with it (just below, or text within the ad image). It is never the
     site-wide footer legalese (Terms of Use / Privacy / © / "do not sell").
@@ -137,9 +172,35 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
     (upsert, one per evidence). Idempotent: clears the run's prior offers +
     grades first. Guarded by a globalThis active set like the collector;
     `isAnalysisRunning(runId)` drives the run page's live refresh.
+    HARDENING (v0.7.3): dedups offers per site by signature (same offer recurs
+    across a site's pages — one offer per evidence × many pages). Backfills an
+    offer's disclaimer from the captured disclaimer-modal text
+    (`evidence.text_content`) when the HTML pass found none — paired by the
+    monthly payment ONLY (`matchCapturedDisclaimer`), a high-precision token;
+    cash/model needles were dropped (a "$15" coupon hits "$15,000", a bare model
+    hits a multi-vehicle modal). The payment-matched disclaimer describes
+    exactly that offer, so its model corrects the page-level vehicle guess
+    (e.g. a $475 Tundra lease mislabeled "Corolla" → Tundra). See
+    [[compliance-ad-disclaimer-pairing]].
   Triggered by the **Run Analysis** button on the run page
   (`components/analysis-section.tsx`), which shows the extracted offers
   (type, vehicle, terms, confidence) and compliance grades.
+- `src/lib/snapshot.ts` — Phase 10 snapshot publishing (the analysis↔reporting
+  wall). `createSnapshotFromRun(runId, approvedBy, label?)` reads the run's live
+  offers (joined to site identity, source-evidence mission type, and the
+  per-evidence compliance grade) and **freezes** them into a new
+  `report_snapshots` row + denormalized `snapshot_offers` copies. Immutable:
+  the analysis runner only ever touches `offers`/`compliance_grades`, so a
+  published snapshot is unaffected by re-analysis or re-collection. Returns null
+  when the run has no offers yet (analysis must run first). Group scope is
+  frozen too (`run_group_id` + `run_group_name`) so reporting can anchor on the
+  primary dealer even after a group rename/delete. Reporting (Phase 11) reads
+  ONLY `report_snapshots` + `snapshot_offers`. Snapshots list/detail at
+  `/snapshots` (`components/snapshot-offers-table.tsx`); published from the run
+  page's `components/snapshot-section.tsx` ("Publish Snapshot", which advances a
+  review-state run to published). Deleting a snapshot removes only its frozen
+  rows (it owns no R2 objects — it links back to the run's evidence); deleting
+  the run cascades its snapshots.
 - `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`

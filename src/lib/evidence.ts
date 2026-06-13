@@ -47,6 +47,12 @@ export async function uploadEvidence(input: {
   evidenceType: EvidenceType;
   fileName: string;
   body: Buffer | Uint8Array;
+  /** Human-readable name for the viewer (page title/URL, slide/tab, or the
+   *  disclaimer's ad anchor). See evidence.label. */
+  label?: string | null;
+  /** Full captured text (e.g. a disclaimer modal's fine print). See
+   *  evidence.textContent. */
+  textContent?: string | null;
 }): Promise<Evidence> {
   const ext = extensionFor(input.evidenceType, input.fileName);
   const key = `runs/${input.collectionRunId}/${input.evidenceType}/${randomUUID()}.${ext}`;
@@ -65,6 +71,8 @@ export async function uploadEvidence(input: {
     siteId: input.siteId,
     missionType: input.missionType,
     evidenceType: input.evidenceType,
+    label: input.label?.trim() || null,
+    textContent: input.textContent?.trim() || null,
     ...(isHtmlEvidence(input.evidenceType)
       ? { htmlUrl: key }
       : { screenshotUrl: key }),

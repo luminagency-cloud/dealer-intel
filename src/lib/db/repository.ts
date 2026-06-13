@@ -14,6 +14,7 @@ import {
   runGroupMembers,
   siteRelationships,
   sites,
+  snapshotOffers,
   type ComplianceGrade,
   type Mission,
   type SiteMission,
@@ -30,6 +31,7 @@ import {
   type ReportSnapshot,
   type RunStatus,
   type SiteRelationship,
+  type SnapshotOffer,
 } from "./schema";
 
 /**
@@ -308,4 +310,33 @@ export async function listReportSnapshots(): Promise<ReportSnapshot[]> {
     .select()
     .from(reportSnapshots)
     .orderBy(desc(reportSnapshots.approvedAt));
+}
+
+/** Snapshots created from a single run, newest first (a run can be
+ *  re-published after re-analysis, so there may be more than one). */
+export async function listSnapshotsForRun(
+  collectionRunId: string
+): Promise<ReportSnapshot[]> {
+  return getDb()
+    .select()
+    .from(reportSnapshots)
+    .where(eq(reportSnapshots.collectionRunId, collectionRunId))
+    .orderBy(desc(reportSnapshots.approvedAt));
+}
+
+/** The frozen offers belonging to a snapshot — the only data a report reads. */
+export async function listSnapshotOffers(
+  snapshotId: string
+): Promise<SnapshotOffer[]> {
+  return getDb()
+    .select()
+    .from(snapshotOffers)
+    .where(eq(snapshotOffers.snapshotId, snapshotId))
+    .orderBy(asc(snapshotOffers.siteName));
+}
+
+export async function deleteReportSnapshot(id: string): Promise<void> {
+  // snapshot_offers cascade via FK; the snapshot owns no R2 objects (it links
+  // to the run's evidence, which the run delete cleans up).
+  await getDb().delete(reportSnapshots).where(eq(reportSnapshots.id, id));
 }

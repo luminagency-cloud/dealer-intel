@@ -14,6 +14,7 @@ import {
   startRunExecution,
 } from "@/lib/run-executor";
 import { startAnalysis } from "@/lib/analysis";
+import { createSnapshotFromRun } from "@/lib/snapshot";
 import { deleteRunDeep } from "@/lib/deep-delete";
 import {
   collectionRunMissions,
@@ -219,6 +220,36 @@ export async function runAnalysis(runId: string) {
         ? `/runs/${runId}?error=${encodeURIComponent("No HTML evidence to analyze yet")}`
         : `/runs/${runId}`
   );
+}
+
+/** Phase 10: freeze the run's current analysis output into a report snapshot,
+ *  the immutable reporting input. Advances a run still in review to published. */
+export async function publishSnapshot(runId: string, formData: FormData) {
+  const session = await requireSession();
+  const run = await getCollectionRun(runId);
+  if (!run) {
+    throw new Error("Run not found");
+  }
+  const labelValue = formData.get("label");
+  const label = typeof labelValue === "string" ? labelValue : null;
+  const approvedBy = session.user?.email ?? "operator";
+
+  const snapshot = await createSnapshotFromRun(runId, approvedBy, label);
+  if (!snapshot) {
+    redirect(
+      `/runs/${runId}?error=${encodeURIComponent("No analyzed offers to publish — run analysis first")}`
+    );
+  }
+
+  if (run.status === "review") {
+    await updateCollectionRunStatus(runId, "published", {
+      completedAt: run.completedAt ?? new Date(),
+    });
+  }
+  revalidatePath(`/runs/${runId}`);
+  revalidatePath("/runs");
+  revalidatePath("/snapshots");
+  redirect(`/snapshots/${snapshot.id}`);
 }
 
 export async function retryResult(path: string, resultId: string) {

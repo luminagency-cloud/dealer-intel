@@ -8,7 +8,7 @@ import {
   type Evidence,
 } from "@/lib/db";
 import { getEvidenceText } from "@/lib/evidence";
-import { extractOffers } from "./extract";
+import { extractOffers, findKnownModel } from "./extract";
 import { getComplianceGrader } from "./compliance";
 
 /**
@@ -53,6 +53,76 @@ async function loadAnalyzableEvidence(
   return rows.map((r) => ({ evidence: r.evidence, brand: r.brand }));
 }
 
+interface CapturedDisclaimer {
+  siteId: string;
+  text: string;
+}
+
+/** Disclaimer-modal text captured during collection (evidence.text_content on
+ *  disclaimer_screenshot rows). This is the real fine print the HTML snapshot
+ *  often misses, used to backfill an offer's disclaimer when the HTML pass
+ *  found none. */
+async function loadCapturedDisclaimers(
+  runId: string
+): Promise<CapturedDisclaimer[]> {
+  const rows = await getDb()
+    .select({ siteId: evidence.siteId, text: evidence.textContent })
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.collectionRunId, runId),
+        eq(evidence.evidenceType, "disclaimer_screenshot")
+      )
+    );
+  return rows
+    .filter((r): r is CapturedDisclaimer => Boolean(r.text))
+    .map((r) => ({ siteId: r.siteId, text: r.text }));
+}
+
+/** The disclaimer (fine-print) portion of a captured modal text, dropping the
+ *  leading offer line and the "DISCLAIMER Disclaimer:" markers. */
+function disclaimerPortion(modalText: string): string {
+  const colon = modalText.search(/disclaimer\s*:/i);
+  if (colon >= 0) {
+    const after = modalText.indexOf(":", colon);
+    if (after >= 0) return modalText.slice(after + 1).trim();
+  }
+  const any = modalText.search(/disclaimer/i);
+  return (any >= 0 ? modalText.slice(any) : modalText).trim();
+}
+
+/** Finds the captured disclaimer that belongs to this offer by matching the
+ *  monthly payment — a high-precision, offer-specific token. Cash amounts and
+ *  bare model names are deliberately NOT used: they false-match (a "$15" coupon
+ *  hits "$15,000", and a model name hits a modal that lists several vehicles),
+ *  and a wrong disclaimer is worse than none for the compliance pass. Offers
+ *  without a monthly payment (e.g. APR-only finance) get no backfill.
+ *
+ *  Returns the disclaimer text and the model named in it. The payment-matched
+ *  disclaimer describes exactly this offer, so its model is authoritative — it
+ *  corrects the page-level vehicle guess, which can grab the wrong model from a
+ *  multi-offer page (e.g. a $475 Tundra lease mislabeled "Corolla"). */
+function matchCapturedDisclaimer(
+  offer: { monthlyPayment: number | null },
+  siteId: string,
+  disclaimers: CapturedDisclaimer[]
+): { text: string; model: string | null } | null {
+  if (offer.monthlyPayment == null) return null;
+  // "$205" but not "$205,000" or "$2,050" — bounded so the amount is exact.
+  const amountRe = new RegExp(`\\$\\s?${offer.monthlyPayment}(?![\\d,])`);
+
+  for (const d of disclaimers) {
+    if (d.siteId !== siteId) continue;
+    if (amountRe.test(d.text)) {
+      return {
+        text: disclaimerPortion(d.text).slice(0, 1000),
+        model: findKnownModel(d.text),
+      };
+    }
+  }
+  return null;
+}
+
 async function processAnalysis(
   runId: string,
   rows: EvidenceWithBrand[]
@@ -66,6 +136,11 @@ async function processAnalysis(
       .where(eq(complianceGrades.collectionRunId, runId));
 
     const grader = getComplianceGrader();
+    const capturedDisclaimers = await loadCapturedDisclaimers(runId);
+    // Dedup: the same offer often appears on several pages (one offer per
+    // evidence × many finance/lease pages). Keep one row per distinct offer
+    // signature per site.
+    const seen = new Set<string>();
 
     for (const { evidence: row, brand } of rows) {
       const html = await getEvidenceText(row);
@@ -77,13 +152,39 @@ async function processAnalysis(
       });
 
       for (const offer of extracted) {
+        const signature = [
+          row.siteId,
+          offer.offerType,
+          offer.vehicleModel ?? "",
+          offer.monthlyPayment ?? "",
+          offer.apr ?? "",
+          offer.termMonths ?? "",
+          offer.cashIncentive ?? "",
+          offer.dueAtSigning ?? "",
+        ].join("|");
+        if (seen.has(signature)) continue;
+        seen.add(signature);
+
+        // Pair the captured disclaimer-modal text to this offer by payment.
+        const matched = matchCapturedDisclaimer(
+          offer,
+          row.siteId,
+          capturedDisclaimers
+        );
+        // Prefer the HTML-extracted ad disclaimer; backfill from the captured
+        // modal text when the HTML pass found none.
+        const disclaimerText = offer.disclaimerText ?? matched?.text ?? null;
+        // The payment-matched disclaimer names this exact offer's vehicle —
+        // authoritative over the page-level model guess.
+        const vehicleModel = matched?.model ?? offer.vehicleModel;
+
         await db.insert(offers).values({
           collectionRunId: runId,
           siteId: row.siteId,
           sourceEvidenceId: row.id,
           offerType: offer.offerType,
           vehicleMake: offer.vehicleMake,
-          vehicleModel: offer.vehicleModel,
+          vehicleModel,
           vehicleTrim: offer.vehicleTrim,
           monthlyPayment: offer.monthlyPayment,
           apr: offer.apr,
@@ -92,7 +193,7 @@ async function processAnalysis(
           dueAtSigning: offer.dueAtSigning,
           rawText: offer.rawText,
           normalizedJson: { matches: offer.matches },
-          disclaimerText: offer.disclaimerText,
+          disclaimerText,
           confidence: offer.confidence,
         });
 
@@ -100,7 +201,7 @@ async function processAnalysis(
         const result = await grader.grade({
           evidenceId: row.id,
           offerType: offer.offerType,
-          disclaimerText: offer.disclaimerText,
+          disclaimerText,
           adText: offer.rawText,
         });
         await db

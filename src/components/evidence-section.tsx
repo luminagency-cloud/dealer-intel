@@ -40,6 +40,7 @@ export function EvidenceSection({
           <thead>
             <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
               <th className="px-4 py-2 font-medium">Type</th>
+              <th className="px-4 py-2 font-medium">Detail</th>
               <th className="px-4 py-2 font-medium">Site</th>
               <th className="px-4 py-2 font-medium">Mission</th>
               <th className="px-4 py-2 font-medium">Captured</th>
@@ -51,6 +52,25 @@ export function EvidenceSection({
               <tr key={row.id}>
                 <td className="px-4 py-3 text-zinc-900">
                   {EVIDENCE_TYPE_LABELS[row.evidenceType]}
+                </td>
+                <td className="max-w-xs px-4 py-3 text-zinc-700">
+                  {row.label ? (
+                    <span className="block truncate" title={row.label}>
+                      {row.label}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-400">—</span>
+                  )}
+                  {row.textContent && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-xs text-zinc-400 hover:text-zinc-600">
+                        Disclaimer text
+                      </summary>
+                      <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600">
+                        {row.textContent}
+                      </p>
+                    </details>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-zinc-900">
                   {siteNames[row.siteId] ?? row.siteId.slice(0, 8)}

@@ -36,6 +36,11 @@ export interface ExtraShot {
   image: Buffer;
   /** Evidence type the shot should be stored as. */
   kind: "screenshot" | "disclaimer_screenshot";
+  /** Full text scraped from the source at capture time. For disclaimer shots
+   *  this is the modal's offer + disclaimer text — the real fine print, which
+   *  the compliance pass needs and which the static HTML snapshot often misses
+   *  (the modal is closed before the snapshot is taken). */
+  text?: string;
 }
 
 const MAX_DISCLAIMERS = 8;
@@ -47,8 +52,82 @@ const DISCLAIMER_BUTTON_SELECTORS = [
   'a:has-text("Disclaimer")',
 ];
 
+/** Ad-anchor from the disclaimer's ancestor card — works when the offer is
+ *  rendered as DOM text (vehicle/heading + price) near the trigger. Returns ""
+ *  for image-based promos, where the text is baked into the image (common on
+ *  dealer platforms); the modal reader below handles those. */
+async function ancestorAdAnchor(
+  page: Page,
+  selector: string,
+  index: number
+): Promise<string> {
+  try {
+    return await page.locator(selector).nth(index).evaluate((el) => {
+      const priceRe = /\$\s?[\d,]+(?:\.\d{2})?(?:\s?\/?\s?(?:mo|month|week|wk))?/i;
+      let node: HTMLElement = el as HTMLElement;
+      for (let depth = 0; depth < 8 && node.parentElement; depth++) {
+        const parent: HTMLElement = node.parentElement;
+        const text = parent.innerText || "";
+        if (priceRe.test(text) || parent.querySelector("h1,h2,h3,h4")) {
+          node = parent;
+          break;
+        }
+        node = parent;
+      }
+      const heading = node.querySelector("h1,h2,h3,h4,[class*='title' i]");
+      const headingText = (heading?.textContent || "").trim().replace(/\s+/g, " ");
+      const price = (node.innerText || "").match(priceRe)?.[0]?.trim() ?? "";
+      return [headingText, price].filter(Boolean).join(" — ").slice(0, 120);
+    });
+  } catch {
+    return "";
+  }
+}
+
+/** Reads the disclaimer modal that opened on click. Dealer promo widgets
+ *  render the offer (vehicle + price) and the disclaimer fine print together in
+ *  a dialog — e.g. "Lease a 2026 Jeep Grand Cherokee … $299/mo … DISCLAIMER
+ *  Disclaimer: Stk# … MSRP $48,035 …". Returns both:
+ *   - `anchor`: the offer portion (before the DISCLAIMER marker), the human
+ *      name + join key back to the offer for the compliance pass; and
+ *   - `text`: the full modal text (offer + disclaimer), the real fine print
+ *      compliance needs without OCR.
+ *  Best-effort: returns empty strings if no readable modal opened. */
+async function readDisclaimerModal(
+  page: Page
+): Promise<{ anchor: string; text: string }> {
+  try {
+    return await page.evaluate(() => {
+      const sel =
+        '[class*="modal" i],[role="dialog"],[class*="dialog" i],[class*="popup" i]';
+      const visible = [...document.querySelectorAll(sel)].filter(
+        (n) =>
+          (n as HTMLElement).offsetParent !== null &&
+          ((n as HTMLElement).innerText || "").trim().length > 20
+      ) as HTMLElement[];
+      if (visible.length === 0) return { anchor: "", text: "" };
+      visible.sort((a, b) => b.innerText.length - a.innerText.length);
+      const full = visible[0].innerText.replace(/\s+/g, " ").trim();
+      // Anchor = the offer portion: before the DISCLAIMER marker, CTA stripped.
+      let anchor = full;
+      const cut = anchor.search(/disclaimer/i);
+      if (cut > 0) anchor = anchor.slice(0, cut).trim();
+      anchor = anchor
+        .replace(
+          /\b(view\s+\d+\s+qualifying\s+vehicle|view vehicle details|view details|shop now|open in same tab).*$/i,
+          ""
+        )
+        .trim();
+      return { anchor: anchor.slice(0, 110), text: full.slice(0, 8000) };
+    });
+  } catch {
+    return { anchor: "", text: "" };
+  }
+}
+
 /** Opens offer disclaimer disclosures (AD-005: disclaimers are first-class
- *  evidence) and captures each as a disclaimer screenshot. */
+ *  evidence) and captures each as a disclaimer screenshot, labeled with the
+ *  ad it belongs to. */
 export async function captureDisclaimers(page: Page): Promise<ExtraShot[]> {
   const shots: ExtraShot[] = [];
   for (const selector of DISCLAIMER_BUTTON_SELECTORS) {
@@ -60,12 +139,20 @@ export async function captureDisclaimers(page: Page): Promise<ExtraShot[]> {
           const button = buttons.nth(i);
           if (!(await button.isVisible({ timeout: 100 }))) continue;
           await button.scrollIntoViewIfNeeded({ timeout: 500 });
+          // Inline offers carry text in the ancestor card; image promos don't —
+          // for those the offer text appears in the modal after the click.
+          const preAnchor = await ancestorAdAnchor(page, selector, i);
           await button.click({ timeout: 1_000 });
           await page.waitForTimeout(700);
+          const modal = await readDisclaimerModal(page);
+          const anchor = modal.anchor || preAnchor;
           shots.push({
-            label: `disclaimer-${shots.length + 1}`,
+            label: anchor
+              ? `Disclaimer — ${anchor}`
+              : `Disclaimer ${shots.length + 1}`,
             image: await page.screenshot({ type: "png" }),
             kind: "disclaimer_screenshot",
+            text: modal.text || undefined,
           });
           // Close whatever opened (modal or expanded panel).
           await page.keyboard.press("Escape").catch(() => {});
@@ -94,7 +181,7 @@ export async function exploreCarousels(page: Page): Promise<ExtraShot[]> {
         await next.click({ timeout: 1_000 });
         await page.waitForTimeout(900);
         shots.push({
-          label: `carousel-slide-${slide}`,
+          label: `Carousel slide ${slide}`,
           image: await page.screenshot({ type: "png" }),
           kind: "screenshot",
         });
@@ -122,7 +209,7 @@ export async function exploreTabs(page: Page): Promise<ExtraShot[]> {
           await tabs.nth(i).click({ timeout: 1_000 });
           await page.waitForTimeout(600);
           shots.push({
-            label: `tab-${i + 1}`,
+            label: `Tab ${i + 1}`,
             image: await page.screenshot({ type: "png" }),
             kind: "screenshot",
           });

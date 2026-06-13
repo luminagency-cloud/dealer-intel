@@ -1,0 +1,137 @@
+import {
+  MISSION_TYPE_LABELS,
+  OFFER_TYPE_LABELS,
+  type SnapshotOffer,
+} from "@/lib/db";
+
+function money(value: number | null): string {
+  return value === null ? "—" : `$${value.toLocaleString()}`;
+}
+
+function gradeStyle(grade: string): string {
+  const g = grade.toLowerCase();
+  if (g === "pass") return "bg-green-100 text-green-800";
+  if (g === "fail") return "bg-red-100 text-red-800";
+  return "bg-amber-100 text-amber-800";
+}
+
+function confidenceStyle(confidence: number | null): string {
+  if (confidence === null) return "text-zinc-400";
+  if (confidence >= 0.6) return "text-green-700";
+  if (confidence >= 0.4) return "text-amber-700";
+  return "text-red-700";
+}
+
+/** Renders a snapshot's FROZEN offers (Phase 10). Pure read of the
+ *  `snapshot_offers` copy — no live analysis tables, no computation. */
+export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
+  if (offers.length === 0) {
+    return (
+      <p className="px-4 py-6 text-sm text-zinc-500">
+        This snapshot contains no offers.
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead>
+          <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+            <th className="px-4 py-2 font-medium">Site</th>
+            <th className="px-4 py-2 font-medium">Source</th>
+            <th className="px-4 py-2 font-medium">Type</th>
+            <th className="px-4 py-2 font-medium">Vehicle</th>
+            <th className="px-4 py-2 font-medium">Payment</th>
+            <th className="px-4 py-2 font-medium">APR</th>
+            <th className="px-4 py-2 font-medium">Term</th>
+            <th className="px-4 py-2 font-medium">Due</th>
+            <th className="px-4 py-2 font-medium">Cash</th>
+            <th className="px-4 py-2 font-medium">Conf.</th>
+            <th className="px-4 py-2 font-medium">Compliance</th>
+            <th className="px-4 py-2 font-medium">Evidence</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100">
+          {offers.map((offer) => {
+            const vehicle = [
+              offer.vehicleMake,
+              offer.vehicleModel,
+              offer.vehicleTrim,
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              <tr key={offer.id}>
+                <td className="px-4 py-3 text-zinc-900">
+                  {offer.siteName}
+                  {offer.siteBrand && (
+                    <span className="block text-xs text-zinc-400">
+                      {offer.siteBrand}
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-xs text-zinc-500">
+                  {MISSION_TYPE_LABELS[offer.missionType]}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {OFFER_TYPE_LABELS[offer.offerType]}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">{vehicle || "—"}</td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {offer.monthlyPayment === null
+                    ? "—"
+                    : `${money(offer.monthlyPayment)}/mo`}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {offer.apr === null ? "—" : `${offer.apr}%`}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {offer.termMonths === null ? "—" : `${offer.termMonths} mo`}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {money(offer.dueAtSigning)}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {money(offer.cashIncentive)}
+                </td>
+                <td
+                  className={`px-4 py-3 font-medium ${confidenceStyle(offer.confidence)}`}
+                >
+                  {offer.confidence === null
+                    ? "—"
+                    : `${Math.round(offer.confidence * 100)}%`}
+                </td>
+                <td className="px-4 py-3">
+                  {offer.complianceGrade ? (
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${gradeStyle(offer.complianceGrade)}`}
+                    >
+                      {offer.complianceGrade}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-zinc-400">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {offer.sourceEvidenceId ? (
+                    <a
+                      href={`/api/evidence/${offer.sourceEvidenceId}/file`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      View
+                    </a>
+                  ) : (
+                    <span className="text-xs text-zinc-400">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}

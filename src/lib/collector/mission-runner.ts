@@ -39,6 +39,21 @@ import {
 
 const MAX_PAGES_PER_MISSION = 6;
 
+/** A readable name for a page capture: the page title plus the URL path it
+ *  came from (e.g. "Service Specials — /promotions/service/"). Falls back to
+ *  the host+path when there's no title. */
+function pageCaptureLabel(pageTitle: string, finalUrl: string): string {
+  let location = finalUrl;
+  try {
+    const u = new URL(finalUrl);
+    location = `${u.host}${u.pathname}`.replace(/\/$/, "") || u.host;
+  } catch {
+    // Non-URL string — use as-is.
+  }
+  const title = pageTitle.trim().replace(/\s+/g, " ");
+  return (title ? `${title} — ${location}` : location).slice(0, 160);
+}
+
 export interface MissionRunResult {
   missionId: string;
   siteId: string;
@@ -194,18 +209,23 @@ export async function runMissionInSession(
         capture = await session.capturePage(url, explore);
         captureCache.set(cacheKey, capture);
       }
+      // Page-capture label: the page's own title plus the path it came from,
+      // so the full-page screenshot and HTML aren't just "Screenshot · Site".
+      const pageLabel = pageCaptureLabel(capture.pageTitle, capture.finalUrl);
       evidence.push(
         await uploadEvidence({
           ...base,
           evidenceType: "screenshot",
           fileName: "screenshot.png",
           body: capture.screenshot,
+          label: pageLabel,
         }),
         await uploadEvidence({
           ...base,
           evidenceType: "html_snapshot",
           fileName: "snapshot.html",
           body: Buffer.from(capture.html, "utf-8"),
+          label: pageLabel,
         })
       );
       for (const shot of capture.extraShots) {
@@ -215,6 +235,8 @@ export async function runMissionInSession(
             evidenceType: shot.kind,
             fileName: `${shot.label}.png`,
             body: shot.image,
+            label: shot.label,
+            textContent: shot.text,
           })
         );
       }
@@ -229,6 +251,7 @@ export async function runMissionInSession(
               evidenceType: "failure_screenshot",
               fileName: "failure.png",
               body: err.failureScreenshot,
+              label: `Failed: ${url}`,
             })
           );
         } catch {

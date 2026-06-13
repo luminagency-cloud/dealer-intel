@@ -17,8 +17,14 @@ import {
 /** Auto-publish gate (Phase 8): a finished run advances straight to
  *  published when at least this share of its in-scope sites collected
  *  something. Below it the run waits in review for the operator; the manual
- *  Publish / Mark Failed controls on the run page always override. */
-const AUTO_PUBLISH_MIN_SITE_SUCCESS = 0.8;
+ *  Publish / Mark Failed controls on the run page always override.
+ *  Env-overridable (`AUTO_PUBLISH_MIN_SITE_SUCCESS`); set it above 1 to disable
+ *  auto-publish entirely so every run lands in review — useful for a full
+ *  fan-out where the operator wants to triage all per-mission failures (the
+ *  review queue hides published runs). */
+const AUTO_PUBLISH_MIN_SITE_SUCCESS = Number(
+  process.env.AUTO_PUBLISH_MIN_SITE_SUCCESS ?? 0.8
+);
 
 /**
  * Background run execution. Server actions enqueue work here and return
