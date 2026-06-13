@@ -18,7 +18,7 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
 | 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
 | 10 | Done | Snapshot Publishing — the wall between analysis and reporting. Publishing a run **freezes** its current offers + compliance grades into `report_snapshots` + `snapshot_offers` (denormalized, immutable). Re-running analysis or re-collecting never changes a published snapshot. Snapshots list at `/snapshots`; "Publish Snapshot" on the run page. |
-| 11 | Not started | Reporting Engine — pure reads from published snapshots, links to R2 images. |
+| 11 | Built (live check pending) | Reporting Engine — pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. tsc/lint clean; browser verification deferred (operator's overnight fan-out was holding :3000 / `.next`). Trend deltas (per-metric change vs prior snapshot) deliberately deferred to a v2. |
 | 12 | Not started | AI-Assisted Analysis — improves edge-case classification and normalization. |
 
 ## Architecture: three-phase pipeline (decided June 2026)
@@ -201,6 +201,17 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   review-state run to published). Deleting a snapshot removes only its frozen
   rows (it owns no R2 objects — it links back to the run's evidence); deleting
   the run cascades its snapshots.
+- `src/app/(admin)/reports/` — Phase 11 Reporting Engine. Pure reads of frozen
+  snapshot data (no collection/analysis/site access, no AI). `/reports` lists
+  published snapshots as reports; `/reports/[id]` is the competitive report for
+  one snapshot — offers grouped by vehicle with the primary dealer(s)
+  highlighted (primaries read live from `run_group_members`, a reporting input
+  per AD-002) and the lowest monthly payment per vehicle flagged, a compliance
+  roll-up, and the group's snapshot history for over-time comparison.
+  `/reports/[id]/export` streams the frozen offers as CSV. Every offer row links
+  to its R2 evidence via `/api/evidence/[sourceEvidenceId]/file`. Repository
+  helpers: `listSnapshotsForGroup`, `getPrimarySiteIds`. v2 idea: per-metric
+  trend deltas vs the prior snapshot (payment up/down by site+vehicle).
 - `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`

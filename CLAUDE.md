@@ -6,9 +6,11 @@ Docs\Implementation Notes.md — it records what is built (Phases 1-10 complete)
 where the key modules live, and the operational model.
 
 Status snapshot (v0.7.x, June 2026):
-- Phases 1-10 built; 1-7 verified end-to-end against live dealer sites. Phase 10
+- Phases 1-11 built; 1-7 verified end-to-end against live dealer sites. Phase 10
   (snapshot publishing) verified end-to-end in the running app, including the
   immutability guarantee (re-analysis leaves a published snapshot untouched).
+  Phase 11 (reporting) is code-complete + tsc/lint clean but NOT yet verified in
+  the browser (see below).
 - Phases 8-10 + analysis shaken out at scale on a real group run (Toyota of
   Dartmouth, 4 platforms: apollo/ddc/dealer_inspire/dealer_alchemist): 15/15
   missions collected, auto-published at 100%, analysis ran across all four. The
@@ -50,6 +52,14 @@ Snapshots are immutable — re-running analysis/collection never changes a
 published one (the analysis runner only touches the live offers/grades tables).
 Reporting (Phase 11) reads ONLY snapshots. List/detail at /snapshots.
 
-Next up: live shakeout of Phases 8-9, then Phase 11 (Reporting Engine — pure
-reads from snapshot_offers, links to R2 evidence). Phase 12 adds AI-assisted
-analysis for the edge cases.
+Phase 11 reporting (src/app/(admin)/reports): pure reads of frozen snapshots —
+no collection/analysis/site access, no AI. Competitive report per snapshot at
+/reports/[id] (offers grouped by vehicle, primary dealer highlighted, lowest
+payment flagged, compliance roll-up, group snapshot history), CSV export, R2
+evidence links. BUILT + tsc/lint clean; live browser verification pending (the
+operator's overnight fan-out was holding :3000 / the .next build — must verify
+in-app before calling it done, and re-confirm the production build).
+
+Next up: live-verify Phase 11 once the environment frees up, then Phase 12
+(AI-assisted analysis for low-confidence offer/vehicle/disclaimer cases — the
+multi-offer-per-page mis-picks found in the shakeout are a prime target).

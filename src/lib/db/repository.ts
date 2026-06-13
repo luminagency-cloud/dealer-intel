@@ -340,3 +340,33 @@ export async function deleteReportSnapshot(id: string): Promise<void> {
   // to the run's evidence, which the run delete cleans up).
   await getDb().delete(reportSnapshots).where(eq(reportSnapshots.id, id));
 }
+
+/** Snapshots cut from a run group, newest first — the group's report history
+ *  for trend/historical comparison (Phase 11). */
+export async function listSnapshotsForGroup(
+  runGroupId: string
+): Promise<ReportSnapshot[]> {
+  return getDb()
+    .select()
+    .from(reportSnapshots)
+    .where(eq(reportSnapshots.runGroupId, runGroupId))
+    .orderBy(desc(reportSnapshots.approvedAt));
+}
+
+/** Site ids flagged primary in a run group — reporting anchors competitive
+ *  comparisons on the primary dealer(s). Read live: group membership is a
+ *  Phase 11 reporting input (AD-002), distinct from the frozen offer data. */
+export async function getPrimarySiteIds(
+  runGroupId: string
+): Promise<Set<string>> {
+  const rows = await getDb()
+    .select({ siteId: runGroupMembers.siteId })
+    .from(runGroupMembers)
+    .where(
+      and(
+        eq(runGroupMembers.runGroupId, runGroupId),
+        eq(runGroupMembers.isPrimary, true)
+      )
+    );
+  return new Set(rows.map((r) => r.siteId));
+}
