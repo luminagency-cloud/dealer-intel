@@ -8,8 +8,12 @@ import {
   type Evidence,
 } from "@/lib/db";
 import { getEvidenceText } from "@/lib/evidence";
-import { extractOffers, findKnownModel } from "./extract";
+import { extractOffers, findKnownModel, htmlToText } from "./extract";
 import { getComplianceGrader } from "./compliance";
+import {
+  aiConfidenceThreshold,
+  getOfferEnricher,
+} from "./ai-enrich";
 
 /**
  * Phase 9 analysis runner. Independent, re-runnable passes over a run's stored
@@ -136,6 +140,8 @@ async function processAnalysis(
       .where(eq(complianceGrades.collectionRunId, runId));
 
     const grader = getComplianceGrader();
+    const enricher = getOfferEnricher();
+    const aiThreshold = aiConfidenceThreshold();
     const capturedDisclaimers = await loadCapturedDisclaimers(runId);
     // Dedup: the same offer often appears on several pages (one offer per
     // evidence × many finance/lease pages). Keep one row per distinct offer
@@ -150,6 +156,8 @@ async function processAnalysis(
         missionType: row.missionType,
         brand,
       });
+      // Flattened page text reused by the AI pass for any low-confidence offers.
+      const pageText = htmlToText(html);
 
       for (const offer of extracted) {
         const signature = [
@@ -165,44 +173,62 @@ async function processAnalysis(
         if (seen.has(signature)) continue;
         seen.add(signature);
 
+        // Phase 12: route only LOW-confidence offers to the AI pass (the hard
+        // cases). It's a no-op without an API key, so this stays free by
+        // default. AI corrections override the rule-based fields; the rule
+        // result stands when the pass is off or fails.
+        let effective = offer;
+        let aiAssisted = false;
+        if (offer.confidence < aiThreshold) {
+          const enrichment = await enricher.enrich({
+            pageText,
+            brand,
+            current: offer,
+          });
+          if (enrichment) {
+            effective = { ...offer, ...enrichment };
+            aiAssisted = true;
+          }
+        }
+
         // Pair the captured disclaimer-modal text to this offer by payment.
         const matched = matchCapturedDisclaimer(
-          offer,
+          effective,
           row.siteId,
           capturedDisclaimers
         );
-        // Prefer the HTML-extracted ad disclaimer; backfill from the captured
-        // modal text when the HTML pass found none.
-        const disclaimerText = offer.disclaimerText ?? matched?.text ?? null;
+        // Prefer an extracted ad disclaimer (rule or AI); backfill from the
+        // captured modal text when neither found one.
+        const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
         // The payment-matched disclaimer names this exact offer's vehicle —
-        // authoritative over the page-level model guess.
-        const vehicleModel = matched?.model ?? offer.vehicleModel;
+        // authoritative even over the AI guess (it's the literal ad fine print).
+        const vehicleModel = matched?.model ?? effective.vehicleModel;
 
         await db.insert(offers).values({
           collectionRunId: runId,
           siteId: row.siteId,
           sourceEvidenceId: row.id,
-          offerType: offer.offerType,
-          vehicleMake: offer.vehicleMake,
+          offerType: effective.offerType,
+          vehicleMake: effective.vehicleMake,
           vehicleModel,
-          vehicleTrim: offer.vehicleTrim,
-          monthlyPayment: offer.monthlyPayment,
-          apr: offer.apr,
-          cashIncentive: offer.cashIncentive,
-          termMonths: offer.termMonths,
-          dueAtSigning: offer.dueAtSigning,
-          rawText: offer.rawText,
-          normalizedJson: { matches: offer.matches },
+          vehicleTrim: effective.vehicleTrim,
+          monthlyPayment: effective.monthlyPayment,
+          apr: effective.apr,
+          cashIncentive: effective.cashIncentive,
+          termMonths: effective.termMonths,
+          dueAtSigning: effective.dueAtSigning,
+          rawText: effective.rawText,
+          normalizedJson: { matches: offer.matches, aiAssisted },
           disclaimerText,
-          confidence: offer.confidence,
+          confidence: effective.confidence,
         });
 
         // Compliance pass: grade the ad through the external service (stubbed).
         const result = await grader.grade({
           evidenceId: row.id,
-          offerType: offer.offerType,
+          offerType: effective.offerType,
           disclaimerText,
-          adText: offer.rawText,
+          adText: effective.rawText,
         });
         await db
           .insert(complianceGrades)

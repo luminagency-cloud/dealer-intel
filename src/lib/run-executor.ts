@@ -95,86 +95,176 @@ async function seedResults(runId: string, items: WorkItem[]): Promise<void> {
   }
 }
 
-async function processQueue(runId: string, items: WorkItem[]): Promise<void> {
+/** Collects a batch of work items, one browser visit per site (Phase 8).
+ *  Pure processing — does not manage the activeRuns guard or finalize. */
+async function processSites(runId: string, items: WorkItem[]): Promise<void> {
   const db = getDb();
-  try {
-    // Phase 8: one browser visit per site. Group the run's work by site and
-    // let collectSite handle the single session + fresh-session retry.
-    const bySite = new Map<string, WorkItem[]>();
-    for (const item of items) {
-      const list = bySite.get(item.site.id) ?? [];
-      list.push(item);
-      bySite.set(item.site.id, list);
-    }
+  const bySite = new Map<string, WorkItem[]>();
+  for (const item of items) {
+    const list = bySite.get(item.site.id) ?? [];
+    list.push(item);
+    bySite.set(item.site.id, list);
+  }
 
-    for (const siteItems of bySite.values()) {
-      const site = siteItems[0].site;
-      const missionIds = siteItems.map((i) => i.mission.id);
+  for (const siteItems of bySite.values()) {
+    const site = siteItems[0].site;
+    const missionIds = siteItems.map((i) => i.mission.id);
 
-      // The whole site goes "running" for the duration of its single visit.
+    // The whole site goes "running" for the duration of its single visit.
+    await db
+      .update(missionResults)
+      .set({ status: "running", startedAt: new Date() })
+      .where(
+        and(
+          eq(missionResults.collectionRunId, runId),
+          eq(missionResults.siteId, site.id),
+          inArray(missionResults.missionId, missionIds)
+        )
+      );
+
+    const works: SiteMissionWork[] = siteItems.map((i) => ({
+      mission: i.mission,
+      siteMission: i.siteMission,
+    }));
+
+    try {
+      const { anySuccess } = await collectSite(
+        { collectionRunId: runId, site, works },
+        async (missionId, result) => {
+          await db
+            .update(missionResults)
+            .set({
+              status: outcomeStatus(result),
+              pagesCaptured: result.pagesCaptured,
+              successfulUrl: result.successfulUrl ?? null,
+              error: result.error ?? null,
+              completedAt: new Date(),
+            })
+            .where(resultFilter(runId, { siteId: site.id, missionId }));
+        }
+      );
+      if (anySuccess) {
+        await db
+          .update(sites)
+          .set({ lastCollectedAt: new Date() })
+          .where(eq(sites.id, site.id));
+      }
+    } catch (err) {
+      // collectSite absorbs browser failures itself; this guards
+      // infrastructure errors (R2/database) so the queue keeps moving —
+      // settle whatever rows are still in flight for this site.
       await db
         .update(missionResults)
-        .set({ status: "running", startedAt: new Date() })
+        .set({
+          status: "failure",
+          error: err instanceof Error ? err.message : String(err),
+          completedAt: new Date(),
+        })
         .where(
           and(
             eq(missionResults.collectionRunId, runId),
             eq(missionResults.siteId, site.id),
-            inArray(missionResults.missionId, missionIds)
+            inArray(missionResults.missionId, missionIds),
+            inArray(missionResults.status, ["pending", "running"])
           )
         );
+    }
+  }
+}
 
-      const works: SiteMissionWork[] = siteItems.map((i) => ({
-        mission: i.mission,
-        siteMission: i.siteMission,
-      }));
+async function processQueue(runId: string, items: WorkItem[]): Promise<void> {
+  try {
+    await processSites(runId, items);
+    await finalizeRunIfDone(runId);
+  } finally {
+    activeRuns.delete(runId);
+    await rescuePending(runId);
+  }
+}
 
-      try {
-        const { anySuccess } = await collectSite(
-          { collectionRunId: runId, site, works },
-          async (missionId, result) => {
-            await db
-              .update(missionResults)
-              .set({
-                status: outcomeStatus(result),
-                pagesCaptured: result.pagesCaptured,
-                successfulUrl: result.successfulUrl ?? null,
-                error: result.error ?? null,
-                completedAt: new Date(),
-              })
-              .where(resultFilter(runId, { siteId: site.id, missionId }));
-          }
+/** Count of work still queued/in-flight for a run. */
+async function countActiveResults(runId: string): Promise<number> {
+  const rows = await getDb()
+    .select({ id: missionResults.id })
+    .from(missionResults)
+    .where(
+      and(
+        eq(missionResults.collectionRunId, runId),
+        inArray(missionResults.status, ["pending", "running"])
+      )
+    );
+  return rows.length;
+}
+
+/** After an executor exits, pick up any retries that were queued right as it
+ *  was finishing (closes the click-at-shutdown race). */
+async function rescuePending(runId: string): Promise<void> {
+  if (activeRuns.has(runId)) return;
+  if ((await countActiveResults(runId)) > 0) ensureDrainer(runId);
+}
+
+/** Starts the per-run retry drainer if one isn't already running. Multiple
+ *  retries clicked while it runs just get picked up on its next pass. */
+function ensureDrainer(runId: string): void {
+  if (activeRuns.has(runId)) return;
+  activeRuns.add(runId);
+  void drainRun(runId).catch((err) => {
+    console.error(`retry drainer for run ${runId} crashed:`, err);
+    activeRuns.delete(runId);
+  });
+}
+
+/** Drains all `pending` (queued) mission results for a run, re-querying each
+ *  pass so retries queued while it runs are processed in the same drain. */
+async function drainRun(runId: string): Promise<void> {
+  const db = getDb();
+  try {
+    const [run] = await db
+      .select()
+      .from(collectionRuns)
+      .where(eq(collectionRuns.id, runId));
+    if (!run) return;
+    // Surface progress on the run page; finalize re-settles at the end. Leave
+    // an already-published run alone.
+    if (run.status === "pending" || run.status === "review" || run.status === "failed") {
+      await db
+        .update(collectionRuns)
+        .set({ status: "running", startedAt: run.startedAt ?? new Date() })
+        .where(eq(collectionRuns.id, runId));
+    }
+
+    const scope = await listWorkItemsForRun(run);
+    const byKey = new Map(scope.map((i) => [`${i.site.id}:${i.mission.id}`, i]));
+
+    while (true) {
+      const pendings = await db
+        .select({
+          siteId: missionResults.siteId,
+          missionId: missionResults.missionId,
+        })
+        .from(missionResults)
+        .where(
+          and(
+            eq(missionResults.collectionRunId, runId),
+            eq(missionResults.status, "pending")
+          )
         );
-        if (anySuccess) {
-          await db
-            .update(sites)
-            .set({ lastCollectedAt: new Date() })
-            .where(eq(sites.id, site.id));
-        }
-      } catch (err) {
-        // collectSite absorbs browser failures itself; this guards
-        // infrastructure errors (R2/database) so the queue keeps moving —
-        // settle whatever rows are still in flight for this site.
-        await db
-          .update(missionResults)
-          .set({
-            status: "failure",
-            error: err instanceof Error ? err.message : String(err),
-            completedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(missionResults.collectionRunId, runId),
-              eq(missionResults.siteId, site.id),
-              inArray(missionResults.missionId, missionIds),
-              inArray(missionResults.status, ["pending", "running"])
-            )
-          );
-      }
+      if (pendings.length === 0) break;
+
+      const items = pendings
+        .map((p) => byKey.get(`${p.siteId}:${p.missionId}`))
+        .filter((i): i is WorkItem => Boolean(i));
+      // Pending rows no longer in scope (mission/site disabled) can't be built
+      // — stop rather than spin forever; they keep their pending status.
+      if (items.length === 0) break;
+
+      await processSites(runId, items);
     }
 
     await finalizeRunIfDone(runId);
   } finally {
     activeRuns.delete(runId);
+    await rescuePending(runId);
   }
 }
 
@@ -279,7 +369,10 @@ export async function startRunExecution(
   }
 }
 
-/** Re-queues an existing result (review workflow's Retry). */
+/** Re-queues an existing result (review workflow's Retry). Enqueues rather than
+ *  collecting synchronously: the row goes back to `pending` (queued) and the
+ *  per-run drainer picks it up. Click Retry on many sites and they all queue —
+ *  retries landing while the drainer runs are caught on its next pass. */
 export async function retryMissionResult(resultId: string): Promise<void> {
   const db = getDb();
   const [row] = await db
@@ -294,9 +387,42 @@ export async function retryMissionResult(resultId: string): Promise<void> {
   ) {
     throw new Error(`Cannot retry a ${row.status} result`);
   }
-  await startRunExecution(row.collectionRunId, [
-    { siteId: row.siteId, missionId: row.missionId },
-  ]);
+  await db
+    .update(missionResults)
+    .set({
+      status: "pending",
+      pagesCaptured: 0,
+      successfulUrl: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+    })
+    .where(eq(missionResults.id, resultId));
+  ensureDrainer(row.collectionRunId);
+}
+
+/** Resume a stalled run: re-queue rows left `pending`/`running` by an
+ *  interrupted executor (e.g. a server restart mid-run) and kick the drainer.
+ *  No-op while the run is genuinely executing — it only rescues orphans. */
+export async function requeueStalledRun(runId: string): Promise<void> {
+  if (activeRuns.has(runId)) return;
+  await getDb()
+    .update(missionResults)
+    .set({
+      status: "pending",
+      pagesCaptured: 0,
+      successfulUrl: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+    })
+    .where(
+      and(
+        eq(missionResults.collectionRunId, runId),
+        inArray(missionResults.status, ["pending", "running"])
+      )
+    );
+  ensureDrainer(runId);
 }
 
 /** Operator resolution: the content genuinely is not on the site. */

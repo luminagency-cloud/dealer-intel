@@ -270,7 +270,7 @@ export type MissionResultStatus =
 
 export const MISSION_RESULT_STATUS_LABELS: Record<MissionResultStatus, string> =
   {
-    pending: "Pending",
+    pending: "Queued",
     running: "Running",
     success: "Success",
     needs_review: "Needs Review",

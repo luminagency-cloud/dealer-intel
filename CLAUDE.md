@@ -6,11 +6,13 @@ Docs\Implementation Notes.md — it records what is built (Phases 1-10 complete)
 where the key modules live, and the operational model.
 
 Status snapshot (v0.7.x, June 2026):
-- Phases 1-11 built; 1-7 verified end-to-end against live dealer sites. Phase 10
+- Phases 1-12 built; 1-7 verified end-to-end against live dealer sites. Phase 10
   (snapshot publishing) verified end-to-end in the running app, including the
   immutability guarantee (re-analysis leaves a published snapshot untouched).
   Phase 11 (reporting) is code-complete + tsc/lint clean but NOT yet verified in
-  the browser (see below).
+  the browser (see below). Phase 12 (AI analysis) is built behind an API-key
+  gate (no-op without a key) + tsc/lint clean; needs a live ANTHROPIC_API_KEY to
+  verify model output.
 - Phases 8-10 + analysis shaken out at scale on a real group run (Toyota of
   Dartmouth, 4 platforms: apollo/ddc/dealer_inspire/dealer_alchemist): 15/15
   missions collected, auto-published at 100%, analysis ran across all four. The
@@ -60,6 +62,14 @@ evidence links. BUILT + tsc/lint clean; live browser verification pending (the
 operator's overnight fan-out was holding :3000 / the .next build — must verify
 in-app before calling it done, and re-confirm the production build).
 
-Next up: live-verify Phase 11 once the environment frees up, then Phase 12
-(AI-assisted analysis for low-confidence offer/vehicle/disclaimer cases — the
-multi-offer-per-page mis-picks found in the shakeout are a prime target).
+Phase 12 AI analysis (src/lib/analysis/ai-enrich.ts): secondary, confidence-
+routed pass. Low-confidence rule-based offers (< ANALYSIS_AI_CONFIDENCE_THRESHOLD,
+default 0.5) are re-extracted by Claude via structured output; rule-based handles
+the routine majority. Gated on ANTHROPIC_API_KEY (no-op without it). Model via
+ANALYSIS_AI_MODEL (default claude-opus-4-8). AI-corrected offers get an "AI"
+badge. Carries the hard disclaimer rule into the prompt.
+
+Next up: (1) live-verify Phase 11 reporting in-browser once the env frees up and
+re-confirm the prod build; (2) add ANTHROPIC_API_KEY and live-verify Phase 12 on
+real low-confidence offers; (3) consider Phase 11 v2 trend deltas. All 12 roadmap
+phases are now built.

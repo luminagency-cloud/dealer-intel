@@ -160,6 +160,15 @@ export function AnalysisSection({
                       {offer.confidence === null
                         ? "—"
                         : `${Math.round(offer.confidence * 100)}%`}
+                      {(offer.normalizedJson as { aiAssisted?: boolean } | null)
+                        ?.aiAssisted && (
+                        <span
+                          className="ml-1 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
+                          title="Corrected by the AI analysis pass (Phase 12)"
+                        >
+                          AI
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {grade ? (

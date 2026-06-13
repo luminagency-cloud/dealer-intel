@@ -14,17 +14,22 @@ export function MissionRunPanel({
   items,
   results,
   executing,
+  stalled,
   executeItemAction,
   executeAllAction,
   retryAction,
+  resumeAction,
   error,
 }: {
   items: PanelWorkItem[];
   results: Map<string, MissionResult>;
   executing: boolean;
+  /** Pending/running rows with no live executor — interrupted run, recoverable. */
+  stalled?: boolean;
   executeItemAction: (siteId: string, missionId: string) => Promise<void>;
   executeAllAction: () => Promise<void>;
   retryAction: (resultId: string) => Promise<void>;
+  resumeAction?: () => Promise<void>;
   error?: string;
 }) {
   const all = [...results.values()];
@@ -50,18 +55,46 @@ export function MissionRunPanel({
             in flight. Roughly a minute per page.
           </p>
         </div>
-        {items.length > 0 && (
-          <form action={executeAllAction}>
+        {items.length > 0 &&
+          (executing ? (
             <button
-              type="submit"
-              disabled={executing}
-              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled
+              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {executing ? "Collecting…" : "Start Run"}
+              Collecting…
             </button>
-          </form>
-        )}
+          ) : stalled && resumeAction ? (
+            // A stalled run must Resume (re-queue only the orphaned rows), not
+            // Start Run — Start Run would re-seed the whole scope and re-collect
+            // the sites that already succeeded.
+            <form action={resumeAction}>
+              <button
+                type="submit"
+                className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700"
+              >
+                Resume
+              </button>
+            </form>
+          ) : (
+            <form action={executeAllAction}>
+              <button
+                type="submit"
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
+              >
+                Start Run
+              </button>
+            </form>
+          ))}
       </div>
+
+      {stalled && (
+        <p className="mx-4 mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          This run was interrupted — items left mid-collection are stalled with
+          no active collector. Click <span className="font-medium">Resume</span>{" "}
+          to re-queue and finish them.
+        </p>
+      )}
 
       {error && (
         <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -119,12 +152,17 @@ export function MissionRunPanel({
                     {result?.error ?? result?.successfulUrl ?? "—"}
                   </td>
                   <td className="px-4 py-3">
-                    {retryable ? (
+                    {busy ? (
+                      // Queued or in-flight — no action; it'll settle on its own.
+                      <span className="text-xs text-zinc-400">—</span>
+                    ) : retryable ? (
+                      // Enabled even mid-run: Retry queues the item (the drainer
+                      // picks it up), so you can re-collect failures without
+                      // waiting for the run to finish.
                       <form action={retryAction.bind(null, result.id)}>
                         <button
                           type="submit"
-                          disabled={executing}
-                          className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                          className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
                         >
                           Retry
                         </button>
@@ -139,7 +177,7 @@ export function MissionRunPanel({
                       >
                         <button
                           type="submit"
-                          disabled={executing || busy}
+                          disabled={executing}
                           className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
                         >
                           Collect

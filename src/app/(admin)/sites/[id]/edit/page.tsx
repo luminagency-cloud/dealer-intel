@@ -8,6 +8,7 @@ import {
   sites,
 } from "@/lib/db";
 import { SiteForm } from "@/components/site-form";
+import { missionTargetsHomepage } from "@/lib/collector/mission-knowledge";
 import { saveSiteMission, updateSite } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -48,9 +49,10 @@ export default async function EditSitePage({
             Collection URLs per Mission
           </h2>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Where on this dealer&apos;s site each mission collects. Leave the
-            URL blank and the collector will discover one and remember it.
-            Every listed URL is captured on each run.
+            Where on this dealer&apos;s site each mission collects. Homepage
+            missions fall back to the site URL when blank — only set one to point
+            at a different page. Other missions discover and remember a URL when
+            blank. Every listed URL is captured on each run.
           </p>
         </div>
         <div className="divide-y divide-zinc-100">
@@ -85,7 +87,11 @@ export default async function EditSitePage({
                     type="url"
                     name="lastKnownUrl"
                     defaultValue={config?.lastKnownUrl ?? ""}
-                    placeholder="Primary URL (blank = discover)"
+                    placeholder={
+                      missionTargetsHomepage(mission.missionType)
+                        ? `Blank → uses site URL (${site.url})`
+                        : "Blank → discover from site URL"
+                    }
                     className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
                   />
                   <textarea

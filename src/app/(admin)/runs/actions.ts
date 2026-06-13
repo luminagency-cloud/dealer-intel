@@ -10,6 +10,7 @@ import {
 import { removeEvidence, uploadEvidence } from "@/lib/evidence";
 import {
   markContentRemoved,
+  requeueStalledRun,
   retryMissionResult,
   startRunExecution,
 } from "@/lib/run-executor";
@@ -257,6 +258,14 @@ export async function retryResult(path: string, resultId: string) {
   await retryMissionResult(resultId);
   revalidatePath(path);
   redirect(path);
+}
+
+/** Resume a run whose in-flight rows were orphaned by an interrupted executor. */
+export async function resumeRun(runId: string) {
+  await requireSession();
+  await requeueStalledRun(runId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(`/runs/${runId}`);
 }
 
 export async function resolveContentRemoved(path: string, resultId: string) {

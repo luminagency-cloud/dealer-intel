@@ -11,6 +11,7 @@ import {
   type MissionResultStatus,
 } from "@/lib/db";
 import { MissionStatusBadge } from "@/components/mission-status-badge";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { resolveContentRemoved, retryResult } from "../runs/actions";
 
 export const dynamic = "force-dynamic";
@@ -53,8 +54,34 @@ export default async function ReviewPage() {
     ])
   ) as Record<MissionResultStatus, number>;
 
+  // Queued/running retries on open runs — drives the "still working" banner and
+  // live refresh. Retried items leave the queue above (they go back to pending)
+  // and reappear here only if they fail again.
+  const inProgress = await getDb()
+    .select({ id: missionResults.id })
+    .from(missionResults)
+    .innerJoin(
+      collectionRuns,
+      eq(missionResults.collectionRunId, collectionRuns.id)
+    )
+    .where(
+      and(
+        inArray(missionResults.status, ["pending", "running"]),
+        ne(collectionRuns.status, "published")
+      )
+    );
+  const inProgressCount = inProgress.length;
+
   return (
     <div>
+      <AutoRefresh active={inProgressCount > 0} />
+      {inProgressCount > 0 && (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+          Re-collecting {inProgressCount} queued item
+          {inProgressCount === 1 ? "" : "s"}… this page refreshes as they finish.
+        </div>
+      )}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900">Review Queue</h1>
         <div className="flex items-center gap-3 text-sm text-zinc-600">

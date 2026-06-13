@@ -19,7 +19,7 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
 | 10 | Done | Snapshot Publishing — the wall between analysis and reporting. Publishing a run **freezes** its current offers + compliance grades into `report_snapshots` + `snapshot_offers` (denormalized, immutable). Re-running analysis or re-collecting never changes a published snapshot. Snapshots list at `/snapshots`; "Publish Snapshot" on the run page. |
 | 11 | Built (live check pending) | Reporting Engine — pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. tsc/lint clean; browser verification deferred (operator's overnight fan-out was holding :3000 / `.next`). Trend deltas (per-metric change vs prior snapshot) deliberately deferred to a v2. |
-| 12 | Not started | AI-Assisted Analysis — improves edge-case classification and normalization. |
+| 12 | Built (gated, live check pending) | AI-Assisted Analysis. Secondary, confidence-routed pass (`src/lib/analysis/ai-enrich.ts`): low-confidence rule-based offers are re-extracted by Claude via structured output; rule-based still handles the routine majority. Behind an `OfferEnricher` interface gated on `ANTHROPIC_API_KEY` (no-op without a key, like the compliance stub), so the platform builds/runs unchanged. tsc/lint clean; live model verification pending an API key. |
 
 ## Architecture: three-phase pipeline (decided June 2026)
 
@@ -117,6 +117,12 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   session, then one fresh-session retry of any mission that captured zero
   pages (the "second swing" for a crashed/blocked/memory-starved browser).
   `runMission` remains as a one-session wrapper for the ad-hoc collect path.
+  URL FALLBACK: `configuredUrls` falls a homepage mission (homepage_offers /
+  promotional_banners) back to `sites.url` when its URL is blank — these never
+  hit discovery. Only finance/service missions discover (platform paths → nav
+  keywords) when blank. The site edit page makes this explicit: the homepage
+  mission URL field is an OPTIONAL override (placeholder "Blank → uses site
+  URL"), not a required field.
 - `src/lib/deep-delete.ts` — R2-aware cascade deletes (see Deletes above).
 - `src/lib/run-executor.ts` — background execution. Server actions enqueue
   and return; a non-awaited queue groups the run's work items by site and
@@ -133,6 +139,29 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   always override. Guarded against double-starts via a module-level set on globalThis
   (survives dev HMR; not a server restart — an interrupted run's
   pending/running rows sit until retried).
+  RETRY QUEUE (v0.7.7): `retryMissionResult` no longer collects synchronously
+  (the old path dropped a second retry while one was running). It sets the row
+  back to `pending` (queued) and calls `ensureDrainer(runId)`, which starts a
+  per-run drainer (`drainRun`) that re-queries pending rows each pass and
+  processes them via the shared `processSites` helper — so clicking Retry on
+  6–10 sites queues them all and they drain in one pass. One drainer per run
+  (the `activeRuns` guard); a `rescuePending` re-check in both `processQueue` and
+  `drainRun` finallys closes the click-at-shutdown race. The `/review` page shows
+  a "Re-collecting N queued items…" banner with auto-refresh while any
+  pending/running rows exist on open runs; retried items leave the queue (they go
+  pending) and reappear only if they fail again.
+  STALLED-RUN RECOVERY (v0.7.8): the run page now bases "executing" on
+  `isRunExecuting` (the in-memory truth) ONLY — not on the presence of
+  pending/running rows. Rows left pending/running by an interrupted executor
+  (server restart mid-run) are "stalled", not "executing", so they no longer
+  freeze the whole UI behind disabled buttons. The run page detects this and the
+  mission panel shows a **Resume** button (`resumeRun` → `requeueStalledRun`,
+  which re-queues only the orphaned rows and drains them — never re-seeds the
+  whole scope like Start Run would). Panel button fixes: queued/running rows show
+  no action button (just "—"); Retry is enabled even mid-run (it queues);
+  `mission_result.pending` is now labeled "Queued". The old stale-row-driven
+  `executing` made interrupted runs permanently un-actionable — that deadlock is
+  the bug this fixes.
 - `src/lib/freshness.ts` — 7-day freshness window over
   `sites.last_collected_at` (fresh / stale / never); rendered by
   `components/freshness-badge.tsx` on the sites list.
@@ -212,6 +241,21 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   to its R2 evidence via `/api/evidence/[sourceEvidenceId]/file`. Repository
   helpers: `listSnapshotsForGroup`, `getPrimarySiteIds`. v2 idea: per-metric
   trend deltas vs the prior snapshot (payment up/down by site+vehicle).
+- `src/lib/analysis/ai-enrich.ts` — Phase 12 AI-assisted analysis. An
+  `OfferEnricher` interface (mirrors `ComplianceGrader`): `NoopOfferEnricher`
+  (default) + `ClaudeOfferEnricher` (Anthropic SDK, structured output via
+  `messages.parse` + a zod schema) + `getOfferEnricher()` gated on
+  `ANTHROPIC_API_KEY`. The runner routes only offers below
+  `aiConfidenceThreshold()` (env `ANALYSIS_AI_CONFIDENCE_THRESHOLD`, default
+  0.5) to it — AI is SECONDARY, rule-based handles the routine majority (AD).
+  AI corrections override the rule fields, but the payment-matched disclaimer's
+  vehicle still wins (literal ad fine print). AI-corrected offers carry
+  `normalized_json.aiAssisted=true` and show an "AI" badge in the analysis
+  view. Env knobs: `ANALYSIS_AI_MODEL` (default `claude-opus-4-8` — set to
+  Sonnet/Haiku for this high-volume secondary path), `ANALYSIS_AI_MAX_PAGE_CHARS`
+  (default 8000). The hard disclaimer rule is carried into the prompt. Gated +
+  tsc/lint clean; needs a live key to verify model output. See
+  [[compliance-ad-disclaimer-pairing]].
 - `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`

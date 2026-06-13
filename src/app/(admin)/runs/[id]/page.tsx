@@ -33,6 +33,7 @@ import {
   executeAllMissions,
   executeWorkItem,
   publishSnapshot,
+  resumeRun,
   retryResult,
   runAnalysis,
   updateRunStatus,
@@ -107,8 +108,14 @@ export default async function RunDetailPage({
   const results = new Map(
     runResults.map((r) => [`${r.siteId}:${r.missionId}`, r])
   );
-  const executing =
-    isRunExecuting(run.id) ||
+  // "Executing" is the in-memory truth — is a collector actually running for
+  // this run right now. Pending/running ROWS with no live executor mean the run
+  // was interrupted (e.g. a server restart) and those rows are orphaned; that's
+  // "stalled", recoverable via Resume — not "executing" (which would freeze the
+  // whole UI behind disabled buttons with nothing to un-freeze it).
+  const executing = isRunExecuting(run.id);
+  const stalled =
+    !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
   const analyzing = isAnalysisRunning(run.id);
   // Analysis needs captured HTML evidence; offer it once anything's collected.
@@ -192,9 +199,11 @@ export default async function RunDetailPage({
             items={missionRows}
             results={results}
             executing={executing}
+            stalled={stalled}
             executeItemAction={executeWorkItem.bind(null, run.id)}
             executeAllAction={executeAllMissions.bind(null, run.id)}
             retryAction={retryResult.bind(null, `/runs/${run.id}`)}
+            resumeAction={resumeRun.bind(null, run.id)}
             error={error}
           />
         </div>
