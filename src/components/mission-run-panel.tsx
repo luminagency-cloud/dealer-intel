@@ -1,5 +1,8 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
-import type { Mission, MissionResult, Site, SiteMission } from "@/lib/db";
+import type { Mission, MissionResult, MissionResultStatus, Site, SiteMission } from "@/lib/db";
 import { MissionStatusBadge } from "@/components/mission-status-badge";
 
 export interface PanelWorkItem {
@@ -8,12 +11,33 @@ export interface PanelWorkItem {
   siteMission: SiteMission | null;
 }
 
+const FILTER_STATUSES: MissionResultStatus[] = [
+  "success",
+  "needs_review",
+  "failure",
+  "not_found",
+  "content_removed",
+];
+
+const FILTER_LABELS: Record<MissionResultStatus, string> = {
+  pending: "Queued",
+  running: "Running",
+  success: "Success",
+  needs_review: "Needs Review",
+  failure: "Failure",
+  not_found: "Not Found",
+  content_removed: "Content Removed",
+};
+
 /** Mission-driven collection with live background progress: start the whole
  *  run (or one site+mission pair) and watch statuses update. */
 export function MissionRunPanel({
+  runId,
   items,
   results,
+  offerCountsBySite,
   executing,
+  canCollect,
   stalled,
   executeItemAction,
   executeAllAction,
@@ -21,9 +45,14 @@ export function MissionRunPanel({
   resumeAction,
   error,
 }: {
+  runId: string;
   items: PanelWorkItem[];
   results: Map<string, MissionResult>;
+  /** Offer count per siteId after analysis runs. Empty map before analysis. */
+  offerCountsBySite: Map<string, number>;
   executing: boolean;
+  /** Run is in a state where collection is allowed (pending or running). */
+  canCollect: boolean;
   /** Pending/running rows with no live executor — interrupted run, recoverable. */
   stalled?: boolean;
   executeItemAction: (siteId: string, missionId: string) => Promise<void>;
@@ -32,11 +61,40 @@ export function MissionRunPanel({
   resumeAction?: () => Promise<void>;
   error?: string;
 }) {
+  // null = All (no filter); Set = only rows whose result.status is in the set.
+  const [filter, setFilter] = useState<Set<MissionResultStatus> | null>(null);
+
   const all = [...results.values()];
   const done = all.filter(
     (r) => r.status !== "pending" && r.status !== "running"
   ).length;
   const showProgress = executing && all.length > 0;
+
+  const isAll = filter === null;
+
+  function toggleAll() {
+    setFilter(null);
+  }
+
+  function toggleStatus(status: MissionResultStatus) {
+    setFilter((prev) => {
+      const next = new Set(prev ?? FILTER_STATUSES);
+      if (next.has(status)) {
+        next.delete(status);
+      } else {
+        next.add(status);
+      }
+      // Empty set is valid — it collapses the table.
+      return next;
+    });
+  }
+
+  const visibleItems = isAll
+    ? items
+    : items.filter(({ site, mission }) => {
+        const result = results.get(`${site.id}:${mission.id}`);
+        return result ? filter!.has(result.status) : false;
+      });
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -64,10 +122,7 @@ export function MissionRunPanel({
             >
               Collecting…
             </button>
-          ) : stalled && resumeAction ? (
-            // A stalled run must Resume (re-queue only the orphaned rows), not
-            // Start Run — Start Run would re-seed the whole scope and re-collect
-            // the sites that already succeeded.
+          ) : canCollect && stalled && resumeAction ? (
             <form action={resumeAction}>
               <button
                 type="submit"
@@ -76,7 +131,7 @@ export function MissionRunPanel({
                 Resume
               </button>
             </form>
-          ) : (
+          ) : canCollect && !stalled ? (
             <form action={executeAllAction}>
               <button
                 type="submit"
@@ -85,8 +140,38 @@ export function MissionRunPanel({
                 Start Run
               </button>
             </form>
-          ))}
+          ) : null)}
       </div>
+
+      {/* Status filters */}
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-zinc-100 px-4 py-2">
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-zinc-700">
+            <input
+              type="checkbox"
+              checked={isAll}
+              onChange={toggleAll}
+              className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900"
+            />
+            All
+          </label>
+          <span className="h-4 w-px bg-zinc-200" />
+          {FILTER_STATUSES.map((status) => (
+            <label
+              key={status}
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600"
+            >
+              <input
+                type="checkbox"
+                checked={isAll || (filter?.has(status) ?? false)}
+                onChange={() => toggleStatus(status)}
+                className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900"
+              />
+              {FILTER_LABELS[status]}
+            </label>
+          ))}
+        </div>
+      )}
 
       {stalled && (
         <p className="mx-4 mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -110,6 +195,12 @@ export function MissionRunPanel({
           </Link>{" "}
           and site status.
         </p>
+      ) : visibleItems.length === 0 ? (
+        <p className="px-4 py-3 text-xs text-zinc-400">
+          {filter !== null && filter.size === 0
+            ? "All rows hidden — check a filter above to expand."
+            : "No results match the selected filters."}
+        </p>
       ) : (
         <table className="w-full text-left text-sm">
           <thead>
@@ -118,12 +209,13 @@ export function MissionRunPanel({
               <th className="px-4 py-2 font-medium">Mission</th>
               <th className="px-4 py-2 font-medium">Status</th>
               <th className="px-4 py-2 font-medium">Pages</th>
+              <th className="px-4 py-2 font-medium">Offers</th>
               <th className="px-4 py-2 font-medium">Detail</th>
               <th className="px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
-            {items.map(({ mission, site }) => {
+            {visibleItems.map(({ mission, site }) => {
               const result = results.get(`${site.id}:${mission.id}`);
               const busy =
                 result?.status === "pending" || result?.status === "running";
@@ -148,17 +240,25 @@ export function MissionRunPanel({
                   <td className="px-4 py-3 text-zinc-600">
                     {result ? result.pagesCaptured : "—"}
                   </td>
+                  <td className="px-4 py-3 text-zinc-600">
+                    {offerCountsBySite.has(site.id)
+                      ? offerCountsBySite.get(site.id)
+                      : "—"}
+                  </td>
                   <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-500">
                     {result?.error ?? result?.successfulUrl ?? "—"}
                   </td>
                   <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                    <Link
+                      href={`/runs/${runId}/evidence/${site.id}`}
+                      className="text-xs text-zinc-500 underline hover:text-zinc-800"
+                    >
+                      Evidence
+                    </Link>
                     {busy ? (
-                      // Queued or in-flight — no action; it'll settle on its own.
                       <span className="text-xs text-zinc-400">—</span>
                     ) : retryable ? (
-                      // Enabled even mid-run: Retry queues the item (the drainer
-                      // picks it up), so you can re-collect failures without
-                      // waiting for the run to finish.
                       <form action={retryAction.bind(null, result.id)}>
                         <button
                           type="submit"
@@ -167,7 +267,7 @@ export function MissionRunPanel({
                           Retry
                         </button>
                       </form>
-                    ) : (
+                    ) : canCollect ? (
                       <form
                         action={executeItemAction.bind(
                           null,
@@ -183,7 +283,10 @@ export function MissionRunPanel({
                           Collect
                         </button>
                       </form>
+                    ) : (
+                      <span className="text-xs text-zinc-400">—</span>
                     )}
+                    </div>
                   </td>
                 </tr>
               );

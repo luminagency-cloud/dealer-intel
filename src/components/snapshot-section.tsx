@@ -32,8 +32,8 @@ export function SnapshotSection({
           )}
         </h2>
         <p className="mt-0.5 text-xs text-zinc-500">
-          Freeze this run&apos;s analyzed offers into an immutable reporting
-          input. Reports read snapshots only, never the live run.
+          Freeze this run&apos;s offers into an immutable snapshot for
+          reporting. Reports read snapshots only, never the live run.
         </p>
       </div>
 
@@ -53,11 +53,11 @@ export function SnapshotSection({
             type="submit"
             disabled={!hasOffers}
             title={
-              hasOffers ? undefined : "Run analysis first — no offers to publish"
+              hasOffers ? undefined : "Run analysis first — no offers to freeze"
             }
             className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Publish Snapshot
+            Freeze Snapshot
           </button>
         </form>
       )}

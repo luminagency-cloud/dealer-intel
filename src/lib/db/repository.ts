@@ -243,6 +243,21 @@ export async function listEvidenceForRun(
     .where(eq(evidence.collectionRunId, collectionRunId));
 }
 
+export async function listEvidenceForRunSite(
+  collectionRunId: string,
+  siteId: string
+): Promise<Evidence[]> {
+  return getDb()
+    .select()
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.collectionRunId, collectionRunId),
+        eq(evidence.siteId, siteId)
+      )
+    );
+}
+
 export async function deleteEvidence(id: string): Promise<void> {
   await getDb().delete(evidence).where(eq(evidence.id, id));
 }

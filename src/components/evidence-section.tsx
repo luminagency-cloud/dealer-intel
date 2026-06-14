@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import {
   EVIDENCE_TYPE_LABELS,
   MISSION_TYPE_LABELS,
@@ -22,18 +25,47 @@ export function EvidenceSection({
   deleteAction: (evidenceId: string) => Promise<void>;
   canUpload: boolean;
 }) {
+  const [siteFilter, setSiteFilter] = useState<string>("all");
+
+  const visible =
+    siteFilter === "all"
+      ? evidence
+      : evidence.filter((e) => e.siteId === siteFilter);
+
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="border-b border-zinc-100 px-4 py-3">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-zinc-900">
           Evidence{" "}
-          <span className="font-normal text-zinc-400">({evidence.length})</span>
+          <span className="font-normal text-zinc-400">
+            ({visible.length}{siteFilter !== "all" ? ` of ${evidence.length}` : ""})
+          </span>
         </h2>
+        {evidence.length > 0 && (
+          <select
+            value={siteFilter}
+            onChange={(e) => setSiteFilter(e.target.value)}
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none"
+          >
+            <option value="all">All sites</option>
+            {siteOptions
+              .filter((s) => evidence.some((e) => e.siteId === s.id))
+              .map((site) => (
+                <option key={site.id} value={site.id}>
+                  {site.name}
+                </option>
+              ))}
+          </select>
+        )}
       </div>
 
       {evidence.length === 0 ? (
         <p className="px-4 py-6 text-sm text-zinc-500">
           No evidence captured for this run yet.
+        </p>
+      ) : visible.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-zinc-500">
+          No evidence for the selected site.
         </p>
       ) : (
         <table className="w-full text-left text-sm">
@@ -41,14 +73,16 @@ export function EvidenceSection({
             <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
               <th className="px-4 py-2 font-medium">Type</th>
               <th className="px-4 py-2 font-medium">Detail</th>
-              <th className="px-4 py-2 font-medium">Site</th>
+              {siteFilter === "all" && (
+                <th className="px-4 py-2 font-medium">Site</th>
+              )}
               <th className="px-4 py-2 font-medium">Mission</th>
               <th className="px-4 py-2 font-medium">Captured</th>
               <th className="px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
-            {evidence.map((row) => (
+            {visible.map((row) => (
               <tr key={row.id}>
                 <td className="px-4 py-3 text-zinc-900">
                   {EVIDENCE_TYPE_LABELS[row.evidenceType]}
@@ -72,9 +106,11 @@ export function EvidenceSection({
                     </details>
                   )}
                 </td>
-                <td className="px-4 py-3 text-zinc-900">
-                  {siteNames[row.siteId] ?? row.siteId.slice(0, 8)}
-                </td>
+                {siteFilter === "all" && (
+                  <td className="px-4 py-3 text-zinc-900">
+                    {siteNames[row.siteId] ?? row.siteId.slice(0, 8)}
+                  </td>
+                )}
                 <td className="px-4 py-3 text-zinc-600">
                   {MISSION_TYPE_LABELS[row.missionType]}
                 </td>

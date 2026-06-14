@@ -7,7 +7,7 @@ import {
   sites,
   type Evidence,
 } from "@/lib/db";
-import { getEvidenceText } from "@/lib/evidence";
+import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
 import { extractOffers, findKnownModel, htmlToText } from "./extract";
 import { getComplianceGrader } from "./compliance";
 import {
@@ -21,10 +21,6 @@ import {
  * (classification + normalization), and grades each resulting ad through the
  * compliance service. Re-analysis replaces the run's derived offers and
  * grades, so it is safe to run repeatedly.
- *
- * Runs in the background like collection (a non-awaited task guarded by a
- * module-level active set on globalThis), so the action returns immediately
- * and the run page can poll for the offers to appear.
  */
 
 const globalState = globalThis as unknown as {
@@ -36,16 +32,29 @@ export function isAnalysisRunning(runId: string): boolean {
   return activeAnalyses.has(runId);
 }
 
-interface EvidenceWithBrand {
-  evidence: Evidence;
+interface SiteInfo {
   brand: string | null;
+  name: string;
+  state: string | null;
+  otherStates: string[] | null;
+}
+
+interface EvidenceWithSite {
+  evidence: Evidence;
+  site: SiteInfo;
 }
 
 async function loadAnalyzableEvidence(
   runId: string
-): Promise<EvidenceWithBrand[]> {
+): Promise<EvidenceWithSite[]> {
   const rows = await getDb()
-    .select({ evidence, brand: sites.brand })
+    .select({
+      evidence,
+      brand: sites.brand,
+      name: sites.name,
+      state: sites.state,
+      otherStates: sites.otherStates,
+    })
     .from(evidence)
     .innerJoin(sites, eq(sites.id, evidence.siteId))
     .where(
@@ -54,7 +63,15 @@ async function loadAnalyzableEvidence(
         eq(evidence.evidenceType, "html_snapshot")
       )
     );
-  return rows.map((r) => ({ evidence: r.evidence, brand: r.brand }));
+  return rows.map((r) => ({
+    evidence: r.evidence,
+    site: {
+      brand: r.brand,
+      name: r.name,
+      state: r.state,
+      otherStates: r.otherStates,
+    },
+  }));
 }
 
 interface CapturedDisclaimer {
@@ -62,10 +79,6 @@ interface CapturedDisclaimer {
   text: string;
 }
 
-/** Disclaimer-modal text captured during collection (evidence.text_content on
- *  disclaimer_screenshot rows). This is the real fine print the HTML snapshot
- *  often misses, used to backfill an offer's disclaimer when the HTML pass
- *  found none. */
 async function loadCapturedDisclaimers(
   runId: string
 ): Promise<CapturedDisclaimer[]> {
@@ -83,8 +96,30 @@ async function loadCapturedDisclaimers(
     .map((r) => ({ siteId: r.siteId, text: r.text }));
 }
 
-/** The disclaimer (fine-print) portion of a captured modal text, dropping the
- *  leading offer line and the "DISCLAIMER Disclaimer:" markers. */
+/** Screenshot evidence rows for the run, keyed by "siteId:missionType:label"
+ *  so each HTML snapshot can find its paired page screenshot. */
+async function loadScreenshotIndex(
+  runId: string
+): Promise<Map<string, Evidence>> {
+  const rows = await getDb()
+    .select({ evidence })
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.collectionRunId, runId),
+        eq(evidence.evidenceType, "screenshot")
+      )
+    );
+  const index = new Map<string, Evidence>();
+  for (const { evidence: row } of rows) {
+    const key = `${row.siteId}:${row.missionType}:${row.label ?? ""}`;
+    // First row wins — consistent with how capture pairs are uploaded.
+    if (!index.has(key)) index.set(key, row);
+  }
+  return index;
+}
+
+/** Disclaimer-modal text captured during collection. */
 function disclaimerPortion(modalText: string): string {
   const colon = modalText.search(/disclaimer\s*:/i);
   if (colon >= 0) {
@@ -95,26 +130,13 @@ function disclaimerPortion(modalText: string): string {
   return (any >= 0 ? modalText.slice(any) : modalText).trim();
 }
 
-/** Finds the captured disclaimer that belongs to this offer by matching the
- *  monthly payment — a high-precision, offer-specific token. Cash amounts and
- *  bare model names are deliberately NOT used: they false-match (a "$15" coupon
- *  hits "$15,000", and a model name hits a modal that lists several vehicles),
- *  and a wrong disclaimer is worse than none for the compliance pass. Offers
- *  without a monthly payment (e.g. APR-only finance) get no backfill.
- *
- *  Returns the disclaimer text and the model named in it. The payment-matched
- *  disclaimer describes exactly this offer, so its model is authoritative — it
- *  corrects the page-level vehicle guess, which can grab the wrong model from a
- *  multi-offer page (e.g. a $475 Tundra lease mislabeled "Corolla"). */
 function matchCapturedDisclaimer(
   offer: { monthlyPayment: number | null },
   siteId: string,
   disclaimers: CapturedDisclaimer[]
 ): { text: string; model: string | null } | null {
   if (offer.monthlyPayment == null) return null;
-  // "$205" but not "$205,000" or "$2,050" — bounded so the amount is exact.
   const amountRe = new RegExp(`\\$\\s?${offer.monthlyPayment}(?![\\d,])`);
-
   for (const d of disclaimers) {
     if (d.siteId !== siteId) continue;
     if (amountRe.test(d.text)) {
@@ -129,35 +151,57 @@ function matchCapturedDisclaimer(
 
 async function processAnalysis(
   runId: string,
-  rows: EvidenceWithBrand[]
+  rows: EvidenceWithSite[]
 ): Promise<void> {
   const db = getDb();
   try {
-    // Idempotent re-run: clear this run's derived results before regenerating.
     await db.delete(offers).where(eq(offers.collectionRunId, runId));
     await db
       .delete(complianceGrades)
       .where(eq(complianceGrades.collectionRunId, runId));
 
-    const grader = getComplianceGrader();
+    const grader = getComplianceGrader(runId);
     const enricher = getOfferEnricher();
     const aiThreshold = aiConfidenceThreshold();
     const capturedDisclaimers = await loadCapturedDisclaimers(runId);
-    // Dedup: the same offer often appears on several pages (one offer per
-    // evidence × many finance/lease pages). Keep one row per distinct offer
-    // signature per site.
+    const screenshotIndex = await loadScreenshotIndex(runId);
+    // Cache R2 fetches: screenshot bytes keyed by evidence row ID.
+    const screenshotCache = new Map<string, Buffer | null>();
+
     const seen = new Set<string>();
 
-    for (const { evidence: row, brand } of rows) {
+    for (const { evidence: row, site } of rows) {
       const html = await getEvidenceText(row);
       if (!html) continue;
 
       const extracted = extractOffers(html, {
         missionType: row.missionType,
-        brand,
+        brand: site.brand,
       });
-      // Flattened page text reused by the AI pass for any low-confidence offers.
       const pageText = htmlToText(html);
+
+      // Market states for this site: primary state + any additional ones.
+      const marketStates = [
+        site.state,
+        ...(site.otherStates ?? []),
+      ].filter((s): s is string => Boolean(s));
+
+      // Find the screenshot evidence row that was captured alongside this HTML.
+      const screenshotKey = `${row.siteId}:${row.missionType}:${row.label ?? ""}`;
+      const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
+
+      // Fetch screenshot bytes once per evidence row (many offers can come from
+      // the same page; avoid redundant R2 reads via the cache).
+      let screenshotBuffer: Buffer | null = null;
+      if (screenshotRow) {
+        if (!screenshotCache.has(screenshotRow.id)) {
+          screenshotCache.set(
+            screenshotRow.id,
+            await getEvidenceBody(screenshotRow)
+          );
+        }
+        screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
+      }
 
       for (const offer of extracted) {
         const signature = [
@@ -173,16 +217,12 @@ async function processAnalysis(
         if (seen.has(signature)) continue;
         seen.add(signature);
 
-        // Phase 12: route only LOW-confidence offers to the AI pass (the hard
-        // cases). It's a no-op without an API key, so this stays free by
-        // default. AI corrections override the rule-based fields; the rule
-        // result stands when the pass is off or fails.
         let effective = offer;
         let aiAssisted = false;
         if (offer.confidence < aiThreshold) {
           const enrichment = await enricher.enrich({
             pageText,
-            brand,
+            brand: site.brand,
             current: offer,
           });
           if (enrichment) {
@@ -191,17 +231,12 @@ async function processAnalysis(
           }
         }
 
-        // Pair the captured disclaimer-modal text to this offer by payment.
         const matched = matchCapturedDisclaimer(
           effective,
           row.siteId,
           capturedDisclaimers
         );
-        // Prefer an extracted ad disclaimer (rule or AI); backfill from the
-        // captured modal text when neither found one.
         const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
-        // The payment-matched disclaimer names this exact offer's vehicle —
-        // authoritative even over the AI guess (it's the literal ad fine print).
         const vehicleModel = matched?.model ?? effective.vehicleModel;
 
         await db.insert(offers).values({
@@ -223,13 +258,20 @@ async function processAnalysis(
           confidence: effective.confidence,
         });
 
-        // Compliance pass: grade the ad through the external service (stubbed).
-        const result = await grader.grade({
-          evidenceId: row.id,
-          offerType: effective.offerType,
-          disclaimerText,
-          adText: effective.rawText,
-        });
+        // Compliance only applies to priced offers (lease / finance / cash).
+        // Service and promotional offers are skipped — no API call, grade = n/a.
+        const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
+        const result = COMPLIANCE_TYPES.includes(effective.offerType)
+          ? await grader.grade({
+              evidenceId: row.id,
+              offerType: effective.offerType,
+              disclaimerText,
+              adText: effective.rawText,
+              dealerName: site.name,
+              marketStates,
+              screenshotBuffer,
+            })
+          : { grade: "n/a", details: { notApplicable: true, offerType: effective.offerType } };
         await db
           .insert(complianceGrades)
           .values({
@@ -253,8 +295,6 @@ async function processAnalysis(
   }
 }
 
-/** Starts background analysis for a run. Returns the number of evidence
- *  snapshots queued, or null when analysis is already running for this run. */
 export async function startAnalysis(runId: string): Promise<number | null> {
   if (activeAnalyses.has(runId)) return null;
   activeAnalyses.add(runId);

@@ -11,7 +11,6 @@ import {
 import {
   getCollectionRun,
   listComplianceGradesForRun,
-  listEvidenceForRun,
   listOffersForRun,
   listResultsForRun,
   listSnapshotsForRun,
@@ -21,15 +20,14 @@ import { isRunExecuting } from "@/lib/run-executor";
 import { isAnalysisRunning } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
-import { EvidenceSection } from "@/components/evidence-section";
 import { MissionRunPanel } from "@/components/mission-run-panel";
 import { AnalysisSection } from "@/components/analysis-section";
 import { SnapshotSection } from "@/components/snapshot-section";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { RunWorkflowStrip } from "@/components/run-workflow-strip";
 import {
   deleteRun,
-  deleteRunEvidence,
   executeAllMissions,
   executeWorkItem,
   publishSnapshot,
@@ -37,7 +35,6 @@ import {
   retryResult,
   runAnalysis,
   updateRunStatus,
-  uploadRunEvidence,
 } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -60,7 +57,6 @@ export default async function RunDetailPage({
   if (!run) notFound();
 
   const [
-    runEvidence,
     runOffers,
     runGrades,
     runSnapshots,
@@ -69,7 +65,6 @@ export default async function RunDetailPage({
     runResults,
     [runGroup],
   ] = await Promise.all([
-    listEvidenceForRun(run.id),
     listOffersForRun(run.id),
     listComplianceGradesForRun(run.id),
     listSnapshotsForRun(run.id),
@@ -102,6 +97,10 @@ export default async function RunDetailPage({
           .join(", ")
       : null;
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
+  const offerCountsBySite = runOffers.reduce((acc, o) => {
+    acc.set(o.siteId, (acc.get(o.siteId) ?? 0) + 1);
+    return acc;
+  }, new Map<string, number>());
   const nextStatuses = RUN_TRANSITIONS[run.status].filter(
     (s) => !(run.status === "pending" && s === "running")
   );
@@ -113,32 +112,33 @@ export default async function RunDetailPage({
   // was interrupted (e.g. a server restart) and those rows are orphaned; that's
   // "stalled", recoverable via Resume — not "executing" (which would freeze the
   // whole UI behind disabled buttons with nothing to un-freeze it).
+  const canCollect = run.status === "pending" || run.status === "running";
   const executing = isRunExecuting(run.id);
   const stalled =
     !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
   const analyzing = isAnalysisRunning(run.id);
-  // Analysis needs captured HTML evidence; offer it once anything's collected.
+  // Any captured pages means HTML snapshots exist — safe proxy without loading evidence.
   const canAnalyze =
     run.status !== "failed" &&
-    runEvidence.some((e) => e.evidenceType === "html_snapshot");
+    runResults.some((r) => r.pagesCaptured > 0);
 
   return (
     <div>
       <AutoRefresh active={executing || analyzing} />
-      <div className="mb-6">
-        <Link href="/runs" className="text-sm text-zinc-500 hover:underline">
-          ← Runs
-        </Link>
-      </div>
 
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-zinc-900">
+      {/* Compact title row — stays above the sticky workflow bar */}
+      <div className="mb-2 flex items-center justify-between py-2">
+        <div className="flex items-center gap-2 text-sm">
+          <Link href="/runs" className="text-zinc-400 hover:text-zinc-700">
+            ← Runs
+          </Link>
+          <span className="text-zinc-300">/</span>
+          <span className="font-semibold text-zinc-900">
             Run {run.id.slice(0, 8)}
-          </h1>
+          </span>
           {scopeLabel && (
-            <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-700">
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">
               {scopeLabel}
             </span>
           )}
@@ -155,9 +155,7 @@ export default async function RunDetailPage({
                     : "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
                 }
               >
-                {status === "failed"
-                  ? "Mark Failed"
-                  : `Move to ${RUN_STATUS_LABELS[status]}`}
+                {status === "failed" ? "Mark Failed" : `Move to ${RUN_STATUS_LABELS[status]}`}
               </button>
             </form>
           ))}
@@ -172,33 +170,46 @@ export default async function RunDetailPage({
         </div>
       </div>
 
-      <div className="mb-8 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-        <dl className="divide-y divide-zinc-100 text-sm">
-          <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Run ID</dt>
-            <dd className="font-mono text-zinc-900">{run.id}</dd>
-          </div>
-          <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Created</dt>
-            <dd className="text-zinc-900">{formatDate(run.createdAt)}</dd>
-          </div>
-          <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Started</dt>
-            <dd className="text-zinc-900">{formatDate(run.startedAt)}</dd>
-          </div>
-          <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Completed</dt>
-            <dd className="text-zinc-900">{formatDate(run.completedAt)}</dd>
-          </div>
-        </dl>
+      {/* Sticky workflow bar — locks at top immediately on scroll */}
+      <RunWorkflowStrip
+        runResults={runResults}
+        totalWorkItems={missionRows.length}
+        offerCount={runOffers.length}
+        snapshots={runSnapshots}
+        executing={executing}
+        stalled={stalled}
+        canCollect={canCollect}
+        analyzing={analyzing}
+        canAnalyze={canAnalyze}
+        canPublish={run.status !== "failed"}
+        runAnalysisAction={runAnalysis.bind(null, run.id)}
+        publishSnapshotAction={publishSnapshot.bind(null, run.id)}
+        executeAllAction={executeAllMissions.bind(null, run.id)}
+        resumeAction={resumeRun.bind(null, run.id)}
+        defaultSnapshotLabel={
+          scopeLabel
+            ? `${scopeLabel} · ${new Date().toLocaleString("en-US", { month: "short", year: "numeric" })}`
+            : undefined
+        }
+      />
+
+      {/* One-line metadata — sits below sticky bar, scrolls away */}
+      <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-400">
+        <span className="font-mono">{run.id}</span>
+        <span>Created {formatDate(run.createdAt)}</span>
+        {run.startedAt && <span>Started {formatDate(run.startedAt)}</span>}
+        {run.completedAt && <span>Completed {formatDate(run.completedAt)}</span>}
       </div>
 
       {run.status !== "published" && run.status !== "failed" && (
-        <div className="mb-8">
+        <div id="collection" className="mb-8">
           <MissionRunPanel
+            runId={run.id}
             items={missionRows}
             results={results}
+            offerCountsBySite={offerCountsBySite}
             executing={executing}
+            canCollect={canCollect}
             stalled={stalled}
             executeItemAction={executeWorkItem.bind(null, run.id)}
             executeAllAction={executeAllMissions.bind(null, run.id)}
@@ -209,29 +220,19 @@ export default async function RunDetailPage({
         </div>
       )}
 
-      <div className="mb-8">
-        <EvidenceSection
-          evidence={runEvidence}
-          siteOptions={siteOptions}
-          siteNames={siteNames}
-          uploadAction={uploadRunEvidence.bind(null, run.id)}
-          deleteAction={deleteRunEvidence.bind(null, run.id)}
-          canUpload={run.status !== "published"}
-        />
-      </div>
-
-      <div className="mb-8">
+      <div id="analysis" className="mb-8">
         <AnalysisSection
           offers={runOffers}
           grades={runGrades}
           siteNames={siteNames}
+          siteOptions={siteOptions}
           analyzing={analyzing}
           runAnalysisAction={runAnalysis.bind(null, run.id)}
           canAnalyze={canAnalyze}
         />
       </div>
 
-      <div className="mb-8">
+      <div id="snapshot" className="mb-8">
         <SnapshotSection
           snapshots={runSnapshots}
           canPublish={run.status !== "failed"}

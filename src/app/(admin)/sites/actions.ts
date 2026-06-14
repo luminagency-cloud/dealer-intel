@@ -27,6 +27,16 @@ const siteSchema = z.object({
     .toUpperCase()
     .transform((v) => (v === "" ? null : v))
     .nullable(),
+  otherStates: z
+    .string()
+    .trim()
+    .transform((v) =>
+      v
+        .split(/[\s,]+/)
+        .map((s) => s.trim().toUpperCase())
+        .filter((s) => s.length === 2)
+    )
+    .pipe(z.array(z.string()).max(10, "At most 10 additional states")),
 });
 
 function parseSiteForm(formData: FormData) {
@@ -36,6 +46,7 @@ function parseSiteForm(formData: FormData) {
     platform: formData.get("platform") ?? "",
     brand: formData.get("brand") ?? "",
     state: formData.get("state") ?? "",
+    otherStates: formData.get("otherStates") ?? "",
   });
 }
 

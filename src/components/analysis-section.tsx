@@ -1,4 +1,7 @@
-import { OFFER_TYPE_LABELS, type ComplianceGrade, type Offer } from "@/lib/db";
+"use client";
+
+import { useState } from "react";
+import { OFFER_TYPE_LABELS, type ComplianceGrade, type Offer, type Site } from "@/lib/db";
 
 function money(value: number | null): string {
   return value === null ? "—" : `$${value.toLocaleString()}`;
@@ -6,8 +9,9 @@ function money(value: number | null): string {
 
 function gradeStyle(grade: string): string {
   const g = grade.toLowerCase();
-  if (g === "pass") return "bg-green-100 text-green-800";
-  if (g === "fail") return "bg-red-100 text-red-800";
+  if (g === "pass" || g === "a" || g === "a+" || g === "a-") return "bg-green-100 text-green-800";
+  if (g === "n/a") return "bg-zinc-100 text-zinc-500";
+  if (g === "fail" || g === "f") return "bg-red-100 text-red-800";
   return "bg-amber-100 text-amber-800";
 }
 
@@ -18,12 +22,11 @@ function confidenceStyle(confidence: number | null): string {
   return "text-red-700";
 }
 
-/** Phase 9 analysis: trigger the passes and show the structured offers +
- *  compliance grades extracted from the run's evidence. */
 export function AnalysisSection({
   offers,
   grades,
   siteNames,
+  siteOptions,
   analyzing,
   runAnalysisAction,
   canAnalyze,
@@ -31,33 +34,57 @@ export function AnalysisSection({
   offers: Offer[];
   grades: ComplianceGrade[];
   siteNames: Record<string, string>;
+  siteOptions: Pick<Site, "id" | "name">[];
   analyzing: boolean;
   runAnalysisAction: () => Promise<void>;
   canAnalyze: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [siteFilter, setSiteFilter] = useState<string>("all");
+
   const gradeByEvidence = new Map(grades.map((g) => [g.evidenceId, g.grade]));
-  const gradeCounts = grades.reduce<Record<string, number>>((acc, g) => {
-    acc[g.grade] = (acc[g.grade] ?? 0) + 1;
-    return acc;
-  }, {});
+
+  const visible =
+    siteFilter === "all"
+      ? offers
+      : offers.filter((o) => o.siteId === siteFilter);
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
-        <div>
-          <h2 className="text-sm font-semibold text-zinc-900">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="text-sm font-semibold text-zinc-900 hover:text-zinc-600"
+          >
             Analysis{" "}
             {offers.length > 0 && (
               <span className="font-normal text-zinc-500">
                 — {offers.length} offer{offers.length === 1 ? "" : "s"}
+                {siteFilter !== "all" && ` · ${visible.length} shown`}
               </span>
             )}
-          </h2>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            Rule-based classification, normalization, and compliance grading
-            over this run&apos;s evidence. Re-runnable — re-analysis replaces
-            these results.
-          </p>
+            <span className="ml-2 text-xs font-normal text-zinc-400">
+              {collapsed ? "▸ expand" : "▾ collapse"}
+            </span>
+          </button>
+          {!collapsed && offers.length > 0 && (
+            <select
+              value={siteFilter}
+              onChange={(e) => setSiteFilter(e.target.value)}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none"
+            >
+              <option value="all">All sites</option>
+              {siteOptions
+                .filter((s) => offers.some((o) => o.siteId === s.id))
+                .map((site) => (
+                  <option key={site.id} value={site.id}>
+                    {site.name}
+                  </option>
+                ))}
+            </select>
+          )}
         </div>
         {canAnalyze && (
           <form action={runAnalysisAction}>
@@ -76,117 +103,118 @@ export function AnalysisSection({
         )}
       </div>
 
-      {grades.length > 0 && (
-        <div className="flex items-center gap-2 border-b border-zinc-100 px-4 py-2 text-xs">
-          <span className="text-zinc-500">Compliance:</span>
-          {Object.entries(gradeCounts).map(([grade, count]) => (
-            <span
-              key={grade}
-              className={`inline-flex rounded-full px-2 py-0.5 font-medium ${gradeStyle(grade)}`}
-            >
-              {count} {grade}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {offers.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-zinc-500">
-          No offers extracted yet. Run analysis once the run has captured
-          evidence.
-        </p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
-                <th className="px-4 py-2 font-medium">Site</th>
-                <th className="px-4 py-2 font-medium">Type</th>
-                <th className="px-4 py-2 font-medium">Vehicle</th>
-                <th className="px-4 py-2 font-medium">Payment</th>
-                <th className="px-4 py-2 font-medium">APR</th>
-                <th className="px-4 py-2 font-medium">Term</th>
-                <th className="px-4 py-2 font-medium">Due</th>
-                <th className="px-4 py-2 font-medium">Cash</th>
-                <th className="px-4 py-2 font-medium">Conf.</th>
-                <th className="px-4 py-2 font-medium">Compliance</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {offers.map((offer) => {
-                const grade = offer.sourceEvidenceId
-                  ? gradeByEvidence.get(offer.sourceEvidenceId)
-                  : undefined;
-                const vehicle = [
-                  offer.vehicleMake,
-                  offer.vehicleModel,
-                  offer.vehicleTrim,
-                ]
-                  .filter(Boolean)
-                  .join(" ");
-                return (
-                  <tr key={offer.id}>
-                    <td className="px-4 py-3 text-zinc-900">
-                      {siteNames[offer.siteId] ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {OFFER_TYPE_LABELS[offer.offerType]}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {vehicle || "—"}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {offer.monthlyPayment === null
-                        ? "—"
-                        : `${money(offer.monthlyPayment)}/mo`}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {offer.apr === null ? "—" : `${offer.apr}%`}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {offer.termMonths === null
-                        ? "—"
-                        : `${offer.termMonths} mo`}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {money(offer.dueAtSigning)}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-700">
-                      {money(offer.cashIncentive)}
-                    </td>
-                    <td
-                      className={`px-4 py-3 font-medium ${confidenceStyle(offer.confidence)}`}
-                    >
-                      {offer.confidence === null
-                        ? "—"
-                        : `${Math.round(offer.confidence * 100)}%`}
-                      {(offer.normalizedJson as { aiAssisted?: boolean } | null)
-                        ?.aiAssisted && (
-                        <span
-                          className="ml-1 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
-                          title="Corrected by the AI analysis pass (Phase 12)"
-                        >
-                          AI
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {grade ? (
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${gradeStyle(grade)}`}
-                        >
-                          {grade}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-zinc-400">—</span>
-                      )}
-                    </td>
+      {!collapsed && (
+        <>
+          {offers.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-zinc-500">
+              No offers extracted yet. Run analysis once the run has captured
+              evidence.
+            </p>
+          ) : visible.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-zinc-500">
+              No offers for the selected site.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                    {siteFilter === "all" && (
+                      <th className="px-4 py-2 font-medium">Site</th>
+                    )}
+                    <th className="px-4 py-2 font-medium">Type</th>
+                    <th className="px-4 py-2 font-medium">Vehicle</th>
+                    <th className="px-4 py-2 font-medium">Payment</th>
+                    <th className="px-4 py-2 font-medium">APR</th>
+                    <th className="px-4 py-2 font-medium">Term</th>
+                    <th className="px-4 py-2 font-medium">Due</th>
+                    <th className="px-4 py-2 font-medium">Cash</th>
+                    <th className="px-4 py-2 font-medium">Conf.</th>
+                    <th className="px-4 py-2 font-medium">Compliance</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {visible.map((offer) => {
+                    const grade = offer.sourceEvidenceId
+                      ? gradeByEvidence.get(offer.sourceEvidenceId)
+                      : undefined;
+                    const vehicle = [
+                      offer.vehicleMake,
+                      offer.vehicleModel,
+                      offer.vehicleTrim,
+                    ]
+                      .filter(Boolean)
+                      .join(" ");
+                    return (
+                      <tr key={offer.id}>
+                        {siteFilter === "all" && (
+                          <td className="px-4 py-3 text-zinc-900">
+                            {siteNames[offer.siteId] ?? "—"}
+                          </td>
+                        )}
+                        <td className="px-4 py-3 text-zinc-700">
+                          {OFFER_TYPE_LABELS[offer.offerType]}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-700">
+                          {vehicle || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-700">
+                          {offer.monthlyPayment === null
+                            ? "—"
+                            : `${money(offer.monthlyPayment)}/mo`}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-700">
+                          {offer.apr === null ? "—" : `${offer.apr}%`}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-700">
+                          {offer.termMonths === null
+                            ? "—"
+                            : `${offer.termMonths} mo`}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-700">
+                          {money(offer.dueAtSigning)}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-700">
+                          {money(offer.cashIncentive)}
+                        </td>
+                        <td
+                          className={`px-4 py-3 font-medium ${confidenceStyle(offer.confidence)}`}
+                        >
+                          {offer.confidence === null
+                            ? "—"
+                            : `${Math.round(offer.confidence * 100)}%`}
+                          {(
+                            offer.normalizedJson as {
+                              aiAssisted?: boolean;
+                            } | null
+                          )?.aiAssisted && (
+                            <span
+                              className="ml-1 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
+                              title="Corrected by the AI analysis pass"
+                            >
+                              AI
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {grade ? (
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${gradeStyle(grade)}`}
+                            >
+                              {grade}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-zinc-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

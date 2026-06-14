@@ -14,6 +14,9 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().min(1).optional(),
   R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   R2_BUCKET: z.string().min(1).optional(),
+  ADGRADER_BASE_URL: z.string().min(1).optional(),
+  ADGRADER_CLIENT_ID: z.string().min(1).optional(),
+  ADGRADER_CLIENT_SECRET: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -62,4 +65,11 @@ export const isR2Configured = () =>
       process.env.R2_ACCESS_KEY_ID &&
       process.env.R2_SECRET_ACCESS_KEY &&
       process.env.R2_BUCKET
+  );
+
+export const isAdScoreConfigured = () =>
+  Boolean(
+    process.env.ADGRADER_BASE_URL &&
+      process.env.ADGRADER_CLIENT_ID &&
+      process.env.ADGRADER_CLIENT_SECRET
   );

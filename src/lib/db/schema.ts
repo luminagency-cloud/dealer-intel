@@ -36,8 +36,10 @@ export const sites = pgTable("sites", {
   platform: text("platform"),
   /** Vehicle brand(s) sold, e.g. "Kia" or "Chrysler, Dodge, Jeep, Ram". */
   brand: text("brand"),
-  /** Two-letter US state code. */
+  /** Two-letter US state code where the dealer primarily operates. */
   state: text("state"),
+  /** Additional states this dealer runs ads in (for multi-jurisdiction compliance). */
+  otherStates: text("other_states").array(),
   active: boolean("active").notNull().default(true),
   /** Last time any mission collected successfully for this site (Phase 8
    *  freshness). Set by the run executor; drives the fresh/stale indicator. */

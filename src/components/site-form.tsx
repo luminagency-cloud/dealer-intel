@@ -79,6 +79,19 @@ export function SiteForm({
           />
         </label>
       </div>
+      <label className="mt-4 block text-sm font-medium text-zinc-700">
+        Additional states{" "}
+        <span className="font-normal text-zinc-400">
+          (optional — for multi-jurisdiction compliance)
+        </span>
+        <input
+          type="text"
+          name="otherStates"
+          defaultValue={(site?.otherStates ?? []).join(", ")}
+          placeholder="MA, CT"
+          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm uppercase shadow-sm focus:border-zinc-500 focus:outline-none"
+        />
+      </label>
       <div className="mt-6 flex items-center gap-3">
         <button
           type="submit"
