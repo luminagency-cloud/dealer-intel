@@ -237,6 +237,11 @@ export default async function RunDetailPage({
           canPublish={run.status !== "failed"}
           hasOffers={runOffers.length > 0}
           publishAction={publishSnapshot.bind(null, run.id)}
+          defaultLabel={
+            scopeLabel
+              ? `${scopeLabel} · ${new Date().toLocaleString("en-US", { month: "short", year: "numeric" })}`
+              : undefined
+          }
         />
       </div>
     </div>

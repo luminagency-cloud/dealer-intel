@@ -12,11 +12,13 @@ export function SnapshotSection({
   canPublish,
   hasOffers,
   publishAction,
+  defaultLabel,
 }: {
   snapshots: ReportSnapshot[];
   canPublish: boolean;
   hasOffers: boolean;
   publishAction: (formData: FormData) => Promise<void>;
+  defaultLabel?: string;
 }) {
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -43,6 +45,7 @@ export function SnapshotSection({
           <input
             type="text"
             name="label"
+            defaultValue={defaultLabel}
             placeholder="Optional label (e.g. Week of Jun 9)"
             className="flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-400 focus:outline-none"
           />
