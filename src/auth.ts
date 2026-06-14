@@ -1,38 +1,68 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import bcrypt from "bcryptjs";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { eq } from "drizzle-orm";
+import { getDb, users } from "@/lib/db";
 
-/** Constant-time comparison; hashing first equalizes lengths. */
-function safeEqual(a: string, b: string): boolean {
-  const ha = createHash("sha256").update(a).digest();
-  const hb = createHash("sha256").update(b).digest();
-  return timingSafeEqual(ha, hb);
+declare module "next-auth" {
+  interface User {
+    role?: string;
+  }
+  interface Session {
+    user: {
+      id: string;
+      email: string;
+      name?: string | null;
+      role: string;
+    };
+  }
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
+  callbacks: {
+    jwt({ token, user }) {
+      if (user) {
+        token.role = user.role;
+        token.id = user.id;
+      }
+      return token;
+    },
+    session({ session, token }) {
+      if (session.user) {
+        session.user.role = token.role as string;
+        session.user.id = token.id as string;
+      }
+      return session;
+    },
+  },
   providers: [
     Credentials({
-      name: "Operator Login",
+      name: "Login",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const adminEmail = process.env.ADMIN_EMAIL;
-        const adminPassword = process.env.ADMIN_PASSWORD;
-        if (!adminEmail || !adminPassword) return null;
-
-        const email = typeof credentials?.email === "string" ? credentials.email : "";
+        const email =
+          typeof credentials?.email === "string"
+            ? credentials.email.trim().toLowerCase()
+            : "";
         const password =
           typeof credentials?.password === "string" ? credentials.password : "";
+        if (!email || !password) return null;
 
-        const emailOk = safeEqual(email.trim().toLowerCase(), adminEmail.toLowerCase());
-        const passwordOk = safeEqual(password, adminPassword);
-        if (!emailOk || !passwordOk) return null;
+        const [user] = await getDb()
+          .select()
+          .from(users)
+          .where(eq(users.email, email));
+        if (!user) return null;
 
-        return { id: "operator", email: adminEmail, name: "Operator" };
+        const ok = await bcrypt.compare(password, user.passwordHash);
+        if (!ok) return null;
+
+        return { id: user.id, email: user.email, name: user.name, role: user.role };
       },
     }),
   ],

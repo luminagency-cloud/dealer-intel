@@ -12,9 +12,12 @@ import {
   offers,
   reportSnapshots,
   runGroupMembers,
+  runGroups,
   siteRelationships,
   sites,
   snapshotOffers,
+  userRunGroups,
+  users,
   type ComplianceGrade,
   type Mission,
   type SiteMission,
@@ -32,6 +35,7 @@ import {
   type RunStatus,
   type SiteRelationship,
   type SnapshotOffer,
+  type User,
 } from "./schema";
 
 /**
@@ -369,4 +373,93 @@ export async function getPrimarySiteIds(
       )
     );
   return new Set(rows.map((r) => r.siteId));
+}
+
+// --- Users ------------------------------------------------------------------
+
+export async function listUsers(): Promise<User[]> {
+  return getDb().select().from(users).orderBy(asc(users.email));
+}
+
+export async function getUser(id: string): Promise<User | null> {
+  const [row] = await getDb().select().from(users).where(eq(users.id, id));
+  return row ?? null;
+}
+
+export async function createUser(data: {
+  email: string;
+  passwordHash: string;
+  name?: string;
+  role: "admin" | "dealer";
+}): Promise<User> {
+  const [row] = await getDb().insert(users).values(data).returning();
+  return row;
+}
+
+export async function updateUserPassword(
+  id: string,
+  passwordHash: string
+): Promise<void> {
+  await getDb()
+    .update(users)
+    .set({ passwordHash })
+    .where(eq(users.id, id));
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await getDb().delete(users).where(eq(users.id, id));
+}
+
+/** Run groups a dealer user is assigned to. Admins bypass this. */
+export async function listUserRunGroups(
+  userId: string
+): Promise<{ runGroupId: string; runGroupName: string }[]> {
+  const rows = await getDb()
+    .select({ runGroupId: runGroups.id, runGroupName: runGroups.name })
+    .from(userRunGroups)
+    .innerJoin(runGroups, eq(runGroups.id, userRunGroups.runGroupId))
+    .where(eq(userRunGroups.userId, userId))
+    .orderBy(asc(runGroups.name));
+  return rows;
+}
+
+export async function setUserRunGroups(
+  userId: string,
+  runGroupIds: string[]
+): Promise<void> {
+  const db = getDb();
+  await db.delete(userRunGroups).where(eq(userRunGroups.userId, userId));
+  if (runGroupIds.length > 0) {
+    await db
+      .insert(userRunGroups)
+      .values(runGroupIds.map((runGroupId) => ({ userId, runGroupId })));
+  }
+}
+
+/** Client-visible snapshots for a set of run groups, newest first. */
+export async function listClientSnapshotsForGroups(
+  runGroupIds: string[]
+): Promise<ReportSnapshot[]> {
+  if (runGroupIds.length === 0) return [];
+  return getDb()
+    .select()
+    .from(reportSnapshots)
+    .where(
+      and(
+        inArray(reportSnapshots.runGroupId, runGroupIds),
+        eq(reportSnapshots.clientVisible, true)
+      )
+    )
+    .orderBy(desc(reportSnapshots.approvedAt));
+}
+
+/** Toggle client visibility on a snapshot. */
+export async function setSnapshotClientVisible(
+  id: string,
+  visible: boolean
+): Promise<void> {
+  await getDb()
+    .update(reportSnapshots)
+    .set({ clientVisible: visible })
+    .where(eq(reportSnapshots.id, id));
 }

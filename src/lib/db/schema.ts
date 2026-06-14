@@ -447,6 +447,40 @@ export const complianceGrades = pgTable(
   ]
 );
 
+/** Platform users — operators and dealer clients. Operators have full admin
+ *  access; dealers see only the run groups they're associated with via
+ *  user_run_groups. Passwords are bcrypt-hashed. */
+export const users = pgTable("users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  name: text("name"),
+  /** "admin" = full operator access. "dealer" = read-only report viewer. */
+  role: text("role", { enum: ["admin", "dealer"] })
+    .notNull()
+    .default("dealer"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Which run groups a dealer user can see. Admins bypass this table (they
+ *  see everything). */
+export const userRunGroups = pgTable(
+  "user_run_groups",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    runGroupId: uuid("run_group_id")
+      .notNull()
+      .references(() => runGroups.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    uniqueIndex("user_run_groups_unique").on(table.userId, table.runGroupId),
+  ]
+);
+
 /** Approved reporting datasets (AD-006), the Phase 10 wall between analysis
  *  and reporting. A snapshot is a FROZEN copy of a run's analysis output at
  *  approval time: re-running analysis or re-collecting never changes a
@@ -468,6 +502,10 @@ export const reportSnapshots = pgTable("report_snapshots", {
   /** Denormalized counts for list display (the frozen offers carry the truth). */
   offerCount: integer("offer_count").notNull().default(0),
   siteCount: integer("site_count").notNull().default(0),
+  /** Whether this snapshot is visible to dealer users in the viewer app.
+   *  Operators toggle this after reviewing; defaults to false so unpublished
+   *  snapshots stay invisible to clients until explicitly released. */
+  clientVisible: boolean("client_visible").notNull().default(false),
   approvedAt: timestamp("approved_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -545,3 +583,7 @@ export type ReportSnapshot = typeof reportSnapshots.$inferSelect;
 export type NewReportSnapshot = typeof reportSnapshots.$inferInsert;
 export type SnapshotOffer = typeof snapshotOffers.$inferSelect;
 export type NewSnapshotOffer = typeof snapshotOffers.$inferInsert;
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type UserRunGroup = typeof userRunGroups.$inferSelect;
+export type NewUserRunGroup = typeof userRunGroups.$inferInsert;

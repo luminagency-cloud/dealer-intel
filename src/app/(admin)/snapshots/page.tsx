@@ -2,6 +2,7 @@ import Link from "next/link";
 import { isDatabaseConfigured } from "@/lib/db";
 import { listReportSnapshots } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
+import { toggleClientVisible } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +27,9 @@ export default async function SnapshotsPage() {
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Snapshots</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Published, frozen analysis datasets — the only inputs reporting reads.
-          Create one with <span className="font-medium">Publish Snapshot</span>{" "}
-          on an analyzed run.
+          Frozen analysis datasets. Toggle{" "}
+          <span className="font-medium">Client Visible</span> to release a
+          snapshot to dealer users in the viewer app.
         </p>
       </div>
 
@@ -47,7 +48,7 @@ export default async function SnapshotsPage() {
                 <th className="px-4 py-3 text-right">Offers</th>
                 <th className="px-4 py-3 text-right">Sites</th>
                 <th className="px-4 py-3">Approved</th>
-                <th className="px-4 py-3">By</th>
+                <th className="px-4 py-3">Client Visible</th>
                 <th className="px-4 py-3">Run</th>
               </tr>
             </thead>
@@ -75,7 +76,26 @@ export default async function SnapshotsPage() {
                   <td className="px-4 py-3 text-zinc-600">
                     {formatDate(snap.approvedAt)}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600">{snap.approvedBy}</td>
+                  <td className="px-4 py-3">
+                    <form
+                      action={toggleClientVisible.bind(
+                        null,
+                        snap.id,
+                        !snap.clientVisible
+                      )}
+                    >
+                      <button
+                        type="submit"
+                        className={
+                          snap.clientVisible
+                            ? "rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-200"
+                            : "rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-500 hover:bg-zinc-200"
+                        }
+                      >
+                        {snap.clientVisible ? "Visible" : "Hidden"}
+                      </button>
+                    </form>
+                  </td>
                   <td className="px-4 py-3 text-zinc-600">
                     <Link
                       href={`/runs/${snap.collectionRunId}`}

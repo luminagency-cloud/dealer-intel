@@ -24,7 +24,7 @@ export default async function AdminLayout({
             </Link>
             <nav className="flex items-center gap-4 text-sm text-zinc-600">
               <Link href="/sites" className="hover:text-zinc-900">
-                Sites
+                Dealers
               </Link>
               <Link href="/missions" className="hover:text-zinc-900">
                 Missions
@@ -43,6 +43,9 @@ export default async function AdminLayout({
               </Link>
               <Link href="/reports" className="hover:text-zinc-900">
                 Reports
+              </Link>
+              <Link href="/users" className="hover:text-zinc-900">
+                Users
               </Link>
             </nav>
           </div>
