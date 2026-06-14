@@ -6,7 +6,6 @@ import bcrypt from "bcryptjs";
 import {
   createUser,
   deleteUser,
-  listUserRunGroups,
   setUserRunGroups,
   updateUserPassword,
 } from "@/lib/db/repository";
