@@ -1,4 +1,4 @@
-export { auth as middleware } from "@/auth";
+export { auth as proxy } from "@/auth";
 
 export const config = {
   // Protect everything except login and the public /r/ route
