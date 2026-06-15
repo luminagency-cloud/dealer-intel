@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 
-/** New Run scope control: a predefined run group or an ad-hoc selection of
- *  dealers (checkboxes, a temporary unsaved group), plus which missions the
- *  run executes (default: all). */
+/** New Run scope control: pick groups (multi-select), an ad-hoc selection of
+ *  dealers, or all sites — plus which missions the run executes (default: all). */
 export function RunScopePicker({
   groups,
   sites,
@@ -15,25 +14,32 @@ export function RunScopePicker({
   missions: { id: string; name: string }[];
 }) {
   const [scope, setScope] = useState("");
-  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [checkedGroups, setCheckedGroups] = useState<Set<string>>(new Set());
+  const [checkedSites, setCheckedSites] = useState<Set<string>>(new Set());
   const [checkedMissions, setCheckedMissions] = useState<Set<string>>(
     new Set(missions.map((m) => m.id))
   );
 
-  const toggleMission = (missionId: string) => {
+  const toggleMission = (id: string) => {
     setCheckedMissions((prev) => {
       const next = new Set(prev);
-      if (next.has(missionId)) next.delete(missionId);
-      else next.add(missionId);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
 
-  const toggle = (siteId: string) => {
-    setChecked((prev) => {
+  const toggleGroup = (id: string) => {
+    setCheckedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(siteId)) next.delete(siteId);
-      else next.add(siteId);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSite = (id: string) => {
+    setCheckedSites((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
@@ -41,6 +47,8 @@ export function RunScopePicker({
   return (
     <div className="relative flex items-center gap-3">
       <input type="hidden" name="missionPickerShown" value="1" />
+
+      {/* Mission checkboxes */}
       <div className="flex items-center gap-2.5 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5">
         {missions.map((mission) => (
           <label
@@ -59,28 +67,59 @@ export function RunScopePicker({
           </label>
         ))}
       </div>
+
+      {/* Scope selector */}
       <select
         name="scope"
         value={scope}
-        onChange={(e) => setScope(e.target.value)}
+        onChange={(e) => {
+          setScope(e.target.value);
+          setCheckedGroups(new Set());
+          setCheckedSites(new Set());
+        }}
         aria-label="Run scope"
         className="max-w-56 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
       >
         <option value="">Scope: All sites</option>
-        <optgroup label="Saved run groups">
-          {groups.map((group) => (
-            <option key={group.id} value={`group:${group.id}`}>
-              {group.name}
-            </option>
-          ))}
-        </optgroup>
-        <option value="custom">Pick dealers to run together…</option>
+        <option value="groups">Pick groups…</option>
+        <option value="custom">Pick dealers…</option>
       </select>
 
+      {/* Group picker panel */}
+      {scope === "groups" && (
+        <>
+          <span className="text-xs text-zinc-500">
+            {checkedGroups.size} group{checkedGroups.size !== 1 ? "s" : ""}
+          </span>
+          <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-64 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
+            <p className="px-2 pb-2 pt-1 text-xs text-zinc-500">
+              Check one or more groups — their sites are combined into one run.
+            </p>
+            {groups.map((group) => (
+              <label
+                key={group.id}
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-zinc-900 hover:bg-zinc-50"
+              >
+                <input
+                  type="checkbox"
+                  name="groupIds"
+                  value={group.id}
+                  checked={checkedGroups.has(group.id)}
+                  onChange={() => toggleGroup(group.id)}
+                  className="h-4 w-4 rounded border-zinc-300"
+                />
+                {group.name}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Dealer picker panel */}
       {scope === "custom" && (
         <>
           <span className="text-xs text-zinc-500">
-            {checked.size} selected
+            {checkedSites.size} selected
           </span>
           <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
             <p className="px-2 pb-2 pt-1 text-xs text-zinc-500">
@@ -96,8 +135,8 @@ export function RunScopePicker({
                   type="checkbox"
                   name="siteIds"
                   value={site.id}
-                  checked={checked.has(site.id)}
-                  onChange={() => toggle(site.id)}
+                  checked={checkedSites.has(site.id)}
+                  onChange={() => toggleSite(site.id)}
                   className="h-4 w-4 rounded border-zinc-300"
                 />
                 {site.name}

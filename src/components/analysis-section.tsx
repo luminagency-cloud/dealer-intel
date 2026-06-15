@@ -9,9 +9,9 @@ function money(value: number | null): string {
 
 function gradeStyle(grade: string): string {
   const g = grade.toLowerCase();
-  if (g === "pass" || g === "a" || g === "a+" || g === "a-") return "bg-green-100 text-green-800";
+  if (g === "a" || g === "a+" || g === "a-") return "bg-green-100 text-green-800";
   if (g === "n/a") return "bg-zinc-100 text-zinc-500";
-  if (g === "fail" || g === "f") return "bg-red-100 text-red-800";
+  if (g === "f") return "bg-red-100 text-red-800";
   return "bg-amber-100 text-amber-800";
 }
 
@@ -22,12 +22,26 @@ function confidenceStyle(confidence: number | null): string {
   return "text-red-700";
 }
 
+function fmtTime(d: Date | null | undefined): string {
+  if (!d) return "—";
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function totalMin(start: Date | null | undefined, end: Date | null | undefined): string {
+  if (!start || !end) return "";
+  const mins = Math.round((end.getTime() - start.getTime()) / 60000);
+  return mins < 1 ? "< 1 min" : `${mins} min`;
+}
+
 export function AnalysisSection({
   offers,
   grades,
   siteNames,
   siteOptions,
   analyzing,
+  analysisStartedAt,
+  analysisCompletedAt,
+  evidencePageCount,
   runAnalysisAction,
   canAnalyze,
 }: {
@@ -36,6 +50,10 @@ export function AnalysisSection({
   siteNames: Record<string, string>;
   siteOptions: Pick<Site, "id" | "name">[];
   analyzing: boolean;
+  analysisStartedAt?: Date | null;
+  analysisCompletedAt?: Date | null;
+  /** Total HTML snapshot pages this run captured — used for progress display. */
+  evidencePageCount: number;
   runAnalysisAction: () => Promise<void>;
   canAnalyze: boolean;
 }) {
@@ -52,39 +70,57 @@ export function AnalysisSection({
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => !c)}
-            className="text-sm font-semibold text-zinc-900 hover:text-zinc-600"
-          >
-            Analysis{" "}
-            {offers.length > 0 && (
-              <span className="font-normal text-zinc-500">
-                — {offers.length} offer{offers.length === 1 ? "" : "s"}
-                {siteFilter !== "all" && ` · ${visible.length} shown`}
-              </span>
-            )}
-            <span className="ml-2 text-xs font-normal text-zinc-400">
-              {collapsed ? "▸ expand" : "▾ collapse"}
-            </span>
-          </button>
-          {!collapsed && offers.length > 0 && (
-            <select
-              value={siteFilter}
-              onChange={(e) => setSiteFilter(e.target.value)}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none"
+        <div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setCollapsed((c) => !c)}
+              className="text-sm font-semibold text-zinc-900 hover:text-zinc-600"
             >
-              <option value="all">All sites</option>
-              {siteOptions
-                .filter((s) => offers.some((o) => o.siteId === s.id))
-                .map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.name}
-                  </option>
-                ))}
-            </select>
-          )}
+              Analysis{" "}
+              {offers.length > 0 && (
+                <span className="font-normal text-zinc-500">
+                  — {offers.length} offer{offers.length === 1 ? "" : "s"}
+                  {siteFilter !== "all" && ` · ${visible.length} shown`}
+                </span>
+              )}
+              <span className="ml-2 text-xs font-normal text-zinc-400">
+                {collapsed ? "▸ expand" : "▾ collapse"}
+              </span>
+            </button>
+            {!collapsed && offers.length > 0 && (
+              <select
+                value={siteFilter}
+                onChange={(e) => setSiteFilter(e.target.value)}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none"
+              >
+                <option value="all">All sites</option>
+                {siteOptions
+                  .filter((s) => offers.some((o) => o.siteId === s.id))
+                  .map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </div>
+          {analyzing ? (
+            <p className="mt-0.5 text-xs text-zinc-400">
+              {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)} · </>}
+              {evidencePageCount > 0
+                ? `${offers.length} offer${offers.length !== 1 ? "s" : ""} found so far · ${evidencePageCount} page${evidencePageCount !== 1 ? "s" : ""} to process`
+                : "Starting…"}
+            </p>
+          ) : (analysisStartedAt || analysisCompletedAt) ? (
+            <p className="mt-0.5 text-xs text-zinc-400">
+              {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)}</>}
+              {analysisCompletedAt && <> · Completed {fmtTime(analysisCompletedAt)}</>}
+              {totalMin(analysisStartedAt, analysisCompletedAt) && (
+                <> · {totalMin(analysisStartedAt, analysisCompletedAt)}</>
+              )}
+            </p>
+          ) : null}
         </div>
         {canAnalyze && (
           <form action={runAnalysisAction}>

@@ -99,7 +99,7 @@ export function SiteForm({
         >
           {submitLabel}
         </button>
-        <a href="/sites" className="text-sm text-zinc-600 hover:underline">
+        <a href="/dealers" className="text-sm text-zinc-600 hover:underline">
           Cancel
         </a>
       </div>

@@ -31,6 +31,17 @@ const FILTER_LABELS: Record<MissionResultStatus, string> = {
 
 /** Mission-driven collection with live background progress: start the whole
  *  run (or one site+mission pair) and watch statuses update. */
+function fmtTime(d: Date | null | undefined): string {
+  if (!d) return "—";
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function totalMin(start: Date | null | undefined, end: Date | null | undefined): string {
+  if (!start || !end) return "";
+  const mins = Math.round((end.getTime() - start.getTime()) / 60000);
+  return mins < 1 ? "< 1 min" : `${mins} min`;
+}
+
 export function MissionRunPanel({
   runId,
   items,
@@ -39,6 +50,8 @@ export function MissionRunPanel({
   executing,
   canCollect,
   stalled,
+  collectionStartedAt,
+  collectionCompletedAt,
   executeItemAction,
   executeAllAction,
   retryAction,
@@ -55,6 +68,8 @@ export function MissionRunPanel({
   canCollect: boolean;
   /** Pending/running rows with no live executor — interrupted run, recoverable. */
   stalled?: boolean;
+  collectionStartedAt?: Date | null;
+  collectionCompletedAt?: Date | null;
   executeItemAction: (siteId: string, missionId: string) => Promise<void>;
   executeAllAction: () => Promise<void>;
   retryAction: (resultId: string) => Promise<void>;
@@ -112,6 +127,15 @@ export function MissionRunPanel({
             Runs in the background; this page refreshes itself while work is
             in flight. Roughly a minute per page.
           </p>
+          {(collectionStartedAt || collectionCompletedAt) && (
+            <p className="mt-0.5 text-xs text-zinc-400">
+              {collectionStartedAt && <>Started {fmtTime(collectionStartedAt)}</>}
+              {collectionCompletedAt && <> · Completed {fmtTime(collectionCompletedAt)}</>}
+              {totalMin(collectionStartedAt, collectionCompletedAt) && (
+                <> · {totalMin(collectionStartedAt, collectionCompletedAt)}</>
+              )}
+            </p>
+          )}
         </div>
         {items.length > 0 &&
           (executing ? (
@@ -267,7 +291,7 @@ export function MissionRunPanel({
                           Retry
                         </button>
                       </form>
-                    ) : canCollect ? (
+                    ) : canCollect && !executing ? (
                       <form
                         action={executeItemAction.bind(
                           null,
@@ -277,10 +301,9 @@ export function MissionRunPanel({
                       >
                         <button
                           type="submit"
-                          disabled={executing}
-                          className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                          className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
                         >
-                          Collect
+                          Re-collect
                         </button>
                       </form>
                     ) : (

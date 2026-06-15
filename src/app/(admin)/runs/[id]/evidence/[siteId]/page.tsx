@@ -35,7 +35,7 @@ export default async function SiteEvidencePage({
 
   if (!run || !site) notFound();
 
-  const canUpload = run.status !== "published";
+  const canUpload = run.status !== "complete";
 
   return (
     <div>

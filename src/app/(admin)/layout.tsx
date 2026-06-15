@@ -19,11 +19,11 @@ export default async function AdminLayout({
       <header className="border-b border-zinc-200 bg-white">
         <div className="app-shell flex h-14 items-center justify-between px-4">
           <div className="flex items-center gap-8">
-            <Link href="/sites" className="text-sm font-semibold text-zinc-900">
+            <Link href="/" className="text-sm font-semibold text-zinc-900">
               Dealer Intel
             </Link>
             <nav className="flex items-center gap-4 text-sm text-zinc-600">
-              <Link href="/sites" className="hover:text-zinc-900">
+              <Link href="/dealers" className="hover:text-zinc-900">
                 Dealers
               </Link>
               <Link href="/missions" className="hover:text-zinc-900">

@@ -48,15 +48,27 @@ export function fmtApr(n: number | null): string {
   return `${s}%`;
 }
 
-/** Parse miles/year from disclaimer or raw text, e.g. "7,500 miles per year". */
+/** Parse miles/year from disclaimer or raw text, e.g. "7,500 miles per year"
+ *  or "5k miles per year". */
 export function parseMileage(text: string | null): number | null {
   if (!text) return null;
+  // "7,500 miles per year" or "7500 mi/yr"
   const m = text.match(
     /([\d,]+)\s*(?:miles?|mi)(?:\s*\/\s*|\s+per\s+|\s+a\s+)(?:year|yr\b|annum)/i
   );
-  if (!m) return null;
-  const v = Number(m[1].replace(/,/g, ""));
-  return v >= 3000 && v <= 30_000 ? v : null;
+  if (m) {
+    const v = Number(m[1].replace(/,/g, ""));
+    if (v >= 3000 && v <= 30_000) return v;
+  }
+  // "5k miles per year" or "10k mi/yr"
+  const km = text.match(
+    /(\d+)k\s*(?:miles?|mi)(?:\s*\/\s*|\s+per\s+|\s+a\s+)(?:year|yr\b|annum)/i
+  );
+  if (km) {
+    const v = Number(km[1]) * 1000;
+    if (v >= 3000 && v <= 30_000) return v;
+  }
+  return null;
 }
 
 export function fmtMileage(n: number): string {

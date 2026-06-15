@@ -42,6 +42,7 @@ export default async function AdminReportPage({
         primarySiteIds={primarySiteIds}
         groupSnapshots={groupSnapshots}
         adminControls={true}
+        containerClassName="mx-auto max-w-6xl"
       />
     </div>
   );

@@ -13,7 +13,7 @@ import { saveSiteMission, updateSite } from "../../actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function EditSitePage({
+export default async function EditDealerPage({
   params,
   searchParams,
 }: {
@@ -34,7 +34,7 @@ export default async function EditSitePage({
   return (
     <div>
       <h1 className="mb-6 text-xl font-semibold text-zinc-900">
-        Edit Site
+        Edit Dealer
       </h1>
       <SiteForm
         action={updateSite.bind(null, site.id)}

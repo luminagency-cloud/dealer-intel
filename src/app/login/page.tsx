@@ -9,7 +9,7 @@ async function login(formData: FormData) {
     await signIn("credentials", {
       email: formData.get("email"),
       password: formData.get("password"),
-      redirectTo: "/sites",
+      redirectTo: "/",
     });
   } catch (error) {
     if (error instanceof AuthError) {
@@ -25,7 +25,7 @@ export default async function LoginPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const session = await auth();
-  if (session?.user) redirect("/sites");
+  if (session?.user) redirect("/");
 
   const { error } = await searchParams;
   const authConfigured = isAuthConfigured();

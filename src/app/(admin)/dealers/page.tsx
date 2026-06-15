@@ -8,11 +8,11 @@ import { deleteSite, setSiteActive } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function SitesPage() {
+export default async function DealersPage() {
   if (!isDatabaseConfigured()) {
     return (
       <div>
-        <h1 className="mb-6 text-xl font-semibold text-zinc-900">Sites</h1>
+        <h1 className="mb-6 text-xl font-semibold text-zinc-900">Dealers</h1>
         <DbNotConfigured />
       </div>
     );
@@ -23,18 +23,18 @@ export default async function SitesPage() {
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-zinc-900">Sites</h1>
+        <h1 className="text-xl font-semibold text-zinc-900">Dealers</h1>
         <Link
-          href="/sites/new"
+          href="/dealers/new"
           className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
         >
-          Add Site
+          Add Dealer
         </Link>
       </div>
 
       {allSites.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
-          No sites yet. Add the first dealer or competitor website.
+          No dealers yet. Add the first dealer or competitor website.
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -93,7 +93,7 @@ export default async function SitesPage() {
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-3">
                       <Link
-                        href={`/sites/${site.id}/edit`}
+                        href={`/dealers/${site.id}/edit`}
                         className="text-zinc-700 hover:underline"
                       >
                         Edit

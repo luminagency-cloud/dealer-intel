@@ -310,7 +310,7 @@ async function finalizeRunIfDone(runId: string): Promise<void> {
   if (ok === 0) {
     status = "failed";
   } else if (total > 0 && ok / total >= AUTO_PUBLISH_MIN_SITE_SUCCESS) {
-    status = "published";
+    status = "complete";
   } else {
     status = "review";
   }

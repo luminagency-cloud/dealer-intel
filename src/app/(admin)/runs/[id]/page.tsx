@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { asc, eq } from "drizzle-orm";
 import {
   RUN_STATUS_LABELS,
-  collectionRunSites,
   getDb,
   runGroups,
   sites,
@@ -15,6 +14,7 @@ import {
   listResultsForRun,
   listSnapshotsForRun,
   listWorkItemsForRun,
+  resolveRunGroups,
 } from "@/lib/db/repository";
 import { isRunExecuting } from "@/lib/run-executor";
 import { isAnalysisRunning } from "@/lib/analysis";
@@ -81,20 +81,12 @@ export default async function RunDetailPage({
           .where(eq(runGroups.id, run.runGroupId))
       : Promise.resolve([undefined]),
   ]);
-  const adHocSiteIds = run.runGroupId
-    ? []
-    : (
-        await getDb()
-          .select({ siteId: collectionRunSites.siteId })
-          .from(collectionRunSites)
-          .where(eq(collectionRunSites.collectionRunId, run.id))
-      ).map((r) => r.siteId);
+  // For multi-group runs (no runGroupId), resolve which groups were combined.
+  const resolvedGroups = run.runGroupId ? [] : await resolveRunGroups(run.id);
   const scopeLabel = runGroup
     ? runGroup.name
-    : adHocSiteIds.length > 0
-      ? adHocSiteIds
-          .map((id) => siteOptions.find((s) => s.id === id)?.name ?? "?")
-          .join(", ")
+    : resolvedGroups.length > 0
+      ? resolvedGroups.map((g) => g.name).join(" + ")
       : null;
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
   const offerCountsBySite = runOffers.reduce((acc, o) => {
@@ -114,6 +106,11 @@ export default async function RunDetailPage({
   // whole UI behind disabled buttons with nothing to un-freeze it).
   const canCollect = run.status === "pending" || run.status === "running";
   const executing = isRunExecuting(run.id);
+  // Total HTML pages captured = total evidence rows the analysis pass will read.
+  const evidencePageCount = runResults.reduce(
+    (sum, r) => sum + (r.pagesCaptured ?? 0),
+    0
+  );
   const stalled =
     !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
@@ -201,8 +198,7 @@ export default async function RunDetailPage({
         {run.completedAt && <span>Completed {formatDate(run.completedAt)}</span>}
       </div>
 
-      {run.status !== "published" && run.status !== "failed" && (
-        <div id="collection" className="mb-8">
+      <div id="collection" className="mb-8">
           <MissionRunPanel
             runId={run.id}
             items={missionRows}
@@ -211,6 +207,8 @@ export default async function RunDetailPage({
             executing={executing}
             canCollect={canCollect}
             stalled={stalled}
+            collectionStartedAt={run.startedAt}
+            collectionCompletedAt={run.completedAt}
             executeItemAction={executeWorkItem.bind(null, run.id)}
             executeAllAction={executeAllMissions.bind(null, run.id)}
             retryAction={retryResult.bind(null, `/runs/${run.id}`)}
@@ -218,7 +216,6 @@ export default async function RunDetailPage({
             error={error}
           />
         </div>
-      )}
 
       <div id="analysis" className="mb-8">
         <AnalysisSection
@@ -227,6 +224,9 @@ export default async function RunDetailPage({
           siteNames={siteNames}
           siteOptions={siteOptions}
           analyzing={analyzing}
+          analysisStartedAt={run.analysisStartedAt}
+          analysisCompletedAt={run.analysisCompletedAt}
+          evidencePageCount={evidencePageCount}
           runAnalysisAction={runAnalysis.bind(null, run.id)}
           canAnalyze={canAnalyze}
         />
@@ -238,10 +238,13 @@ export default async function RunDetailPage({
           canPublish={run.status !== "failed"}
           hasOffers={runOffers.length > 0}
           publishAction={publishSnapshot.bind(null, run.id)}
+          runGroups={resolvedGroups.length > 1 ? resolvedGroups : undefined}
           defaultLabel={
-            scopeLabel
-              ? `${scopeLabel} · ${new Date().toLocaleString("en-US", { month: "short", year: "numeric" })}`
-              : undefined
+            resolvedGroups.length > 1
+              ? new Date().toLocaleString("en-US", { month: "short", year: "numeric" })
+              : scopeLabel
+                ? `${scopeLabel} · ${new Date().toLocaleString("en-US", { month: "short", year: "numeric" })}`
+                : undefined
           }
         />
       </div>

@@ -1,10 +1,11 @@
 import { DeleteObjectsCommand } from "@aws-sdk/client-s3";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getR2Bucket, getR2Client } from "@/lib/r2";
 import {
   getDb,
   collectionRuns,
   evidence,
+  missionResults,
   missions,
   runGroups,
   sites,
@@ -82,4 +83,45 @@ export async function deleteMissionDeep(missionId: string): Promise<void> {
  *  entity's delete path lives in one module. */
 export async function deleteRunGroupDeep(groupId: string): Promise<void> {
   await getDb().delete(runGroups).where(eq(runGroups.id, groupId));
+}
+
+/** Deletes one or more mission results and their associated R2 evidence
+ *  (scoped to the exact run+site+missionType so sibling missions in the same
+ *  run are unaffected). */
+export async function deleteMissionResultsDeep(
+  resultIds: string[]
+): Promise<void> {
+  if (resultIds.length === 0) return;
+  const db = getDb();
+
+  const results = await db
+    .select({
+      id: missionResults.id,
+      collectionRunId: missionResults.collectionRunId,
+      siteId: missionResults.siteId,
+      missionType: missionResults.missionType,
+    })
+    .from(missionResults)
+    .where(inArray(missionResults.id, resultIds));
+
+  if (results.length === 0) return;
+
+  // Collect R2 keys for each result's exact (run, site, missionType) scope.
+  const evidenceRows = await Promise.all(
+    results.map((r) =>
+      db
+        .select({ screenshotUrl: evidence.screenshotUrl, htmlUrl: evidence.htmlUrl })
+        .from(evidence)
+        .where(
+          and(
+            eq(evidence.collectionRunId, r.collectionRunId),
+            eq(evidence.siteId, r.siteId),
+            eq(evidence.missionType, r.missionType)
+          )
+        )
+    )
+  );
+
+  await deleteR2Objects(evidenceKeys(evidenceRows.flat()));
+  await db.delete(missionResults).where(inArray(missionResults.id, resultIds));
 }

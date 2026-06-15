@@ -178,7 +178,7 @@ export const runStatusEnum = pgEnum("run_status", [
   "pending",
   "running",
   "review",
-  "published",
+  "complete",
   "failed",
 ]);
 
@@ -188,7 +188,7 @@ export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   pending: "Pending",
   running: "Running",
   review: "Review",
-  published: "Published",
+  complete: "Complete",
   failed: "Failed",
 };
 
@@ -202,6 +202,8 @@ export const collectionRuns = pgTable("collection_runs", {
   status: runStatusEnum("status").notNull().default("pending"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
+  analysisStartedAt: timestamp("analysis_started_at", { withTimezone: true }),
+  analysisCompletedAt: timestamp("analysis_completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

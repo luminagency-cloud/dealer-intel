@@ -24,29 +24,63 @@ import {
   getDb,
   missionTypeEnum,
   missions,
+  runGroupMembers,
   type EvidenceType,
   type MissionType,
   type RunStatus,
 } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { resolveRunGroups } from "@/lib/db/repository";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { requireSession } from "@/lib/session";
 
 export async function createRun(formData?: FormData) {
   await requireSession();
-  // Scope select encodes "group:<id>", "custom" (ad-hoc dealer checkboxes
-  // in siteIds), or "" for all sites.
+  // Scope select encodes "groups" (multi-group checkboxes in groupIds),
+  // "custom" (ad-hoc dealer checkboxes in siteIds), or "" for all sites.
   const scopeValue = formData?.get("scope");
   const scope = typeof scopeValue === "string" ? scopeValue : "";
-  const siteIds =
-    scope === "custom"
-      ? (formData
-          ?.getAll("siteIds")
-          .filter((v): v is string => typeof v === "string" && v.length > 0) ??
-        [])
-      : [];
-  if (scope === "custom" && siteIds.length === 0) {
-    redirect(`/runs?error=${encodeURIComponent("Pick at least one dealer")}`);
+
+  let siteIds: string[] = [];
+
+  if (scope === "custom") {
+    siteIds =
+      formData
+        ?.getAll("siteIds")
+        .filter((v): v is string => typeof v === "string" && v.length > 0) ??
+      [];
+    if (siteIds.length === 0) {
+      redirect(`/runs?error=${encodeURIComponent("Pick at least one dealer")}`);
+    }
+  }
+
+  // For "groups" scope: resolve selected groups to site IDs.
+  // Single group → store as runGroupId (preserves reporting group history).
+  // Multiple groups → expand to site IDs and store as ad-hoc collectionRunSites.
+  let resolvedRunGroupId: string | null = null;
+  if (scope === "groups") {
+    const groupIds =
+      formData
+        ?.getAll("groupIds")
+        .filter((v): v is string => typeof v === "string" && v.length > 0) ??
+      [];
+    if (groupIds.length === 0) {
+      redirect(`/runs?error=${encodeURIComponent("Pick at least one group")}`);
+    }
+    if (groupIds.length === 1) {
+      resolvedRunGroupId = groupIds[0];
+    } else {
+      const members = await getDb()
+        .select({ siteId: runGroupMembers.siteId })
+        .from(runGroupMembers)
+        .where(inArray(runGroupMembers.runGroupId, groupIds));
+      siteIds = [...new Set(members.map((m) => m.siteId))];
+      if (siteIds.length === 0) {
+        redirect(
+          `/runs?error=${encodeURIComponent("Selected groups have no member sites")}`
+        );
+      }
+    }
   }
 
   // Mission checkboxes: storing a subset restricts the run; all checked (or
@@ -65,9 +99,7 @@ export async function createRun(formData?: FormData) {
   const restrictMissions =
     missionIds.length > 0 && missionIds.length < activeMissionCount;
 
-  const run = await createCollectionRun({
-    runGroupId: scope.startsWith("group:") ? scope.slice(6) : null,
-  });
+  const run = await createCollectionRun({ runGroupId: resolvedRunGroupId });
   if (siteIds.length > 0) {
     await getDb()
       .insert(collectionRunSites)
@@ -218,13 +250,17 @@ export async function runAnalysis(runId: string) {
     queued === null
       ? `/runs/${runId}?error=${encodeURIComponent("Analysis is already running")}`
       : queued === 0
-        ? `/runs/${runId}?error=${encodeURIComponent("No HTML evidence to analyze yet")}`
+        ? `/runs/${runId}?error=${encodeURIComponent("No evidence to analyze yet — run collection first")}`
         : `/runs/${runId}`
   );
 }
 
 /** Phase 10: freeze the run's current analysis output into a report snapshot,
- *  the immutable reporting input. Advances a run still in review to published. */
+ *  the immutable reporting input. Advances a run still in review to published.
+ *
+ *  For multi-group runs (no runGroupId, sites stored ad-hoc in
+ *  collectionRunSites), creates one snapshot per resolved group so reports
+ *  never cross group boundaries. */
 export async function publishSnapshot(runId: string, formData: FormData) {
   const session = await requireSession();
   const run = await getCollectionRun(runId);
@@ -235,6 +271,42 @@ export async function publishSnapshot(runId: string, formData: FormData) {
   const label = typeof labelValue === "string" ? labelValue : null;
   const approvedBy = session.user?.email ?? "operator";
 
+  // Multi-group run: fan out one snapshot per group (or just one if groupId
+  // is specified — the UI lets the operator freeze groups individually).
+  if (!run.runGroupId) {
+    const groups = await resolveRunGroups(runId);
+    if (groups.length > 1) {
+      const groupIdValue = formData.get("groupId");
+      const targetGroups =
+        typeof groupIdValue === "string" && groupIdValue
+          ? groups.filter((g) => g.id === groupIdValue)
+          : groups;
+
+      const created = (
+        await Promise.all(
+          targetGroups.map((g) => createSnapshotFromRun(runId, approvedBy, label, g))
+        )
+      ).filter((s): s is NonNullable<typeof s> => s !== null);
+
+      if (created.length === 0) {
+        redirect(
+          `/runs/${runId}?error=${encodeURIComponent("No analyzed offers to publish — run analysis first")}`
+        );
+      }
+      if (run.status === "review") {
+        await updateCollectionRunStatus(runId, "complete", {
+          completedAt: run.completedAt ?? new Date(),
+        });
+      }
+      revalidatePath(`/runs/${runId}`);
+      revalidatePath("/runs");
+      revalidatePath("/snapshots");
+      // Single group frozen → go straight to that snapshot; all groups → list.
+      redirect(created.length === 1 ? `/snapshots/${created[0].id}` : "/snapshots");
+    }
+  }
+
+  // Single-group or all-sites run: one snapshot.
   const snapshot = await createSnapshotFromRun(runId, approvedBy, label);
   if (!snapshot) {
     redirect(
@@ -243,7 +315,7 @@ export async function publishSnapshot(runId: string, formData: FormData) {
   }
 
   if (run.status === "review") {
-    await updateCollectionRunStatus(runId, "published", {
+    await updateCollectionRunStatus(runId, "complete", {
       completedAt: run.completedAt ?? new Date(),
     });
   }

@@ -46,13 +46,13 @@ export class StubComplianceGrader implements ComplianceGrader {
     let grade: string;
     let reason: string;
     if (!isPriced) {
-      grade = "pass";
+      grade = "A";
       reason = "Non-priced promotional content; no disclaimer requirement.";
     } else if (hasDisclaimer) {
-      grade = "pass";
+      grade = "A";
       reason = "Priced offer carries a disclaimer.";
     } else {
-      grade = "fail";
+      grade = "F";
       reason = "Priced offer with no disclaimer detected.";
     }
 

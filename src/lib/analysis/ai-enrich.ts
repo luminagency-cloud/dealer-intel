@@ -41,6 +41,10 @@ export interface EnrichInput {
   brand: string | null;
   /** The rule-based offer being second-guessed. */
   current: ExtractedOffer;
+  /** Ad screenshot bytes (PNG). Provided when the vehicle model is absent from
+   *  text — DDC and similar image-only platforms bake the model name into the
+   *  ad graphic rather than the DOM, so the rule-based pass can't read it. */
+  screenshotBuffer?: Buffer | null;
 }
 
 export interface OfferEnricher {
@@ -72,12 +76,12 @@ const EnrichmentSchema = z.object({
   confidence: z.number(),
 });
 
-const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER from the visible text of a dealership web page. A rule-based extractor has already produced a first guess; correct it.
+const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER from the visible text (and optional screenshot) of a dealership web page. A rule-based extractor has already produced a first guess; correct it.
 
 Rules:
 - Identify the ONE offer the rule-based guess is anchored on (matched by its monthly payment / price), not every offer on the page. Multi-offer pages are why this is hard — keep the vehicle, payment, term, APR, cash, and due-at-signing consistent with that single ad.
 - offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive), "service" (service-department special), or "promotional" (no priced terms).
-- Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers.
+- Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. When a screenshot is provided, look for the model name in the ad graphic — image-only platforms (e.g. DDC/Dealer.com) bake the vehicle name into the image rather than the DOM text.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
 - DISCLAIMER (hard rule): the disclaimer is the fine print tied to THIS specific ad (it sits with the offer, e.g. "MSRP $X. Lease for $Y/mo, $Z due at signing..."). It is NEVER the site-wide footer legalese (Terms of Use, Privacy, ©, "do not sell"). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in this corrected offer.`;
@@ -108,6 +112,18 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       anchorText: input.current.rawText,
     };
 
+    const textContent =
+      `Dealer brand: ${input.brand ?? "unknown"}\n\n` +
+      `Rule-based guess:\n${JSON.stringify(current)}\n\n` +
+      `Page text:\n${pageText}`;
+
+    // Include the ad screenshot when provided and under the size cap (4 MB).
+    // Vision lets Claude read model names baked into ad card graphics.
+    const useImage =
+      input.screenshotBuffer &&
+      input.screenshotBuffer.length > 0 &&
+      input.screenshotBuffer.length < 4 * 1024 * 1024;
+
     try {
       const response = await this.client.messages.parse({
         model: this.model,
@@ -116,10 +132,19 @@ export class ClaudeOfferEnricher implements OfferEnricher {
         messages: [
           {
             role: "user",
-            content:
-              `Dealer brand: ${input.brand ?? "unknown"}\n\n` +
-              `Rule-based guess (low confidence):\n${JSON.stringify(current)}\n\n` +
-              `Page text:\n${pageText}`,
+            content: useImage
+              ? [
+                  {
+                    type: "image" as const,
+                    source: {
+                      type: "base64" as const,
+                      media_type: "image/png" as const,
+                      data: input.screenshotBuffer!.toString("base64"),
+                    },
+                  },
+                  { type: "text" as const, text: textContent },
+                ]
+              : textContent,
           },
         ],
         output_config: { format: zodOutputFormat(EnrichmentSchema) },

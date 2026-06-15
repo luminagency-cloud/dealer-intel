@@ -2,13 +2,14 @@ import type { MissionType, OfferType } from "@/lib/db";
 
 /**
  * Rule-based offer extraction (Phase 9 classification + normalization). Reads
- * the rendered HTML snapshot text and pulls the structured offer fields with
- * deterministic patterns — no AI (that is the Phase 12 fallback for the
+ * the rendered HTML snapshot text and pulls structured offer fields with
+ * deterministic patterns — no AI (that is the Phase 12 fallback for
  * low-confidence cases this pass deliberately leaves behind).
  *
- * v1 produces at most one offer per piece of evidence: the strongest offer on
- * the page. The return type is an array so multi-offer segmentation can drop
- * in later without changing callers.
+ * Multi-offer pages are handled by windowing: every `$X/mo` (and APR-only)
+ * anchor in the page text gets its own bounded excerpt, so a specials page
+ * with 4 lease cards yields up to 4 offers. Service specials stay full-page
+ * (one URL = one service item).
  */
 
 export interface ExtractedOffer {
@@ -93,6 +94,11 @@ const KNOWN_MODELS = [
 const CASH_MIN = 250;
 const CASH_MAX = 25_000;
 
+// Text window cut around each payment anchor for multi-offer segmentation.
+// 350 chars before captures vehicle name; 650 after captures term + disclaimer.
+const WINDOW_BEFORE = 350;
+const WINDOW_AFTER = 650;
+
 /** Strip scripts/styles, drop tags, decode the common entities, collapse
  *  whitespace — enough to regex visible offer copy out of a snapshot. */
 export function htmlToText(html: string): string {
@@ -119,19 +125,20 @@ function firstMatch(text: string, re: RegExp): RegExpMatchArray | null {
 // --- Field extractors ----------------------------------------------------
 
 function extractMonthlyPayment(text: string) {
-  // "$279/mo", "$279 per month", "$279 a month"
+  // "$279/mo", "$279 per month", "$279 a month", "$279 monthly"
   const m = firstMatch(
     text,
-    /\$\s?([\d,]{2,7})\s*(?:\/|per\s+|a\s+)?\s*(?:mo|month)\b/i
+    /\$\s?([\d,]{2,7})\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i
   );
   return m ? { value: parseAmount(m[1]), match: m[0].trim() } : null;
 }
 
 function extractApr(text: string) {
-  // "2.9% APR", "APR: 1.9%", "0% APR"
+  // "2.9% APR", "APR: 1.9%", "0% APR", "0% financing", "0% Annual Percentage Rate"
   const m =
     firstMatch(text, /([\d]+(?:\.\d+)?)\s*%\s*APR\b/i) ??
-    firstMatch(text, /\bAPR[:\s]+([\d]+(?:\.\d+)?)\s*%/i);
+    firstMatch(text, /\bAPR[:\s]+([\d]+(?:\.\d+)?)\s*%/i) ??
+    firstMatch(text, /([\d]+(?:\.\d+)?)\s*%\s*(?:financing|annual percentage rate)\b/i);
   return m ? { value: Number(m[1]), match: m[0].trim() } : null;
 }
 
@@ -353,16 +360,15 @@ function contextAround(text: string, anchor: string | null): string | null {
   return text.slice(start, idx + anchor.length + 120).trim();
 }
 
-/** Extracts the strongest offer from one evidence snapshot's text. Returns an
- *  empty array when no monetary/term signal is present — that evidence carries
- *  no parseable offer (a hero image, a nav page), which is fine. */
-export function extractOffers(
-  html: string,
-  hints: ExtractHints
-): ExtractedOffer[] {
-  const text = htmlToText(html);
-  if (!text) return [];
+// --- Single-offer extraction from a text chunk ---------------------------
 
+/** Core extraction pass over an already-stripped text chunk (either a
+ *  full-page text for service/fallback, or a per-offer window). Returns null
+ *  when the chunk has no priced signal. */
+function extractOfferFromText(
+  text: string,
+  hints: ExtractHints
+): ExtractedOffer | null {
   const payment = extractMonthlyPayment(text);
   const apr = extractApr(text);
   const term = extractTerm(text);
@@ -371,8 +377,6 @@ export function extractOffers(
 
   const isService = hints.missionType === "service_specials";
   const service = isService ? extractServiceAmounts(text) : null;
-  // A service discount reads as cash savings; a flat price has no vehicle-offer
-  // home, so it lives in normalized_json + matches only.
   const serviceCash = service?.discount?.value ?? null;
 
   const fields = {
@@ -385,14 +389,10 @@ export function extractOffers(
 
   const signalCount = Object.values(fields).filter((v) => v !== null).length;
   const hasServiceSignal = Boolean(service?.discount || service?.price);
-  // No offer signal at all (and no service price) → nothing to normalize.
-  if (signalCount === 0 && !hasServiceSignal) return [];
+  if (signalCount === 0 && !hasServiceSignal) return null;
 
   const offerType = classify(fields, hints);
 
-  // The offer anchor: the strongest priced phrase on the page. The disclaimer
-  // search (it must sit with this ad), the readable context, and vehicle
-  // extraction all hang off it.
   const anchor =
     payment?.match ??
     cash?.match ??
@@ -401,7 +401,6 @@ export function extractOffers(
     service?.discount?.match ??
     null;
   const anchorIndex = anchor ? text.indexOf(anchor) : -1;
-  // Copy around the price — where this ad's vehicle name actually lives.
   const anchorContext =
     anchorIndex >= 0
       ? text.slice(Math.max(0, anchorIndex - 140), anchorIndex + 160)
@@ -418,7 +417,6 @@ export function extractOffers(
   if (service?.discount) matches.serviceDiscount = service.discount.match;
   if (service?.price) matches.servicePrice = service.price.match;
 
-  // Confidence: structured signal + vehicle + disclaimer, clamped to [0,1].
   const confidence = Math.min(
     1,
     0.2 * signalCount +
@@ -427,21 +425,106 @@ export function extractOffers(
       (disclaimer ? 0.1 : 0)
   );
 
+  return {
+    offerType,
+    vehicleMake: vehicle.make,
+    vehicleModel: vehicle.model,
+    vehicleTrim: vehicle.trim,
+    monthlyPayment: fields.monthlyPayment,
+    apr: fields.apr,
+    cashIncentive: fields.cashIncentive,
+    termMonths: fields.termMonths,
+    dueAtSigning: fields.dueAtSigning,
+    disclaimerText: disclaimer,
+    rawText: contextAround(text, anchor),
+    confidence: Number(confidence.toFixed(2)),
+    matches,
+  };
+}
+
+// --- Multi-offer segmentation -------------------------------------------
+
+/** Find every priced-offer anchor position in page text — monthly payment
+ *  signals plus standalone APR signals. Each position becomes the centre of
+ *  an independent offer window, so a page with both `$379/mo` and `0% APR`
+ *  cards yields separate offers for each. Positions are returned sorted;
+ *  the caller's per-window dedup collapses any that map to the same offer. */
+function offerAnchorPositions(text: string): number[] {
+  const paymentRe = /\$\s?[\d,]{2,7}\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/gi;
+  const aprRe = /[\d]+(?:\.\d+)?\s*%\s*(?:APR\b|financing\b|annual percentage rate\b)/gi;
+  const positions: number[] = [];
+  let m: RegExpExecArray | null;
+  for (const re of [paymentRe, aprRe]) {
+    while ((m = re.exec(text)) !== null) {
+      positions.push(m.index);
+    }
+  }
+  return positions.sort((a, b) => a - b);
+}
+
+/** Dedup key: two offers with the same fields are the same offer regardless
+ *  of which text window they came from (e.g. a sticky header repeats the
+ *  current-model payment). Vehicle model is intentionally excluded so a
+ *  null-model offer from one window doesn't shadow a model-identified offer
+ *  from another window covering the same anchor. */
+function offerSig(o: ExtractedOffer): string {
   return [
-    {
-      offerType,
-      vehicleMake: vehicle.make,
-      vehicleModel: vehicle.model,
-      vehicleTrim: vehicle.trim,
-      monthlyPayment: fields.monthlyPayment,
-      apr: fields.apr,
-      cashIncentive: fields.cashIncentive,
-      termMonths: fields.termMonths,
-      dueAtSigning: fields.dueAtSigning,
-      disclaimerText: disclaimer,
-      rawText: contextAround(text, anchor),
-      confidence: Number(confidence.toFixed(2)),
-      matches,
-    },
-  ];
+    o.offerType,
+    o.vehicleModel ?? "",
+    o.monthlyPayment ?? "",
+    o.apr ?? "",
+    o.termMonths ?? "",
+    o.dueAtSigning ?? "",
+    o.cashIncentive ?? "",
+  ].join("|");
+}
+
+/** Reads HTML, segments offer cards by payment anchor, and returns one
+ *  ExtractedOffer per distinct priced ad on the page. Returns an empty array
+ *  when no monetary signal is present (hero image, nav page, etc.). */
+export function extractOffers(
+  html: string,
+  hints: ExtractHints
+): ExtractedOffer[] {
+  const text = htmlToText(html);
+  if (!text) return [];
+
+  // Service specials: one URL = one service item; skip windowing.
+  if (hints.missionType === "service_specials") {
+    const offer = extractOfferFromText(text, hints);
+    return offer ? [offer] : [];
+  }
+
+  const positions = offerAnchorPositions(text);
+
+  // No priced anchors at all — try full page (cash-only or promo-only pages).
+  if (positions.length === 0) {
+    const offer = extractOfferFromText(text, hints);
+    return offer ? [offer] : [];
+  }
+
+  const results: ExtractedOffer[] = [];
+  const seen = new Set<string>();
+
+  for (const pos of positions) {
+    const chunk = text.slice(
+      Math.max(0, pos - WINDOW_BEFORE),
+      Math.min(text.length, pos + WINDOW_AFTER)
+    );
+    const offer = extractOfferFromText(chunk, hints);
+    if (!offer) continue;
+    const sig = offerSig(offer);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    results.push(offer);
+  }
+
+  // All windows duped to each other (e.g. a sticky-header repeating one price) —
+  // fall back to a single full-page extraction so we don't lose the offer.
+  if (results.length === 0) {
+    const offer = extractOfferFromText(text, hints);
+    return offer ? [offer] : [];
+  }
+
+  return results;
 }

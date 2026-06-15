@@ -1,0 +1,2 @@
+ALTER TABLE "collection_runs" ADD COLUMN "analysis_started_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "collection_runs" ADD COLUMN "analysis_completed_at" timestamp with time zone;

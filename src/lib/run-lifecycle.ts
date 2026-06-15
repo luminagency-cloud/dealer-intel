@@ -6,7 +6,7 @@ import type { RunStatus } from "@/lib/db";
 export const RUN_TRANSITIONS: Record<RunStatus, RunStatus[]> = {
   pending: ["running", "failed"],
   running: ["review", "failed"],
-  review: ["published", "failed"],
-  published: [],
+  review: ["complete", "failed"],
+  complete: [],
   failed: [],
 };

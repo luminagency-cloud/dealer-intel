@@ -12,7 +12,9 @@ import {
 } from "@/lib/db";
 import { MissionStatusBadge } from "@/components/mission-status-badge";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { resolveContentRemoved, retryResult } from "../runs/actions";
+import { deleteSelectedResults } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +44,7 @@ export default async function ReviewPage() {
     .where(
       and(
         inArray(missionResults.status, OPEN_STATUSES),
-        ne(collectionRuns.status, "published")
+        ne(collectionRuns.status, "complete")
       )
     )
     .orderBy(desc(missionResults.completedAt));
@@ -67,7 +69,7 @@ export default async function ReviewPage() {
     .where(
       and(
         inArray(missionResults.status, ["pending", "running"]),
-        ne(collectionRuns.status, "published")
+        ne(collectionRuns.status, "complete")
       )
     );
   const inProgressCount = inProgress.length;
@@ -84,15 +86,27 @@ export default async function ReviewPage() {
       )}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900">Review Queue</h1>
-        <div className="flex items-center gap-3 text-sm text-zinc-600">
-          {OPEN_STATUSES.map((status) => (
-            <span key={status}>
-              {MISSION_RESULT_STATUS_LABELS[status]}:{" "}
-              <span className="font-semibold text-zinc-900">
-                {counts[status]}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 text-sm text-zinc-600">
+            {OPEN_STATUSES.map((status) => (
+              <span key={status}>
+                {MISSION_RESULT_STATUS_LABELS[status]}:{" "}
+                <span className="font-semibold text-zinc-900">
+                  {counts[status]}
+                </span>
               </span>
-            </span>
-          ))}
+            ))}
+          </div>
+          {rows.length > 0 && (
+            <form id="bulk-delete" action={deleteSelectedResults}>
+              <ConfirmSubmitButton
+                confirmMessage="Delete the selected items? Their evidence files are also removed."
+                className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+              >
+                Delete Selected
+              </ConfirmSubmitButton>
+            </form>
+          )}
         </div>
       </div>
 
@@ -105,6 +119,7 @@ export default async function ReviewPage() {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
               <tr>
+                <th className="px-4 py-3 text-center">Del</th>
                 <th className="px-4 py-3">Site</th>
                 <th className="px-4 py-3">Mission</th>
                 <th className="px-4 py-3">Status</th>
@@ -116,6 +131,16 @@ export default async function ReviewPage() {
             <tbody className="divide-y divide-zinc-100">
               {rows.map(({ result, run, site, mission }) => (
                 <tr key={result.id}>
+                  <td className="px-4 py-3 text-center">
+                    <input
+                      type="checkbox"
+                      name="resultIds"
+                      value={result.id}
+                      form="bulk-delete"
+                      aria-label={`Select ${site.name} for deletion`}
+                      className="h-4 w-4 rounded border-zinc-300 text-red-600 focus:ring-red-500"
+                    />
+                  </td>
                   <td className="px-4 py-3 font-medium text-zinc-900">
                     {site.name}
                   </td>
@@ -151,7 +176,7 @@ export default async function ReviewPage() {
                         </button>
                       </form>
                       <Link
-                        href={`/sites/${site.id}/edit`}
+                        href={`/dealers/${site.id}/edit`}
                         className="text-zinc-600 hover:underline"
                       >
                         Fix URL

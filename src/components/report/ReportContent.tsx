@@ -36,6 +36,10 @@ export interface ReportContentProps {
   groupSnapshots?: ReportSnapshot[];
   /** When true, show admin-only controls (Copy Link, Export CSV). */
   adminControls?: boolean;
+  /** Tailwind classes for the outermost wrapper div. Defaults to
+   *  "mx-auto max-w-6xl px-4 py-8" (suitable for the standalone public route).
+   *  Override in admin context where the layout already provides padding. */
+  containerClassName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +242,7 @@ export function ReportContent({
   primarySiteIds,
   groupSnapshots = [],
   adminControls = false,
+  containerClassName = "mx-auto max-w-6xl px-4 py-8",
 }: ReportContentProps) {
   // ---------------------------------------------------------------------------
   // Dealers ordered: primary first, then alpha
@@ -314,7 +319,12 @@ export function ReportContent({
   // Compliance roll-up (all offers, anchor only)
   // ---------------------------------------------------------------------------
   const complianceCounts = kpis.complianceCounts;
-  const hasCompliance = Object.keys(complianceCounts).length > 0;
+  // Exclude "n/a" (stub grader output) so the compliance section only appears
+  // when real grades (pass / fail / letter grades) are present.
+  const realComplianceCounts = Object.fromEntries(
+    Object.entries(complianceCounts).filter(([g]) => g !== "n/a")
+  );
+  const hasCompliance = Object.keys(realComplianceCounts).length > 0;
 
   // ---------------------------------------------------------------------------
   // Capture date
@@ -334,7 +344,7 @@ export function ReportContent({
   // Render
   // ---------------------------------------------------------------------------
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8">
+    <div className={containerClassName}>
       {/* ------------------------------------------------------------------ */}
       {/* Report header                                                       */}
       {/* ------------------------------------------------------------------ */}
@@ -419,14 +429,14 @@ export function ReportContent({
               {financeNote}
             </li>
           )}
-          {cashGrid.length > 0 || cashOffers.length === 0 ? (
+          {cashGrid.length > 0 && (
             <li>
               <a href="#cash" className="font-semibold text-[#1b3a6b] hover:underline">
                 Cash &amp; Discounts →
               </a>{" "}
               {cashNote}
             </li>
-          ) : null}
+          )}
           {serviceOffers.length > 0 && (
             <li>
               <a href="#service" className="font-semibold text-[#1b3a6b] hover:underline">
@@ -648,7 +658,7 @@ export function ReportContent({
           />
           <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
             <div className="flex flex-wrap gap-4 px-6 py-5">
-              {Object.entries(complianceCounts).map(([grade, count]) => (
+              {Object.entries(realComplianceCounts).map(([grade, count]) => (
                 <div key={grade} className="text-center">
                   <div
                     className={`text-3xl font-bold ${
@@ -670,7 +680,11 @@ export function ReportContent({
             {/* Per-offer compliance table for anchor */}
             {(() => {
               const anchorGraded = offers.filter(
-                (o) => o.siteId && anchorSiteIds.has(o.siteId) && o.complianceGrade
+                (o) =>
+                  o.siteId &&
+                  anchorSiteIds.has(o.siteId) &&
+                  o.complianceGrade &&
+                  o.complianceGrade !== "n/a"
               );
               if (anchorGraded.length === 0) return null;
               return (

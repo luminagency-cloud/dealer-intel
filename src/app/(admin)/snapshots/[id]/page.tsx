@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import {
   getReportSnapshot,
   listSnapshotOffers,
+  resolveRunGroups,
 } from "@/lib/db/repository";
 import { SnapshotOffersTable } from "@/components/snapshot-offers-table";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
@@ -22,6 +23,16 @@ export default async function SnapshotDetailPage({
   const { id } = await params;
   const snapshot = await getReportSnapshot(id);
   if (!snapshot) notFound();
+
+  // runGroupName is stamped at publish time for new snapshots. For older
+  // snapshots published before per-group splitting, fall back to resolving
+  // group names from the source run's site set.
+  let scopeLabel = snapshot.runGroupName;
+  if (!scopeLabel) {
+    const groups = await resolveRunGroups(snapshot.collectionRunId);
+    scopeLabel =
+      groups.length > 0 ? groups.map((g) => g.name).join(" + ") : "All sites";
+  }
 
   const offers = await listSnapshotOffers(snapshot.id);
   const gradeCounts = offers.reduce<Record<string, number>>((acc, o) => {
@@ -43,11 +54,8 @@ export default async function SnapshotDetailPage({
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-zinc-900">
-            {snapshot.label || `Snapshot ${snapshot.id.slice(0, 8)}`}
+            {scopeLabel}
           </h1>
-          <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-700">
-            {snapshot.runGroupName || "All sites"}
-          </span>
           <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
             Frozen
           </span>

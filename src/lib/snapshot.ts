@@ -25,11 +25,16 @@ import {
 
 /** Freezes a run's current analysis output into a new snapshot. Returns the
  *  snapshot row, or null when the run has no analyzed offers to publish yet
- *  (analysis must run before a meaningful snapshot exists). */
+ *  (analysis must run before a meaningful snapshot exists).
+ *
+ *  Pass `groupFilter` to restrict the snapshot to a specific group's sites —
+ *  used when publishing a combined multi-group run as separate per-group
+ *  snapshots. The filter overrides the run's own runGroupId. */
 export async function createSnapshotFromRun(
   runId: string,
   approvedBy: string,
-  label?: string | null
+  label?: string | null,
+  groupFilter?: { id: string; name: string; siteIds: string[] }
 ): Promise<ReportSnapshot | null> {
   const db = getDb();
 
@@ -57,37 +62,47 @@ export async function createSnapshotFromRun(
 
   if (rows.length === 0) return null;
 
-  // Freeze the run's group scope (label survives a later group rename/delete).
-  const [run] = await db
-    .select({ runGroupId: collectionRuns.runGroupId })
-    .from(collectionRuns)
-    .where(eq(collectionRuns.id, runId));
-  let runGroupName: string | null = null;
-  if (run?.runGroupId) {
-    const [group] = await db
-      .select({ name: runGroups.name })
-      .from(runGroups)
-      .where(eq(runGroups.id, run.runGroupId));
-    runGroupName = group?.name ?? null;
+  // When a groupFilter is provided, restrict to that group's sites only.
+  const filteredRows = groupFilter
+    ? rows.filter((r) => groupFilter.siteIds.includes(r.offer.siteId))
+    : rows;
+  if (filteredRows.length === 0) return null;
+
+  // Resolve group scope: groupFilter overrides the run's own runGroupId.
+  let effectiveGroupId: string | null = groupFilter?.id ?? null;
+  let effectiveGroupName: string | null = groupFilter?.name ?? null;
+  if (!groupFilter) {
+    const [run] = await db
+      .select({ runGroupId: collectionRuns.runGroupId })
+      .from(collectionRuns)
+      .where(eq(collectionRuns.id, runId));
+    effectiveGroupId = run?.runGroupId ?? null;
+    if (effectiveGroupId) {
+      const [group] = await db
+        .select({ name: runGroups.name })
+        .from(runGroups)
+        .where(eq(runGroups.id, effectiveGroupId));
+      effectiveGroupName = group?.name ?? null;
+    }
   }
 
-  const distinctSites = new Set(rows.map((r) => r.offer.siteId)).size;
+  const distinctSites = new Set(filteredRows.map((r) => r.offer.siteId)).size;
 
   const [snapshot] = await db
     .insert(reportSnapshots)
     .values({
       collectionRunId: runId,
-      runGroupId: run?.runGroupId ?? null,
-      runGroupName,
+      runGroupId: effectiveGroupId,
+      runGroupName: effectiveGroupName,
       label: label?.trim() || null,
-      offerCount: rows.length,
+      offerCount: filteredRows.length,
       siteCount: distinctSites,
       approvedBy,
     })
     .returning();
 
   await db.insert(snapshotOffers).values(
-    rows.map((r) => ({
+    filteredRows.map((r) => ({
       snapshotId: snapshot.id,
       siteId: r.offer.siteId,
       siteName: r.siteName,

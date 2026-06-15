@@ -1,7 +1,7 @@
 import { SiteForm } from "@/components/site-form";
 import { createSite } from "../actions";
 
-export default async function NewSitePage({
+export default async function NewDealerPage({
   searchParams,
 }: {
   searchParams: Promise<{ error?: string }>;
@@ -10,8 +10,8 @@ export default async function NewSitePage({
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-semibold text-zinc-900">Add Site</h1>
-      <SiteForm action={createSite} error={error} submitLabel="Create Site" />
+      <h1 className="mb-6 text-xl font-semibold text-zinc-900">Add Dealer</h1>
+      <SiteForm action={createSite} error={error} submitLabel="Create Dealer" />
     </div>
   );
 }

@@ -55,12 +55,12 @@ export async function createSite(formData: FormData) {
   const parsed = parseSiteForm(formData);
   if (!parsed.success) {
     redirect(
-      `/sites/new?error=${encodeURIComponent(parsed.error.issues[0].message)}`
+      `/dealers/new?error=${encodeURIComponent(parsed.error.issues[0].message)}`
     );
   }
   await getDb().insert(sites).values(parsed.data);
-  revalidatePath("/sites");
-  redirect("/sites");
+  revalidatePath("/dealers");
+  redirect("/dealers");
 }
 
 export async function updateSite(id: string, formData: FormData) {
@@ -68,21 +68,21 @@ export async function updateSite(id: string, formData: FormData) {
   const parsed = parseSiteForm(formData);
   if (!parsed.success) {
     redirect(
-      `/sites/${id}/edit?error=${encodeURIComponent(parsed.error.issues[0].message)}`
+      `/dealers/${id}/edit?error=${encodeURIComponent(parsed.error.issues[0].message)}`
     );
   }
   await getDb()
     .update(sites)
     .set({ ...parsed.data, updatedAt: new Date() })
     .where(eq(sites.id, id));
-  revalidatePath("/sites");
-  redirect("/sites");
+  revalidatePath("/dealers");
+  redirect("/dealers");
 }
 
 export async function deleteSite(id: string) {
   await requireSession();
   await deleteSiteDeep(id);
-  revalidatePath("/sites");
+  revalidatePath("/dealers");
 }
 
 const siteMissionSchema = z.object({
@@ -105,7 +105,7 @@ const siteMissionSchema = z.object({
   active: z.boolean(),
 });
 
-/** Saves a dealer's URL config for one global mission (site edit page). */
+/** Saves a dealer's URL config for one global mission (dealer edit page). */
 export async function saveSiteMission(
   siteId: string,
   missionId: string,
@@ -119,7 +119,7 @@ export async function saveSiteMission(
   });
   if (!parsed.success) {
     redirect(
-      `/sites/${siteId}/edit?error=${encodeURIComponent(parsed.error.issues[0].message)}`
+      `/dealers/${siteId}/edit?error=${encodeURIComponent(parsed.error.issues[0].message)}`
     );
   }
   await getDb()
@@ -129,7 +129,7 @@ export async function saveSiteMission(
       target: [siteMissions.siteId, siteMissions.missionId],
       set: { ...parsed.data, updatedAt: new Date() },
     });
-  revalidatePath(`/sites/${siteId}/edit`);
+  revalidatePath(`/dealers/${siteId}/edit`);
 }
 
 export async function setSiteActive(id: string, active: boolean) {
@@ -138,5 +138,5 @@ export async function setSiteActive(id: string, active: boolean) {
     .update(sites)
     .set({ active, updatedAt: new Date() })
     .where(eq(sites.id, id));
-  revalidatePath("/sites");
+  revalidatePath("/dealers");
 }

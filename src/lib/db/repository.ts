@@ -98,7 +98,7 @@ export async function listCollectionRuns(): Promise<CollectionRun[]> {
 export async function updateCollectionRunStatus(
   id: string,
   status: RunStatus,
-  timestamps: Pick<NewCollectionRun, "startedAt" | "completedAt"> = {}
+  timestamps: Pick<NewCollectionRun, "startedAt" | "completedAt" | "analysisStartedAt" | "analysisCompletedAt"> = {}
 ): Promise<CollectionRun | undefined> {
   const [row] = await getDb()
     .update(collectionRuns)
@@ -358,6 +358,45 @@ export async function deleteReportSnapshot(id: string): Promise<void> {
   // snapshot_offers cascade via FK; the snapshot owns no R2 objects (it links
   // to the run's evidence, which the run delete cleans up).
   await getDb().delete(reportSnapshots).where(eq(reportSnapshots.id, id));
+}
+
+/** For multi-group runs (run.runGroupId is null, sites stored in
+ *  collectionRunSites), reverse-engineer which run groups were selected by
+ *  finding groups whose entire member set is contained in the run's site set.
+ *  Returns [] for single-group runs (use run.runGroupId directly) and for
+ *  all-sites / ad-hoc custom runs where no group is fully contained. */
+export async function resolveRunGroups(
+  runId: string
+): Promise<Array<{ id: string; name: string; siteIds: string[] }>> {
+  const runSiteRows = await getDb()
+    .select({ siteId: collectionRunSites.siteId })
+    .from(collectionRunSites)
+    .where(eq(collectionRunSites.collectionRunId, runId));
+  if (runSiteRows.length === 0) return [];
+
+  const runSiteSet = new Set(runSiteRows.map((r) => r.siteId));
+
+  const allMembers = await getDb()
+    .select({
+      groupId: runGroupMembers.runGroupId,
+      groupName: runGroups.name,
+      siteId: runGroupMembers.siteId,
+    })
+    .from(runGroupMembers)
+    .innerJoin(runGroups, eq(runGroups.id, runGroupMembers.runGroupId))
+    .where(inArray(runGroupMembers.siteId, [...runSiteSet]));
+
+  const groupMap = new Map<string, { name: string; siteIds: Set<string> }>();
+  for (const row of allMembers) {
+    if (!groupMap.has(row.groupId))
+      groupMap.set(row.groupId, { name: row.groupName, siteIds: new Set() });
+    groupMap.get(row.groupId)!.siteIds.add(row.siteId);
+  }
+
+  return [...groupMap.entries()]
+    .filter(([, g]) => [...g.siteIds].every((s) => runSiteSet.has(s)))
+    .map(([id, g]) => ({ id, name: g.name, siteIds: [...g.siteIds] }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Snapshots cut from a run group, newest first — the group's report history

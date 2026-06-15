@@ -1,3 +1,5 @@
+"use client";
+
 import type { MissionResult, ReportSnapshot } from "@/lib/db";
 
 export function RunWorkflowStrip({

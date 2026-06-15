@@ -27,10 +27,10 @@ export default async function NewRunGroupPage({
       {siteOptions.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
           Create some{" "}
-          <Link href="/sites/new" className="underline">
-            sites
+          <Link href="/dealers/new" className="underline">
+            dealers
           </Link>{" "}
-          first — run groups are built from sites.
+          first — run groups are built from dealers.
         </p>
       ) : (
         <RunGroupForm

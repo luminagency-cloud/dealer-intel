@@ -4,7 +4,7 @@ Living record of what is built, where it lives, and decisions made along the
 way. Read alongside `Implementation Roadmap.md` (the plan) and
 `architecture-decision.md` (the principles).
 
-## Status: Phases 1–7 complete (June 2026)
+## Status: Phases 1–12 built (June 2026)
 
 | Phase | State | Notes |
 |---|---|---|
@@ -16,10 +16,10 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 6 Mission Framework | Done | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
 | 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
 | 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
-| 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
+| 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. Multi-offer per page via payment-anchor windowing (v1.0.27). AI deferred to Phase 12 by design; confidence score routes weak cases there. |
 | 10 | Done | Snapshot Publishing — the wall between analysis and reporting. Publishing a run **freezes** its current offers + compliance grades into `report_snapshots` + `snapshot_offers` (denormalized, immutable). Re-running analysis or re-collecting never changes a published snapshot. Snapshots list at `/snapshots`; "Publish Snapshot" on the run page. |
-| 11 | Built (live check pending) | Reporting Engine — pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. tsc/lint clean; browser verification deferred (operator's overnight fan-out was holding :3000 / `.next`). Trend deltas (per-metric change vs prior snapshot) deliberately deferred to a v2. |
-| 12 | Built (gated, live check pending) | AI-Assisted Analysis. Secondary, confidence-routed pass (`src/lib/analysis/ai-enrich.ts`): low-confidence rule-based offers are re-extracted by Claude via structured output; rule-based still handles the routine majority. Behind an `OfferEnricher` interface gated on `ANTHROPIC_API_KEY` (no-op without a key, like the compliance stub), so the platform builds/runs unchanged. tsc/lint clean; live model verification pending an API key. |
+| 11 | Live (v2 polish in progress) | Reporting Engine — live in browser, pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. Trend deltas (per-metric change vs prior snapshot) deliberately deferred to a v2. v1.0.32 polish: 18px→16px base font (Tailwind rem sizing corrected), `containerClassName` prop on `ReportContent` removes double padding in admin context, cash section bullet suppressed when empty, n/a compliance grades excluded from roll-up display ("n/a" is stub sentinel, not a real grade). |
+| 12 | Built (gated; key pending) | AI-Assisted Analysis. Secondary, confidence-routed pass (`src/lib/analysis/ai-enrich.ts`): low-confidence rule-based offers are re-extracted by Claude via structured output; rule-based still handles the routine majority. Behind an `OfferEnricher` interface gated on `ANTHROPIC_API_KEY` (no-op without a key). tsc/lint clean; live model verification pending API key. |
 
 ## Architecture: three-phase pipeline (decided June 2026)
 
@@ -171,8 +171,17 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
     text. Classifies offer type (lease/finance/cash/service/promotional) +
     vehicle (known-make list, brand prior from the site), normalizes monthly
     payment / APR / term / due-at-signing / cash, plus a service-special
-    price/discount path; emits a 0..1 confidence. v1 is one offer per evidence
-    (returns an array so multi-offer can drop in).
+    price/discount path; emits a 0..1 confidence.
+    MULTI-OFFER SEGMENTATION (v1.0.27): `paymentAnchorPositions` finds every
+    `$X/mo` match in the page text; `extractOffers` cuts a bounded window
+    (350 chars before, 650 after each anchor) and runs the full extraction
+    pipeline on each window independently. Deduped by
+    (offerType, model, payment, apr, term, dueAtSigning, cash). APR-only and
+    cash-only pages (no payment anchor) fall through to a single full-page
+    pass. Service specials are always full-page (one URL = one service item).
+    PATTERN FIXES (v1.0.27): monthly payment now matches `$X monthly` in
+    addition to `/mo`, `per month`, `a month`; APR now matches `X% financing`
+    and `X% Annual Percentage Rate` in addition to the APR-keyword forms.
     HARDENING (v0.7.3, after the Toyota of Dartmouth cross-platform shakeout):
     vehicle model is matched against a curated `KNOWN_MODELS` list (a null
     model beats junk like "Dealer"/"Safety Sense" pulled from page chrome) and
@@ -181,9 +190,6 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
     Cash incentive is clamped to a plausible band (`CASH_MIN`..`CASH_MAX`,
     250..25k) to reject service-coupon noise and MSRP/price misreads.
     `findKnownModel` is exported for the runner's disclaimer-based correction.
-    Still one-offer-per-page: a multi-offer lineup can mis-pick the model from
-    the anchor window — the runner corrects that from the matched disclaimer
-    (below); the deeper fix is multi-offer segmentation / Phase 12.
     DISCLAIMER RULE (operator, hard): a disclaimer is tied to a SPECIFIC ad and
     sits with it (just below, or text within the ad image). It is never the
     site-wide footer legalese (Terms of Use / Privacy / © / "do not sell").
@@ -211,6 +217,25 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
     exactly that offer, so its model corrects the page-level vehicle guess
     (e.g. a $475 Tundra lease mislabeled "Corolla" → Tundra). See
     [[compliance-ad-disclaimer-pairing]].
+    DDC PLATFORM FIX (v1.0.32): DDC/Dealer.com platforms render offer prices
+    as images — the HTML snapshot has no DOM price text, so the HTML pass
+    extracts zero offers. Fix: a second extraction pass runs directly on
+    `disclaimer_screenshot` evidence rows whose `text_content` is non-null
+    (`loadDisclaimerEvidence`). The captured modal text (e.g. "Lease for $419
+    /month. $419 due at signing. Lease are 36 months, 5k miles per year.") is
+    plain text; `extractOffers` and the payment-anchor windowing work on it
+    without modification. The shared `seen` Set (same dedup signature used in
+    the HTML loop) prevents cross-source duplicates: a site with both DOM price
+    text AND a modal won't insert the same offer twice. LABEL MODEL RECOVERY:
+    when the disclaimer body text lacks a vehicle model name (common on DDC),
+    `findKnownModel` is applied to `evidence.label` (the ad-anchor text, e.g.
+    "2025 Nissan Rogue · $379/mo") and the recovered model is merged into
+    `effective` BEFORE computing the dedup signature — so a label-recovered
+    "Rogue" matches an HTML-extracted "Rogue" and prevents duplicates on
+    non-DDC sites. Screenshot for compliance comes from the disclaimer
+    screenshot row itself (the ad image), fetched via the shared
+    `screenshotCache`. `parseMileage` extended to handle "5k miles/year"
+    notation (common in DDC modal text). See [[compliance-ad-disclaimer-pairing]].
   Triggered by the **Run Analysis** button on the run page
   (`components/analysis-section.tsx`), which shows the extracted offers
   (type, vehicle, terms, confidence) and compliance grades.
@@ -245,17 +270,29 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   `OfferEnricher` interface (mirrors `ComplianceGrader`): `NoopOfferEnricher`
   (default) + `ClaudeOfferEnricher` (Anthropic SDK, structured output via
   `messages.parse` + a zod schema) + `getOfferEnricher()` gated on
-  `ANTHROPIC_API_KEY`. The runner routes only offers below
-  `aiConfidenceThreshold()` (env `ANALYSIS_AI_CONFIDENCE_THRESHOLD`, default
-  0.5) to it — AI is SECONDARY, rule-based handles the routine majority (AD).
-  AI corrections override the rule fields, but the payment-matched disclaimer's
-  vehicle still wins (literal ad fine print). AI-corrected offers carry
+  `ANTHROPIC_API_KEY`. The runner routes offers to AI in two cases (either):
+  (1) rule-based confidence below `aiConfidenceThreshold()` (env
+  `ANALYSIS_AI_CONFIDENCE_THRESHOLD`, default 0.5); (2) `vehicleModel === null`
+  regardless of confidence — high-confidence offers on image-only platforms
+  (DDC) can have all price fields correct but the model name only in the ad
+  graphic. AI is SECONDARY; rule-based handles the routine majority (AD).
+  VISION (v1.0.33): when `screenshotBuffer` is provided in `EnrichInput` and
+  under 4 MB, it is included as an image content block in the API call so
+  Claude can read model names baked into ad card graphics. The system prompt
+  instructs Claude to look for the vehicle in the image when one is provided.
+  AI corrections override the rule fields. AI-corrected offers carry
   `normalized_json.aiAssisted=true` and show an "AI" badge in the analysis
-  view. Env knobs: `ANALYSIS_AI_MODEL` (default `claude-opus-4-8` — set to
-  Sonnet/Haiku for this high-volume secondary path), `ANALYSIS_AI_MAX_PAGE_CHARS`
-  (default 8000). The hard disclaimer rule is carried into the prompt. Gated +
-  tsc/lint clean; needs a live key to verify model output. See
+  view. Env knobs: `ANALYSIS_AI_MODEL` (default `claude-opus-4-8`),
+  `ANALYSIS_AI_MAX_PAGE_CHARS` (default 8000). The hard disclaimer rule is
+  carried into the prompt. Gated on ANTHROPIC_API_KEY. See
   [[compliance-ad-disclaimer-pairing]].
+- `src/app/(admin)/page.tsx` — admin homepage. Two-CTA landing page (Collect
+  Data → /runs, Run Reports → /reports) with live counts (dealers, runs,
+  snapshots) and a three-step pipeline diagram.
+- `src/app/(admin)/dealers/` — Dealer CRUD (renamed from `/sites`). Same
+  entity, same schema; the UI rename better reflects real-world usage.
+  `/dealers/new` and `/dealers/[id]/edit` cover full site-field editing
+  including site_mission URL configs.
 - `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`

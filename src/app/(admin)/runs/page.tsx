@@ -168,8 +168,8 @@ export default async function RunsPage({
         </form>
       )}
       <p className="mt-4 text-xs text-zinc-400">
-        Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Pick a run
-        group to collect just that group&apos;s sites.
+        Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Scope: all
+        sites, one or more groups, or a custom dealer selection.
       </p>
     </div>
   );
