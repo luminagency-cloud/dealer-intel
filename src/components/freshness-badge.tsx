@@ -16,7 +16,7 @@ export function FreshnessBadge({
   return (
     <span
       className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${STYLES[freshness]}`}
-      title={lastCollectedAt ? lastCollectedAt.toLocaleString() : "Never collected"}
+      title={lastCollectedAt ? new Date(lastCollectedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Never collected"}
     >
       {FRESHNESS_LABELS[freshness]}
     </span>

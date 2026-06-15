@@ -115,7 +115,7 @@ export function EvidenceSection({
                   {MISSION_TYPE_LABELS[row.missionType]}
                 </td>
                 <td className="px-4 py-3 text-zinc-600">
-                  {row.createdAt.toLocaleString()}
+                  {new Date(row.createdAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-3">

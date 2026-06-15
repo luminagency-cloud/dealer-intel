@@ -105,7 +105,7 @@ export default async function EditDealerPage({
                 <div className="mt-2 flex items-center justify-between">
                   <span className="text-xs text-zinc-400">
                     {config?.lastSuccessAt
-                      ? `Last success: ${config.lastSuccessAt.toLocaleString()}`
+                      ? `Last success: ${new Date(config.lastSuccessAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
                       : "Never collected"}
                   </span>
                   <button

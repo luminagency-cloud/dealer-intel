@@ -16,11 +16,12 @@ import { DbNotConfigured } from "@/components/db-not-configured";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { createRun, deleteSelectedRuns } from "./actions";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
 
 function formatDate(date: Date | null) {
-  return date ? date.toLocaleString() : "—";
+  return fmtDateTime(date);
 }
 
 export default async function RunsPage({

@@ -8,11 +8,12 @@ import {
 import { SnapshotOffersTable } from "@/components/snapshot-offers-table";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { deleteSnapshot } from "../actions";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
 
 function formatDate(date: Date | null) {
-  return date ? date.toLocaleString() : "—";
+  return fmtDateTime(date);
 }
 
 export default async function SnapshotDetailPage({

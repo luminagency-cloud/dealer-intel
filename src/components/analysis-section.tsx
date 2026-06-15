@@ -24,7 +24,7 @@ function confidenceStyle(confidence: number | null): string {
 
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return "—";
-  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return new Date(d).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function totalMin(start: Date | null | undefined, end: Date | null | undefined): string {

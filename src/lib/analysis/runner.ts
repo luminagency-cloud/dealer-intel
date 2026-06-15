@@ -454,6 +454,16 @@ async function processAnalysis(
   }
 }
 
+/** For scripts/CLI: runs the full analysis pipeline and waits for completion. */
+export async function runAnalysisDirect(runId: string): Promise<void> {
+  const rows = await loadAnalyzableEvidence(runId);
+  await getDb()
+    .update(collectionRuns)
+    .set({ analysisStartedAt: new Date() })
+    .where(eq(collectionRuns.id, runId));
+  await processAnalysis(runId, rows);
+}
+
 export async function startAnalysis(runId: string): Promise<number | null> {
   if (activeAnalyses.has(runId)) return null;
   try {

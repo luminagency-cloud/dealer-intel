@@ -67,12 +67,14 @@ export class StubComplianceGrader implements ComplianceGrader {
 // AdScore grader — real external compliance API
 // ---------------------------------------------------------------------------
 
-/** Resize a raw PNG/JPEG buffer to 1200px wide JPEG at 80% quality. */
+/** Resize a raw PNG/JPEG to 1200×7900 max (JPEG 80%).
+ *  Claude's API rejects images over 8000px in either dimension; full-page
+ *  Playwright screenshots can be 15 000px+ tall. */
 async function prepareImage(
   buf: Buffer
 ): Promise<{ data: string; mimeType: "image/jpeg" }> {
   const resized = await sharp(buf)
-    .resize({ width: 1200, withoutEnlargement: true })
+    .resize({ width: 1200, height: 7900, fit: "inside", withoutEnlargement: true })
     .jpeg({ quality: 80 })
     .toBuffer();
   return { data: resized.toString("base64"), mimeType: "image/jpeg" };

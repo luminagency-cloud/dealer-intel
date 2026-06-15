@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import sharp from "sharp";
 import { offerTypeEnum, type OfferType } from "@/lib/db";
 import type { ExtractedOffer } from "./extract";
 
@@ -117,12 +118,21 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       `Rule-based guess:\n${JSON.stringify(current)}\n\n` +
       `Page text:\n${pageText}`;
 
-    // Include the ad screenshot when provided and under the size cap (4 MB).
-    // Vision lets Claude read model names baked into ad card graphics.
-    const useImage =
-      input.screenshotBuffer &&
-      input.screenshotBuffer.length > 0 &&
-      input.screenshotBuffer.length < 4 * 1024 * 1024;
+    // Include the ad screenshot when provided. Resize to fit within Claude's
+    // 8000px per-dimension limit — full-page Playwright captures can be 15 000px+ tall.
+    let imageBase64: string | null = null;
+    if (input.screenshotBuffer && input.screenshotBuffer.length > 0) {
+      try {
+        const resized = await sharp(input.screenshotBuffer)
+          .resize({ width: 1200, height: 7900, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 80 })
+          .toBuffer();
+        imageBase64 = resized.toString("base64");
+      } catch {
+        // Non-fatal — fall back to text-only enrichment.
+      }
+    }
+    const useImage = imageBase64 !== null;
 
     try {
       const response = await this.client.messages.parse({
@@ -138,8 +148,8 @@ export class ClaudeOfferEnricher implements OfferEnricher {
                     type: "image" as const,
                     source: {
                       type: "base64" as const,
-                      media_type: "image/png" as const,
-                      data: input.screenshotBuffer!.toString("base64"),
+                      media_type: "image/jpeg" as const,
+                      data: imageBase64!,
                     },
                   },
                   { type: "text" as const, text: textContent },

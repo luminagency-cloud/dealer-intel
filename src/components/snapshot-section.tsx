@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { ReportSnapshot } from "@/lib/db";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 function formatDate(date: Date | null) {
-  return date ? date.toLocaleString() : "—";
+  return fmtDateTime(date);
 }
 
 /** Phase 10 run-page panel: publish the run's current analysis output as a

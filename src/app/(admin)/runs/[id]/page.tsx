@@ -39,8 +39,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
+import { fmtDateTime, fmtMonthYear } from "@/lib/fmt-date";
+
 function formatDate(date: Date | null) {
-  return date ? date.toLocaleString() : "—";
+  return fmtDateTime(date);
 }
 
 export default async function RunDetailPage({
@@ -185,7 +187,7 @@ export default async function RunDetailPage({
         resumeAction={resumeRun.bind(null, run.id)}
         defaultSnapshotLabel={
           scopeLabel
-            ? `${scopeLabel} · ${new Date().toLocaleString("en-US", { month: "short", year: "numeric" })}`
+            ? `${scopeLabel} · ${fmtMonthYear(new Date())}`
             : undefined
         }
       />
@@ -241,9 +243,9 @@ export default async function RunDetailPage({
           runGroups={resolvedGroups.length > 1 ? resolvedGroups : undefined}
           defaultLabel={
             resolvedGroups.length > 1
-              ? new Date().toLocaleString("en-US", { month: "short", year: "numeric" })
+              ? fmtMonthYear(new Date())
               : scopeLabel
-                ? `${scopeLabel} · ${new Date().toLocaleString("en-US", { month: "short", year: "numeric" })}`
+                ? `${scopeLabel} · ${fmtMonthYear(new Date())}`
                 : undefined
           }
         />

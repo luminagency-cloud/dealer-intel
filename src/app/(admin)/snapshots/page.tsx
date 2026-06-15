@@ -3,11 +3,12 @@ import { isDatabaseConfigured } from "@/lib/db";
 import { listReportSnapshots } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { toggleClientVisible } from "./actions";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
 
 function formatDate(date: Date | null) {
-  return date ? date.toLocaleString() : "—";
+  return fmtDateTime(date);
 }
 
 export default async function SnapshotsPage() {

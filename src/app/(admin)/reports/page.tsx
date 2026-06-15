@@ -2,11 +2,12 @@ import Link from "next/link";
 import { isDatabaseConfigured } from "@/lib/db";
 import { listReportSnapshots } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
 
 function formatDate(date: Date | null) {
-  return date ? date.toLocaleString() : "—";
+  return fmtDateTime(date);
 }
 
 /** Phase 11 reporting landing: every published snapshot is a report. Reports

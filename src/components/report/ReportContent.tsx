@@ -765,7 +765,7 @@ export function ReportContent({
                 {groupSnapshots.map((s) => (
                   <tr key={s.id} className={s.id === snapshot.id ? "bg-blue-50/50" : ""}>
                     <td className="px-4 py-2.5 text-zinc-600">
-                      {s.approvedAt.toLocaleString()}
+                      {new Date(s.approvedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </td>
                     <td className="px-4 py-2.5">
                       {s.id === snapshot.id ? (
