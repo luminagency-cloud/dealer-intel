@@ -16,11 +16,16 @@ export async function createDealerUser(formData: FormData) {
   const email = (formData.get("email") as string).trim().toLowerCase();
   const password = formData.get("password") as string;
   const name = ((formData.get("name") as string) || "").trim() || undefined;
+  const roleValue = formData.get("role");
+  const role: "admin" | "dealer" =
+    roleValue === "admin" ? "admin" : "dealer";
   const runGroupIds = formData.getAll("runGroupIds") as string[];
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await createUser({ email, passwordHash, name, role: "dealer" });
-  await setUserRunGroups(user.id, runGroupIds);
+  const user = await createUser({ email, passwordHash, name, role });
+  if (role === "dealer") {
+    await setUserRunGroups(user.id, runGroupIds);
+  }
   revalidatePath("/users");
   redirect("/users");
 }

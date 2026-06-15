@@ -1,10 +1,14 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
 import { getDb, isDatabaseConfigured, collectionRuns, sites, reportSnapshots } from "@/lib/db";
 import { count } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
+  const session = await auth();
+  if (session?.user?.role !== "admin") redirect("/portal");
   let stats = { dealers: 0, runs: 0, snapshots: 0 };
 
   if (isDatabaseConfigured()) {

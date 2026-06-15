@@ -36,7 +36,7 @@ export default async function UsersPage() {
       <div className="mb-8 rounded-lg border border-zinc-200 bg-white shadow-sm">
         <div className="border-b border-zinc-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-zinc-900">
-            Add Dealer User
+            Add User
           </h2>
         </div>
         <form action={createDealerUser} className="space-y-3 px-4 py-4">
@@ -48,7 +48,7 @@ export default async function UsersPage() {
               <input
                 type="text"
                 name="name"
-                placeholder="Dealer contact name"
+                placeholder="Full name"
                 className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-400 focus:outline-none"
               />
             </div>
@@ -60,9 +60,35 @@ export default async function UsersPage() {
                 type="email"
                 name="email"
                 required
-                placeholder="dealer@example.com"
+                placeholder="user@example.com"
                 className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-400 focus:outline-none"
               />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-zinc-700">
+              Role *
+            </label>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-1.5 text-sm text-zinc-700">
+                <input
+                  type="radio"
+                  name="role"
+                  value="dealer"
+                  defaultChecked
+                  className="h-3.5 w-3.5"
+                />
+                Dealer — report viewer (assigned groups only)
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-zinc-700">
+                <input
+                  type="radio"
+                  name="role"
+                  value="admin"
+                  className="h-3.5 w-3.5"
+                />
+                Admin — full operator access
+              </label>
             </div>
           </div>
           <div>
@@ -80,7 +106,7 @@ export default async function UsersPage() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-zinc-700">
-              Run Groups
+              Run Groups <span className="font-normal text-zinc-400">(dealer role only — admins see all)</span>
             </label>
             <div className="flex flex-wrap gap-2">
               {allGroups.map((g) => (
