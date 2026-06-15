@@ -444,6 +444,20 @@ function extractOfferFromText(
 
 // --- Multi-offer segmentation -------------------------------------------
 
+/** Anchor positions for service-specials pages: flat prices ($39.95) and
+ *  discount phrases ($25 off). Used the same way as offerAnchorPositions —
+ *  each match becomes the centre of an independent offer window. */
+function serviceAnchorPositions(text: string): number[] {
+  const priceRe = /\$\s?[\d,]{1,5}\.\d{2}\b/gi;
+  const discountRe = /\$\s?[\d,]{1,5}(?:\.\d{2})?\s*off\b/gi;
+  const positions: number[] = [];
+  let m: RegExpExecArray | null;
+  for (const re of [priceRe, discountRe]) {
+    while ((m = re.exec(text)) !== null) positions.push(m.index);
+  }
+  return positions.sort((a, b) => a - b);
+}
+
 /** Find every priced-offer anchor position in page text — monthly payment
  *  signals plus standalone APR signals. Each position becomes the centre of
  *  an independent offer window, so a page with both `$379/mo` and `0% APR`
@@ -476,6 +490,7 @@ function offerSig(o: ExtractedOffer): string {
     o.termMonths ?? "",
     o.dueAtSigning ?? "",
     o.cashIncentive ?? "",
+    o.matches.servicePrice ?? "",
   ].join("|");
 }
 
@@ -489,10 +504,33 @@ export function extractOffers(
   const text = htmlToText(html);
   if (!text) return [];
 
-  // Service specials: one URL = one service item; skip windowing.
+  // Service specials: window by flat-price / discount anchors, same pattern as
+  // finance/lease windowing by $X/mo. One URL can have many service coupons.
   if (hints.missionType === "service_specials") {
-    const offer = extractOfferFromText(text, hints);
-    return offer ? [offer] : [];
+    const positions = serviceAnchorPositions(text);
+    if (positions.length === 0) {
+      const offer = extractOfferFromText(text, hints);
+      return offer ? [offer] : [];
+    }
+    const results: ExtractedOffer[] = [];
+    const seen = new Set<string>();
+    for (const pos of positions) {
+      const chunk = text.slice(
+        Math.max(0, pos - WINDOW_BEFORE),
+        Math.min(text.length, pos + WINDOW_AFTER)
+      );
+      const offer = extractOfferFromText(chunk, hints);
+      if (!offer) continue;
+      const sig = offerSig(offer);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      results.push(offer);
+    }
+    if (results.length === 0) {
+      const offer = extractOfferFromText(text, hints);
+      return offer ? [offer] : [];
+    }
+    return results;
   }
 
   const positions = offerAnchorPositions(text);

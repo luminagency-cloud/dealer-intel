@@ -1,14 +1,22 @@
 import { signIn } from "@/auth";
 import { redirect } from "next/navigation";
+import { isRedirectError } from "next/dist/client/components/redirect";
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+
   async function login(formData: FormData) {
     "use server";
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
     try {
       await signIn("credentials", { email, password, redirectTo: "/dashboard" });
-    } catch {
+    } catch (err) {
+      if (isRedirectError(err)) throw err;
       redirect("/login?error=1");
     }
   }
@@ -46,6 +54,11 @@ export default function LoginPage() {
                 className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-400 focus:outline-none"
               />
             </div>
+            {error && (
+              <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                Invalid email or password.
+              </p>
+            )}
             <button
               type="submit"
               className="w-full rounded-md bg-zinc-900 py-2 text-sm font-medium text-white hover:bg-zinc-700"
