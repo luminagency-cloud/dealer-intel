@@ -24,6 +24,7 @@ import {
   type GridRow,
 } from "@/lib/report";
 import type { ReportSnapshot, SnapshotOffer } from "@/lib/db";
+import type { NewsData, NewsItem } from "@/lib/news";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -34,6 +35,9 @@ export interface ReportContentProps {
   offers: SnapshotOffer[];
   primarySiteIds: Set<string>;
   groupSnapshots?: ReportSnapshot[];
+  /** News data from the autos.media news service. Null = service not yet
+   *  connected; shows a placeholder. */
+  news?: NewsData | null;
   /** When true, show admin-only controls (Copy Link, Export CSV). */
   adminControls?: boolean;
   /** Tailwind classes for the outermost wrapper div. Defaults to
@@ -207,6 +211,83 @@ function GridLegend({ hasRanking }: { hasRanking: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// Brand news section
+// ---------------------------------------------------------------------------
+
+const CATEGORY_LABELS: Record<NewsItem["category"], string> = {
+  recall: "Recall",
+  new_model: "New Model",
+  sales: "Sales",
+  regulatory: "Regulatory",
+  workforce: "Workforce",
+  incentives: "Incentives",
+  industry: "Industry",
+};
+
+const CATEGORY_COLORS: Record<NewsItem["category"], string> = {
+  recall: "bg-red-700 text-white",
+  new_model: "bg-[#1b3a6b] text-white",
+  regulatory: "bg-amber-700 text-white",
+  sales: "bg-emerald-700 text-white",
+  workforce: "bg-zinc-600 text-white",
+  incentives: "bg-indigo-700 text-white",
+  industry: "bg-zinc-500 text-white",
+};
+
+function NewsCard({ item }: { item: NewsItem }) {
+  return (
+    <div className="flex gap-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+      <div className="flex-shrink-0">
+        <span
+          className={`inline-flex items-center justify-center rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${CATEGORY_COLORS[item.category]}`}
+          style={{ minWidth: "4.5rem", textAlign: "center" }}
+        >
+          {CATEGORY_LABELS[item.category]}
+        </span>
+      </div>
+      <div className="min-w-0">
+        <a
+          href={item.source_url}
+          target="_blank"
+          rel="noreferrer"
+          className="font-semibold text-zinc-900 hover:text-[#1b3a6b] hover:underline"
+        >
+          {item.headline}
+        </a>
+        <p className="mt-1 text-sm text-zinc-600">{item.summary}</p>
+      </div>
+    </div>
+  );
+}
+
+function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; brand?: string }) {
+  const brandLabel = brand
+    ? `Current ${brand} developments relevant to this dealer group.`
+    : "Current brand developments relevant to this dealer group.";
+
+  const items = news
+    ? [...news.brand_items, ...news.industry_items].slice(0, 4)
+    : [];
+
+  return (
+    <section id="brand-news" className="mb-10">
+      <SectionHeading num="1" title="Brand News" sub={news ? brandLabel : undefined} />
+      {items.length > 0 ? (
+        <div className="space-y-3">
+          {items.map((item) => (
+            <NewsCard key={item.id} item={item} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center text-sm text-zinc-400">
+          Brand &amp; industry news will appear here once the news service is connected.
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Copy-link button (client interaction)
 // ---------------------------------------------------------------------------
 
@@ -241,6 +322,7 @@ export function ReportContent({
   offers,
   primarySiteIds,
   groupSnapshots = [],
+  news,
   adminControls = false,
   containerClassName = "mx-auto max-w-6xl px-4 py-8",
 }: ReportContentProps) {
@@ -406,6 +488,11 @@ export function ReportContent({
       )}
 
       {/* ------------------------------------------------------------------ */}
+      {/* 1 · Brand News                                                      */}
+      {/* ------------------------------------------------------------------ */}
+      <BrandNewsSection news={news} brand={news?.brand} />
+
+      {/* ------------------------------------------------------------------ */}
       {/* Executive brief                                                     */}
       {/* ------------------------------------------------------------------ */}
       <div className="mb-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
@@ -460,11 +547,11 @@ export function ReportContent({
       </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 1 · Lease Specials                                                  */}
+      {/* 2 · Lease Specials                                                  */}
       {/* ------------------------------------------------------------------ */}
       <section id="lease" className="mb-10">
         <SectionHeading
-          num="1"
+          num="2"
           title="Lease Specials"
           sub="Ranked by advertised monthly payment per model (lower = better). Terms and due-at-signing differ — see cell details."
         />
@@ -506,11 +593,11 @@ export function ReportContent({
       </section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 2 · Finance (APR) Specials                                          */}
+      {/* 3 · Finance (APR) Specials                                          */}
       {/* ------------------------------------------------------------------ */}
       <section id="finance" className="mb-10">
         <SectionHeading
-          num="2"
+          num="3"
           title="Finance (APR) Specials"
           sub="Ranked by advertised APR per model (lower = better). Term length varies and is shown in each cell."
         />
@@ -537,11 +624,11 @@ export function ReportContent({
       </section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 3 · Cash & Discount Specials                                        */}
+      {/* 4 · Cash & Discount Specials                                        */}
       {/* ------------------------------------------------------------------ */}
       <section id="cash" className="mb-10">
         <SectionHeading
-          num="3"
+          num="4"
           title="Cash &amp; Discount Specials"
           sub="Ranked by advertised discount amount (larger = better)."
         />
@@ -571,11 +658,11 @@ export function ReportContent({
       </section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 4 · Service Specials                                                */}
+      {/* 5 · Service Specials                                                */}
       {/* ------------------------------------------------------------------ */}
       <section id="service" className="mb-10">
         <SectionHeading
-          num="4"
+          num="5"
           title="Service Specials"
           sub="Advertised service offers per dealer."
         />
@@ -652,7 +739,7 @@ export function ReportContent({
       {hasCompliance && (
         <section id="compliance" className="mb-10">
           <SectionHeading
-            num="5"
+            num="6"
             title="Ad Compliance"
             sub={`Compliance grades for ${anchor?.siteName ?? "anchor"} offers.`}
           />

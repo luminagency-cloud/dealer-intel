@@ -7,6 +7,7 @@ import {
   listSnapshotsForGroup,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
+import { fetchNewsForBrand } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,19 @@ export default async function AdminReportPage({
       : Promise.resolve([snapshot]),
   ]);
 
+  // Infer brand from the most common vehicleMake across offers.
+  // Will be null until dealers have a brand field; news fetch gracefully
+  // returns null when brand is unknown or the API is not configured.
+  const makeCounts = new Map<string, number>();
+  for (const o of offers) {
+    if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
+  }
+  const primaryBrand = makeCounts.size > 0
+    ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    : null;
+
+  const news = await fetchNewsForBrand(primaryBrand);
+
   return (
     <div>
       <div className="mb-4">
@@ -41,6 +55,7 @@ export default async function AdminReportPage({
         offers={offers}
         primarySiteIds={primarySiteIds}
         groupSnapshots={groupSnapshots}
+        news={news}
         adminControls={true}
         containerClassName="mx-auto max-w-6xl"
       />

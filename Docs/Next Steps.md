@@ -13,7 +13,6 @@ _Last updated: June 2026_
 - [ ] Run `npx tsc --noEmit && npm run lint && npm run build` clean
 
 ### Phase 12 — AI Analysis (needs API key)
-- [ ] Add `ANTHROPIC_API_KEY` to `.env`
 - [ ] Re-run analysis on a run that has low-confidence offers
 - [ ] Confirm AI-enriched offers get the "AI" badge in the report
 
@@ -46,7 +45,7 @@ _Last updated: June 2026_
 Get a live URL so a dealer client can view a report — no auth, just `/r/[id]`.
 
 ### Decision
-- Deploy the **full monolith** to Railway (free Hobby tier)
+- Deploy the /viewer to Vercel
 - Collections continue to run **locally** — Playwright never fires on the cloud server
 - Neon (DB) and R2 (evidence files) are already cloud — the deployed app just reads them
 - Dealer hits `/r/<snapshot-id>`, sees the report, no login required
@@ -88,3 +87,24 @@ Key facts to bring into that conversation:
 - Playwright/Chromium is the only heavyweight dependency; it only runs during collection
 - The app needs a persistent Node process (no serverless)
 - DB: Neon Postgres (remote). Storage: Cloudflare R2 (remote). Auth: NextAuth.
+
+
+Special note on news collector reports
+## pulled in from external API
+see Docs\NewsGather\autos-media-news-spec.md for details
+
+### Report rendering rule
+Assume
+* news section *
+  ** brand section **
+  ** Industry section **
+* *
+- If `fetchNewsForBrand` returns null or empty arrays → brand news section does not render 
+- If `fetchNewsForIndustry` returns null or empty arrays → industry news section does not render 
+- if both return null or empty, entire news section does not render
+- If `fresh === false` → optionally show a subtle "News last updated [date]" note
+- Display: brand_items first, then industry_items
+- Max display in report: 4 items total (you trim from the API's returned max)
+- Each card: category pill + headline (linked to source_url) + summary. No rewriting.
+
+---
