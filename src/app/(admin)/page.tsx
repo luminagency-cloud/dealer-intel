@@ -1,123 +1,323 @@
 import Link from "next/link";
-import { getDb, isDatabaseConfigured, collectionRuns, sites, reportSnapshots } from "@/lib/db";
-import { count } from "drizzle-orm";
+import { isDatabaseConfigured } from "@/lib/db";
+import { getISOWeekLabel, getPriorISOWeekLabel } from "@/lib/cycle";
+import { getCycleGroupStatus, type GroupCycleStatus } from "@/lib/db/ops-board";
+import { fetchNewsOverview, isNewsConfigured, type NewsOverview } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 
-export default async function HomePage() {
-  let stats = { dealers: 0, runs: 0, snapshots: 0 };
+// ── cell helpers ─────────────────────────────────────────────────────────────
 
-  if (isDatabaseConfigured()) {
-    const [dealerCount, runCount, snapshotCount] = await Promise.all([
-      getDb().select({ n: count() }).from(sites),
-      getDb().select({ n: count() }).from(collectionRuns),
-      getDb().select({ n: count() }).from(reportSnapshots),
-    ]);
-    stats = {
-      dealers: dealerCount[0]?.n ?? 0,
-      runs: runCount[0]?.n ?? 0,
-      snapshots: snapshotCount[0]?.n ?? 0,
-    };
+type CellState = "done" | "running" | "action" | "blocked" | "warn";
+
+function Cell({
+  state,
+  children,
+}: {
+  state: CellState;
+  children: React.ReactNode;
+}) {
+  const cls = {
+    done: "text-emerald-700",
+    running: "text-blue-600",
+    action: "font-medium text-amber-700",
+    blocked: "text-zinc-300",
+    warn: "text-amber-600",
+  }[state];
+  return <td className={`px-4 py-2.5 text-sm ${cls}`}>{children}</td>;
+}
+
+// ── per-group row ─────────────────────────────────────────────────────────────
+
+function GroupRow({ g, dim }: { g: GroupCycleStatus; dim?: boolean }) {
+  const run = g.run;
+  const snaps = g.snapshots;
+
+  // ── collect ──
+  let collectState: CellState = "blocked";
+  let collectLabel = "—";
+  if (run) {
+    if (run.status === "running") {
+      collectState = "running";
+      collectLabel = `${run.doneMissions}/${run.totalMissions}`;
+    } else if (run.status === "complete" || run.status === "review") {
+      collectState = "done";
+      collectLabel = `✓ ${run.totalMissions}`;
+    } else if (run.status === "failed") {
+      collectState = "warn";
+      collectLabel = "✗ failed";
+    } else {
+      collectState = "action";
+      collectLabel = "Queued";
+    }
+  } else if (!dim) {
+    collectState = "action";
+    collectLabel = "Not run";
   }
 
+  const collectDone = run?.status === "complete" || run?.status === "review";
+
+  // ── analyze ──
+  let analyzeState: CellState = "blocked";
+  let analyzeLabel = "—";
+  if (run && collectDone) {
+    if (run.analysisRunning) {
+      analyzeState = "running";
+      analyzeLabel = "analyzing…";
+    } else if (run.analysisDone) {
+      if (run.offerCount > 0) {
+        analyzeState = "done";
+        analyzeLabel = `✓ ${run.offerCount} offers`;
+      } else {
+        analyzeState = "warn";
+        analyzeLabel = "0 offers";
+      }
+    } else if (!dim) {
+      analyzeState = "action";
+      analyzeLabel = "Not run";
+    }
+  }
+
+  const analyzeDone = run?.analysisDone && (run?.offerCount ?? 0) > 0;
+
+  // ── freeze ──
+  let freezeState: CellState = "blocked";
+  let freezeLabel = "—";
+  if (snaps.length > 0) {
+    freezeState = "done";
+    freezeLabel = `✓ ${snaps.length === 1 ? "Frozen" : `${snaps.length} snapshots`}`;
+  } else if (analyzeDone) {
+    freezeState = dim ? "blocked" : "action";
+    freezeLabel = dim ? "—" : "Not frozen";
+  }
+
+  const freezeDone = snaps.length > 0;
+
+  // ── reports ──
+  let reportsState: CellState = "blocked";
+  let reportsLabel = "—";
+  if (freezeDone) {
+    const live = snaps.filter((s) => s.clientVisible).length;
+    const total = snaps.length;
+    if (live === total) {
+      reportsState = "done";
+      reportsLabel = `✓ Live`;
+    } else if (live > 0) {
+      reportsState = "warn";
+      reportsLabel = `${live}/${total} live`;
+    } else {
+      reportsState = dim ? "blocked" : "action";
+      reportsLabel = dim ? "—" : "Not published";
+    }
+  }
+
+  const runHref = run ? `/runs/${run.id}` : "/runs";
+
   return (
-    <div className="mx-auto max-w-3xl">
+    <tr className="border-t border-zinc-100 hover:bg-zinc-50/50">
+      <td className="py-2.5 pl-4 pr-3 text-sm font-medium text-zinc-800">
+        {run ? (
+          <Link href={runHref} className="hover:underline">
+            {g.groupName}
+          </Link>
+        ) : (
+          g.groupName
+        )}
+      </td>
+
+      {/* Collect */}
+      <Cell state={collectState}>
+        {collectState === "action" && !dim ? (
+          <Link href="/runs" className="hover:underline">
+            {collectLabel} →
+          </Link>
+        ) : (
+          collectLabel
+        )}
+      </Cell>
+
+      {/* Analyze */}
+      <Cell state={analyzeState}>
+        {analyzeState === "action" && run ? (
+          <Link href={`/runs/${run.id}`} className="hover:underline">
+            {analyzeLabel} →
+          </Link>
+        ) : (
+          analyzeLabel
+        )}
+      </Cell>
+
+      {/* Freeze */}
+      <Cell state={freezeState}>
+        {freezeState === "action" && run ? (
+          <Link href={`/runs/${run.id}`} className="hover:underline">
+            {freezeLabel} →
+          </Link>
+        ) : freezeState === "done" && snaps[0] ? (
+          <Link href={`/snapshots/${snaps[0].id}`} className="hover:underline">
+            {freezeLabel}
+          </Link>
+        ) : (
+          freezeLabel
+        )}
+      </Cell>
+
+      {/* Reports */}
+      <Cell state={reportsState}>
+        {reportsState === "action" && snaps[0] ? (
+          <Link href={`/snapshots/${snaps[0].id}`} className="hover:underline">
+            {reportsLabel} →
+          </Link>
+        ) : reportsState === "done" && snaps[0] ? (
+          <Link href={`/reports/${snaps[0].id}`} className="hover:underline">
+            {reportsLabel}
+          </Link>
+        ) : (
+          reportsLabel
+        )}
+      </Cell>
+    </tr>
+  );
+}
+
+// ── news bar ──────────────────────────────────────────────────────────────────
+
+function NewsBar({ overview }: { overview: NewsOverview }) {
+  return (
+    <div className="mt-3 flex items-center gap-3 rounded-lg border border-zinc-100 bg-zinc-50 px-4 py-2.5 text-sm">
+      <span
+        className={`h-2 w-2 shrink-0 rounded-full ${overview.fresh ? "bg-emerald-500" : "bg-amber-400"}`}
+      />
+      <span className="font-medium text-zinc-700">
+        News{overview.fresh ? ` ✓ ${overview.week}` : " — stale"}
+      </span>
+      {overview.generalCount > 0 && (
+        <span className="text-zinc-500">General: {overview.generalCount}</span>
+      )}
+      {overview.brandCounts.map((b) => (
+        <span key={b.brand} className="text-zinc-500">
+          {b.brand}: {b.count}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── cycle section ─────────────────────────────────────────────────────────────
+
+function CycleSection({
+  cycle,
+  groups,
+  label,
+  newsOverview,
+  dim,
+}: {
+  cycle: string;
+  groups: GroupCycleStatus[];
+  label: string;
+  newsOverview?: NewsOverview | null;
+  dim?: boolean;
+}) {
+  const doneCount = groups.filter(
+    (g) => g.snapshots.some((s) => s.clientVisible)
+  ).length;
+  const total = groups.length;
+
+  return (
+    <div className={`mb-6 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm ${dim ? "opacity-60" : ""}`}>
       {/* Header */}
-      <div className="mb-10 text-center">
-        <h1 className="text-2xl font-semibold text-zinc-900">
-          What would you like to do?
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500">
-          Dealer Intel monitors competitor offers and flags compliance issues across your dealer group.
-        </p>
+      <div className="flex items-baseline gap-3 border-b border-zinc-100 px-4 py-3">
+        <span className="font-mono text-sm font-semibold text-zinc-800">{cycle}</span>
+        <span className="text-xs text-zinc-400">{label}</span>
+        <span className="ml-auto text-xs text-zinc-400">
+          {doneCount}/{total} groups live
+        </span>
       </div>
 
-      {/* Two main CTAs */}
-      <div className="mb-12 grid grid-cols-2 gap-4">
-        <Link
-          href="/runs"
-          className="group flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
-        >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
-              <path fillRule="evenodd" d="M10 1a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 10 1ZM5.05 3.05a.75.75 0 0 1 1.06 0l1.062 1.06A.75.75 0 1 1 6.11 5.173L5.05 4.11a.75.75 0 0 1 0-1.06Zm9.9 0a.75.75 0 0 1 0 1.06l-1.06 1.062a.75.75 0 0 1-1.062-1.061l1.061-1.06a.75.75 0 0 1 1.06 0ZM3 8a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 0 1.5h-1.5A.75.75 0 0 1 3 8Zm11 0a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 0 1.5h-1.5A.75.75 0 0 1 14 8Zm-6.828 2.828a.75.75 0 0 1 0 1.061L6.11 12.95a.75.75 0 0 1-1.06-1.06l1.06-1.06a.75.75 0 0 1 1.061 0Zm3.656 0a.75.75 0 0 1 1.06 0l1.062 1.06a.75.75 0 0 1-1.061 1.061l-1.06-1.06a.75.75 0 0 1 0-1.061ZM10 13a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 10 13Z" clipRule="evenodd" />
-              <path d="M10 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
-            </svg>
-          </div>
-          <div>
-            <p className="font-semibold text-zinc-900 group-hover:text-zinc-700">Collect Data</p>
-            <p className="mt-0.5 text-sm text-zinc-500">
-              Start a new run to capture offers and evidence from dealer websites.
-            </p>
-          </div>
-          <p className="mt-auto text-xs text-zinc-400">
-            {stats.runs} run{stats.runs !== 1 ? "s" : ""} so far
-          </p>
-        </Link>
+      {/* Table */}
+      <table className="w-full">
+        <thead>
+          <tr className="text-left text-xs uppercase tracking-wide text-zinc-400">
+            <th className="py-2 pl-4 pr-3 font-medium">Dealer Group</th>
+            <th className="px-4 py-2 font-medium">Collect</th>
+            <th className="px-4 py-2 font-medium">Analyze</th>
+            <th className="px-4 py-2 font-medium">Freeze</th>
+            <th className="px-4 py-2 font-medium">Reports</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="px-4 py-6 text-center text-sm text-zinc-400">
+                No dealer groups configured.
+              </td>
+            </tr>
+          ) : (
+            groups.map((g) => <GroupRow key={g.groupId} g={g} dim={dim} />)
+          )}
+        </tbody>
+      </table>
 
-        <Link
-          href="/reports"
-          className="group flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
-        >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50 text-green-600">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
-              <path fillRule="evenodd" d="M3 3.5A1.5 1.5 0 0 1 4.5 2h6.879a1.5 1.5 0 0 1 1.06.44l4.122 4.12A1.5 1.5 0 0 1 17 7.622V16.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 16.5v-13Zm10.857 5.691-4.204 4.204a.75.75 0 0 1-1.06 0L6.47 11.262a.75.75 0 1 1 1.06-1.06l1.604 1.603 3.673-3.674a.75.75 0 0 1 1.05 1.061Z" clipRule="evenodd" />
-            </svg>
-          </div>
-          <div>
-            <p className="font-semibold text-zinc-900 group-hover:text-zinc-700">Run Reports</p>
-            <p className="mt-0.5 text-sm text-zinc-500">
-              View competitive offer reports built from published snapshots.
-            </p>
-          </div>
-          <p className="mt-auto text-xs text-zinc-400">
-            {stats.snapshots} snapshot{stats.snapshots !== 1 ? "s" : ""} available
-          </p>
-        </Link>
+      {/* News bar — current cycle only */}
+      {newsOverview && (
+        <div className="border-t border-zinc-100 px-4 pb-3 pt-0">
+          <NewsBar overview={newsOverview} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── page ──────────────────────────────────────────────────────────────────────
+
+export default async function HomePage() {
+  if (!isDatabaseConfigured()) {
+    return (
+      <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        Database not configured.
       </div>
+    );
+  }
 
-      {/* Pipeline flow */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <p className="mb-5 text-xs font-semibold uppercase tracking-wide text-zinc-400">How it works</p>
-        <div className="flex items-start gap-3">
-          {/* Step 1 */}
-          <div className="flex flex-1 flex-col items-center text-center">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">1</div>
-            <p className="mt-2 text-sm font-medium text-zinc-800">Collection</p>
-            <p className="mt-1 text-xs text-zinc-500">Browser visits each dealer site and captures offer pages, screenshots, and disclaimer text.</p>
-            <Link href="/runs" className="mt-2 text-xs text-blue-600 hover:underline">Runs →</Link>
-          </div>
+  const currentCycle = getISOWeekLabel();
+  const priorCycle = getPriorISOWeekLabel(currentCycle);
 
-          <div className="mt-4 text-zinc-300">→</div>
+  const [currentGroups, priorGroups, newsOverview] = await Promise.all([
+    getCycleGroupStatus(currentCycle),
+    getCycleGroupStatus(priorCycle),
+    isNewsConfigured() ? fetchNewsOverview() : Promise.resolve(null),
+  ]);
 
-          {/* Step 2 */}
-          <div className="flex flex-1 flex-col items-center text-center">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-700">2</div>
-            <p className="mt-2 text-sm font-medium text-zinc-800">Analysis</p>
-            <p className="mt-1 text-xs text-zinc-500">Rule-based extraction pulls structured offers from captured HTML. AI enriches low-confidence cases.</p>
-            <Link href="/review" className="mt-2 text-xs text-blue-600 hover:underline">Review →</Link>
-          </div>
-
-          <div className="mt-4 text-zinc-300">→</div>
-
-          {/* Step 3 */}
-          <div className="flex flex-1 flex-col items-center text-center">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-sm font-semibold text-green-700">3</div>
-            <p className="mt-2 text-sm font-medium text-zinc-800">Reporting</p>
-            <p className="mt-1 text-xs text-zinc-500">Snapshots freeze the analysis output. Reports compare offers across the dealer group with compliance grades.</p>
-            <Link href="/reports" className="mt-2 text-xs text-blue-600 hover:underline">Reports →</Link>
-          </div>
+  return (
+    <div>
+      <div className="mb-5 flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-zinc-900">Weekly Ops</h1>
+        <div className="flex items-center gap-3 text-sm">
+          <Link href="/runs" className="text-zinc-500 hover:text-zinc-900">
+            Runs →
+          </Link>
+          <Link href="/snapshots" className="text-zinc-500 hover:text-zinc-900">
+            Snapshots →
+          </Link>
+          <Link href="/reports" className="text-zinc-500 hover:text-zinc-900">
+            Reports →
+          </Link>
         </div>
       </div>
 
-      {/* Quick stats */}
-      <div className="mt-4 flex items-center justify-center gap-6 text-xs text-zinc-400">
-        <span>{stats.dealers} dealer{stats.dealers !== 1 ? "s" : ""}</span>
-        <span>·</span>
-        <span>{stats.runs} run{stats.runs !== 1 ? "s" : ""}</span>
-        <span>·</span>
-        <span>{stats.snapshots} snapshot{stats.snapshots !== 1 ? "s" : ""}</span>
-      </div>
+      <CycleSection
+        cycle={currentCycle}
+        groups={currentGroups}
+        label="Current Cycle"
+        newsOverview={newsOverview}
+      />
+
+      <CycleSection
+        cycle={priorCycle}
+        groups={priorGroups}
+        label="Prior Cycle"
+        dim
+      />
     </div>
   );
 }

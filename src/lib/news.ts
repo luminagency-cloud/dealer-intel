@@ -1,10 +1,4 @@
-/**
- * News API client for the autos.media news service.
- * Returns null when the API is not configured or unavailable — callers
- * should render the news section as absent rather than erroring.
- */
-
-export interface NewsItem {
+export type NewsItem = {
   id: string;
   headline: string;
   summary: string;
@@ -18,36 +12,102 @@ export interface NewsItem {
     | "workforce"
     | "incentives"
     | "industry";
-}
+  brand?: string | null;
+};
 
-export interface NewsData {
-  brand: string;
+export type NewsData = {
+  audience: string;
+  brand: string | null;
   week: string;
   collected_at: string;
   fresh: boolean;
+  all_items: NewsItem[];
   brand_items: NewsItem[];
   industry_items: NewsItem[];
+  brand_groups: { brand: string; items: NewsItem[] }[];
+};
+
+export type NewsFreshness = {
+  fresh: boolean;
+  week: string;
+  collected_at: string;
+};
+
+function newsHeaders(): HeadersInit {
+  return { Authorization: `Bearer ${process.env.NEWS_API_KEY ?? ""}` };
 }
 
-export async function fetchNewsForBrand(
-  brand: string | null | undefined
-): Promise<NewsData | null> {
-  const baseUrl = process.env.NEWS_API_URL;
-  const apiKey = process.env.NEWS_API_KEY;
+function newsApiUrl(): string | null {
+  const u = process.env.NEWS_API_URL;
+  const k = process.env.NEWS_API_KEY;
+  return u && k ? u : null;
+}
 
-  if (!baseUrl || !apiKey || !brand) return null;
+export async function fetchNewsForBrand(brand: string | null): Promise<NewsData | null> {
+  const base = newsApiUrl();
+  if (!base || !brand) return null;
 
   try {
     const res = await fetch(
-      `${baseUrl}/api/news?brand=${encodeURIComponent(brand.toLowerCase())}`,
+      `${base}/api/news?brand=${encodeURIComponent(brand.toLowerCase())}`,
       {
-        headers: { Authorization: `Bearer ${apiKey}` },
+        headers: newsHeaders(),
         next: { revalidate: 3600 },
       }
     );
     if (!res.ok) return null;
-    return (await res.json()) as NewsData;
+    return res.json() as Promise<NewsData>;
   } catch {
     return null;
   }
 }
+
+export async function fetchNewsFreshness(): Promise<NewsFreshness | null> {
+  const base = newsApiUrl();
+  if (!base) return null;
+
+  try {
+    const res = await fetch(`${base}/api/news`, {
+      headers: newsHeaders(),
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as NewsData;
+    return { fresh: data.fresh, week: data.week, collected_at: data.collected_at };
+  } catch {
+    return null;
+  }
+}
+
+export type NewsOverview = {
+  fresh: boolean;
+  week: string;
+  generalCount: number;
+  brandCounts: { brand: string; count: number }[];
+};
+
+export async function fetchNewsOverview(): Promise<NewsOverview | null> {
+  const base = newsApiUrl();
+  if (!base) return null;
+  try {
+    const res = await fetch(`${base}/api/news`, {
+      headers: newsHeaders(),
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as NewsData;
+    return {
+      fresh: data.fresh,
+      week: data.week,
+      generalCount: data.industry_items?.length ?? 0,
+      brandCounts: (data.brand_groups ?? [])
+        .filter((bg) => bg.items.length > 0)
+        .map((bg) => ({ brand: bg.brand, count: bg.items.length })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export const isNewsConfigured = (): boolean =>
+  Boolean(process.env.NEWS_API_URL && process.env.NEWS_API_KEY);
