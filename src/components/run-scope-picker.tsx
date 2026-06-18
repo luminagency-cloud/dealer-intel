@@ -8,11 +8,14 @@ export function RunScopePicker({
   groups,
   sites,
   missions,
+  defaultCycle,
 }: {
   groups: { id: string; name: string }[];
   sites: { id: string; name: string }[];
   missions: { id: string; name: string }[];
+  defaultCycle: string;
 }) {
+  const [cycle, setCycle] = useState(defaultCycle);
   const [scope, setScope] = useState("");
   const [checkedGroups, setCheckedGroups] = useState<Set<string>>(new Set());
   const [checkedSites, setCheckedSites] = useState<Set<string>>(new Set());
@@ -67,6 +70,17 @@ export function RunScopePicker({
           </label>
         ))}
       </div>
+
+      {/* Cycle label */}
+      <input
+        type="text"
+        name="cycle"
+        value={cycle}
+        onChange={(e) => setCycle(e.target.value)}
+        aria-label="Reporting cycle"
+        placeholder="2026-W31"
+        className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm font-mono"
+      />
 
       {/* Scope selector */}
       <select

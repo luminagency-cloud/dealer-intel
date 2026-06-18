@@ -17,6 +17,7 @@ import { RunStatusBadge } from "@/components/run-status-badge";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { createRun, deleteSelectedRuns } from "./actions";
 import { fmtDateTime } from "@/lib/fmt-date";
+import { getISOWeekLabel } from "@/lib/cycle";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,7 @@ export default async function RunsPage({
             groups={groups.map((g) => ({ id: g.id, name: g.name }))}
             sites={activeSites.map((s) => ({ id: s.id, name: s.name }))}
             missions={activeMissions}
+            defaultCycle={getISOWeekLabel()}
           />
           <button
             type="submit"
@@ -113,6 +115,7 @@ export default async function RunsPage({
               <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
                 <tr>
                   <th className="px-4 py-3">Run</th>
+                  <th className="px-4 py-3">Cycle</th>
                   <th className="px-4 py-3">Scope</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Created</th>
@@ -132,6 +135,9 @@ export default async function RunsPage({
                       >
                         {run.id.slice(0, 8)}
                       </Link>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                      {run.cycle ?? "—"}
                     </td>
                     <td className="max-w-56 truncate px-4 py-3 text-zinc-600">
                       {run.runGroupId

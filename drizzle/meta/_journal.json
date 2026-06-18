@@ -134,6 +134,13 @@
       "when": 1781521695197,
       "tag": "0018_slippery_chronomancer",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781800520883,
+      "tag": "0019_mixed_loners",
+      "breakpoints": true
     }
   ]
 }

@@ -33,6 +33,7 @@ import { eq, inArray } from "drizzle-orm";
 import { resolveRunGroups } from "@/lib/db/repository";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { requireSession } from "@/lib/session";
+import { getISOWeekLabel } from "@/lib/cycle";
 
 export async function createRun(formData?: FormData) {
   await requireSession();
@@ -99,7 +100,13 @@ export async function createRun(formData?: FormData) {
   const restrictMissions =
     missionIds.length > 0 && missionIds.length < activeMissionCount;
 
-  const run = await createCollectionRun({ runGroupId: resolvedRunGroupId });
+  const cycleValue = formData?.get("cycle");
+  const cycle =
+    typeof cycleValue === "string" && cycleValue.trim()
+      ? cycleValue.trim()
+      : getISOWeekLabel();
+
+  const run = await createCollectionRun({ runGroupId: resolvedRunGroupId, cycle });
   if (siteIds.length > 0) {
     await getDb()
       .insert(collectionRunSites)

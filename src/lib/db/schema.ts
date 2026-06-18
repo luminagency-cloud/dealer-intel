@@ -199,6 +199,9 @@ export const collectionRuns = pgTable("collection_runs", {
   runGroupId: uuid("run_group_id").references(() => runGroups.id, {
     onDelete: "set null",
   }),
+  /** ISO week label for the reporting cycle this run belongs to (e.g. "2026-W31").
+   *  Defaults to the current ISO week at creation time; operator can override. */
+  cycle: text("cycle"),
   status: runStatusEnum("status").notNull().default("pending"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
