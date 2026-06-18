@@ -393,9 +393,23 @@ export async function resolveRunGroups(
     groupMap.get(row.groupId)!.siteIds.add(row.siteId);
   }
 
-  return [...groupMap.entries()]
+  const matched = [...groupMap.entries()]
     .filter(([, g]) => [...g.siteIds].every((s) => runSiteSet.has(s)))
-    .map(([id, g]) => ({ id, name: g.name, siteIds: [...g.siteIds] }))
+    .map(([id, g]) => ({ id, name: g.name, siteIds: [...g.siteIds] }));
+
+  // Drop groups whose site set is a proper subset of another matched group.
+  // Prevents single-site groups from appearing when their site is also a member
+  // of a larger suite that was actually selected.
+  return matched
+    .filter(
+      (g) =>
+        !matched.some(
+          (other) =>
+            other.id !== g.id &&
+            other.siteIds.length > g.siteIds.length &&
+            g.siteIds.every((s) => other.siteIds.includes(s))
+        )
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

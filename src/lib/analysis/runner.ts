@@ -26,11 +26,22 @@ import {
 
 const globalState = globalThis as unknown as {
   __activeAnalysisRuns?: Set<string>;
+  __analysisProgress?: Map<string, { processed: number; total: number }>;
 };
 const activeAnalyses = (globalState.__activeAnalysisRuns ??= new Set<string>());
+const analysisProgress = (globalState.__analysisProgress ??= new Map<
+  string,
+  { processed: number; total: number }
+>());
 
 export function isAnalysisRunning(runId: string): boolean {
   return activeAnalyses.has(runId);
+}
+
+export function getAnalysisProgress(
+  runId: string
+): { processed: number; total: number } | null {
+  return analysisProgress.get(runId) ?? null;
 }
 
 interface SiteInfo {
@@ -190,6 +201,7 @@ async function processAnalysis(
   rows: EvidenceWithSite[]
 ): Promise<void> {
   const db = getDb();
+  analysisProgress.set(runId, { processed: 0, total: rows.length });
   try {
     await db.delete(offers).where(eq(offers.collectionRunId, runId));
     await db
@@ -238,6 +250,9 @@ async function processAnalysis(
         }
         screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
       }
+
+      const prog = analysisProgress.get(runId);
+      if (prog) prog.processed += 1;
 
       for (const offer of extracted) {
         const signature = [
@@ -451,6 +466,7 @@ async function processAnalysis(
       .where(eq(collectionRuns.id, runId));
   } finally {
     activeAnalyses.delete(runId);
+    analysisProgress.delete(runId);
   }
 }
 

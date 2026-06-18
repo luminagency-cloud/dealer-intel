@@ -50,16 +50,16 @@ export function RunWorkflowStrip({
 
   return (
     <div className="sticky top-0 z-20 border-b border-zinc-200 bg-white shadow-sm">
-      <div className="flex items-center gap-0 divide-x divide-zinc-100 text-sm">
+      <div className="flex items-center gap-0 divide-x divide-zinc-100">
 
         {/* Step 1 — Collect */}
         <a
           href="#collection"
-          className="flex min-w-0 items-center gap-2 px-4 py-3 hover:bg-zinc-50"
+          className="flex min-w-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
         >
           <StepDot done={collectDone} active={executing} n={1} />
-          <span className="font-medium text-zinc-800">Collect</span>
-          <span className="text-xs text-zinc-400">
+          <span className="text-base font-semibold text-zinc-800">Collect</span>
+          <span className="text-sm text-zinc-400">
             {executing
               ? `${settled}/${totalWorkItems} running`
               : stalled
@@ -72,7 +72,7 @@ export function RunWorkflowStrip({
             <form action={resumeAction} onClick={(e) => e.stopPropagation()}>
               <button
                 type="submit"
-                className="ml-1 rounded bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-700"
+                className="ml-1 rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700"
               >
                 Resume
               </button>
@@ -82,7 +82,7 @@ export function RunWorkflowStrip({
             <form action={executeAllAction} onClick={(e) => e.stopPropagation()}>
               <button
                 type="submit"
-                className="ml-1 rounded bg-zinc-900 px-2 py-0.5 text-xs font-medium text-white hover:bg-zinc-700"
+                className="ml-1 rounded bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700"
               >
                 Start
               </button>
@@ -90,16 +90,16 @@ export function RunWorkflowStrip({
           )}
         </a>
 
-        <span className="px-2 text-zinc-300">→</span>
+        <span className="px-3 text-lg text-zinc-300">→</span>
 
         {/* Step 2 — Analyze */}
         <a
           href="#analysis"
-          className="flex min-w-0 items-center gap-2 px-4 py-3 hover:bg-zinc-50"
+          className="flex min-w-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
         >
           <StepDot done={analyzeDone} active={analyzing} n={2} />
-          <span className="font-medium text-zinc-800">Analyze</span>
-          <span className="text-xs text-zinc-400">
+          <span className="text-base font-semibold text-zinc-800">Analyze</span>
+          <span className="text-sm text-zinc-400">
             {analyzing
               ? "running…"
               : offerCount > 0
@@ -112,7 +112,7 @@ export function RunWorkflowStrip({
             <form action={runAnalysisAction} onClick={(e) => e.stopPropagation()}>
               <button
                 type="submit"
-                className="ml-1 rounded bg-zinc-900 px-2 py-0.5 text-xs font-medium text-white hover:bg-zinc-700"
+                className="ml-1 rounded bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700"
               >
                 {offerCount > 0 ? "Re-run" : "Run"}
               </button>
@@ -120,16 +120,16 @@ export function RunWorkflowStrip({
           )}
         </a>
 
-        <span className="px-2 text-zinc-300">→</span>
+        <span className="px-3 text-lg text-zinc-300">→</span>
 
         {/* Step 3 — Freeze */}
         <a
           href="#snapshot"
-          className="flex min-w-0 items-center gap-2 px-4 py-3 hover:bg-zinc-50"
+          className="flex min-w-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
         >
           <StepDot done={hasSnapshot} active={false} n={3} />
-          <span className="font-medium text-zinc-800">Freeze</span>
-          <span className="text-xs text-zinc-400">
+          <span className="text-base font-semibold text-zinc-800">Freeze</span>
+          <span className="text-sm text-zinc-400">
             {hasSnapshot
               ? `${snapshots.length} snapshot${snapshots.length > 1 ? "s" : ""}`
               : offerCount > 0
@@ -144,7 +144,7 @@ export function RunWorkflowStrip({
               <input type="hidden" name="label" value={defaultSnapshotLabel ?? ""} />
               <button
                 type="submit"
-                className="ml-1 rounded bg-zinc-900 px-2 py-0.5 text-xs font-medium text-white hover:bg-zinc-700"
+                className="ml-1 rounded bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700"
               >
                 {hasSnapshot ? "Re-freeze" : "Freeze"}
               </button>
@@ -167,18 +167,18 @@ function StepDot({
 }) {
   if (active)
     return (
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-semibold text-blue-700">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-semibold text-blue-700">
         …
       </span>
     );
   if (done)
     return (
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-green-100 text-[10px] font-semibold text-green-700">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-100 text-xs font-semibold text-green-700">
         ✓
       </span>
     );
   return (
-    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-semibold text-zinc-500">
+    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-500">
       {n}
     </span>
   );

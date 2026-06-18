@@ -17,7 +17,7 @@ import {
   resolveRunGroups,
 } from "@/lib/db/repository";
 import { isRunExecuting } from "@/lib/run-executor";
-import { isAnalysisRunning } from "@/lib/analysis";
+import { isAnalysisRunning, getAnalysisProgress } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { MissionRunPanel } from "@/components/mission-run-panel";
@@ -117,6 +117,7 @@ export default async function RunDetailPage({
     !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
   const analyzing = isAnalysisRunning(run.id);
+  const analysisProgressData = getAnalysisProgress(run.id);
   // Any captured pages means HTML snapshots exist — safe proxy without loading evidence.
   const canAnalyze =
     run.status !== "failed" &&
@@ -229,6 +230,7 @@ export default async function RunDetailPage({
           analysisStartedAt={run.analysisStartedAt}
           analysisCompletedAt={run.analysisCompletedAt}
           evidencePageCount={evidencePageCount}
+          pagesProcessed={analysisProgressData?.processed ?? null}
           runAnalysisAction={runAnalysis.bind(null, run.id)}
           canAnalyze={canAnalyze}
         />

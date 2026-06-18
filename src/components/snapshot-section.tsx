@@ -35,7 +35,7 @@ export function SnapshotSection({
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-100 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-900">
+        <h2 className="text-xl font-semibold text-zinc-900">
           Snapshots{" "}
           {snapshots.length > 0 && (
             <span className="font-normal text-zinc-500">
@@ -43,7 +43,7 @@ export function SnapshotSection({
             </span>
           )}
         </h2>
-        <p className="mt-0.5 text-xs text-zinc-500">
+        <p className="mt-1 text-sm text-zinc-500">
           {isMultiGroup
             ? "Combined run — freeze each group independently or all at once. Reports never cross group boundaries."
             : "Freeze this run's offers into an immutable snapshot for reporting. Reports read snapshots only, never the live run."}
@@ -68,15 +68,20 @@ export function SnapshotSection({
               return (
                 <li key={group.id} className="flex items-center justify-between px-4 py-3 text-sm">
                   <span className="font-medium text-zinc-900">{group.name}</span>
-                  <div className="flex items-center gap-3">
-                    {existing && (
+                  <div className="flex items-center gap-4">
+                    {existing ? (
                       <Link
                         href={`/snapshots/${existing.id}`}
-                        className="text-xs text-zinc-500 hover:underline"
+                        className="text-sm text-zinc-500 hover:underline"
                       >
-                        ✓ {existing.offerCount} offers · {formatDate(existing.approvedAt)}
+                        ✓ {existing.offerCount} offers
                       </Link>
+                    ) : (
+                      <span className="text-sm text-zinc-300">not frozen</span>
                     )}
+                    <span className="w-36 text-right text-sm text-zinc-500">
+                      {existing ? formatDate(existing.approvedAt) : "—"}
+                    </span>
                     <form action={publishAction}>
                       <input type="hidden" name="groupId" value={group.id} />
                       <input type="hidden" name="label" value={label} />

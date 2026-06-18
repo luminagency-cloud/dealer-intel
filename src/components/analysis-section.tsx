@@ -42,6 +42,7 @@ export function AnalysisSection({
   analysisStartedAt,
   analysisCompletedAt,
   evidencePageCount,
+  pagesProcessed,
   runAnalysisAction,
   canAnalyze,
 }: {
@@ -54,6 +55,8 @@ export function AnalysisSection({
   analysisCompletedAt?: Date | null;
   /** Total HTML snapshot pages this run captured — used for progress display. */
   evidencePageCount: number;
+  /** Pages processed so far during an active analysis run. */
+  pagesProcessed: number | null;
   runAnalysisAction: () => Promise<void>;
   canAnalyze: boolean;
 }) {
@@ -70,12 +73,12 @@ export function AnalysisSection({
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
-        <div>
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => setCollapsed((c) => !c)}
-              className="text-sm font-semibold text-zinc-900 hover:text-zinc-600"
+              className="text-xl font-semibold text-zinc-900 hover:text-zinc-600"
             >
               Analysis{" "}
               {offers.length > 0 && (
@@ -84,7 +87,7 @@ export function AnalysisSection({
                   {siteFilter !== "all" && ` · ${visible.length} shown`}
                 </span>
               )}
-              <span className="ml-2 text-xs font-normal text-zinc-400">
+              <span className="ml-2 text-sm font-normal text-zinc-400">
                 {collapsed ? "▸ expand" : "▾ collapse"}
               </span>
             </button>
@@ -92,7 +95,7 @@ export function AnalysisSection({
               <select
                 value={siteFilter}
                 onChange={(e) => setSiteFilter(e.target.value)}
-                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none"
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 focus:outline-none"
               >
                 <option value="all">All sites</option>
                 {siteOptions
@@ -106,14 +109,28 @@ export function AnalysisSection({
             )}
           </div>
           {analyzing ? (
-            <p className="mt-0.5 text-xs text-zinc-400">
-              {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)} · </>}
-              {evidencePageCount > 0
-                ? `${offers.length} offer${offers.length !== 1 ? "s" : ""} found so far · ${evidencePageCount} page${evidencePageCount !== 1 ? "s" : ""} to process`
-                : "Starting…"}
-            </p>
+            <div className="mt-1.5">
+              <p className="text-sm text-zinc-500">
+                {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)} · </>}
+                {evidencePageCount > 0 && pagesProcessed !== null
+                  ? `Analyzing page ${pagesProcessed} of ${evidencePageCount} · ${offers.length} offer${offers.length !== 1 ? "s" : ""} found`
+                  : evidencePageCount > 0
+                    ? `${offers.length} offer${offers.length !== 1 ? "s" : ""} found so far · ${evidencePageCount} page${evidencePageCount !== 1 ? "s" : ""} to process`
+                    : "Starting…"}
+              </p>
+              {evidencePageCount > 0 && pagesProcessed !== null && (
+                <div className="mt-1.5 h-1.5 w-full max-w-sm rounded-full bg-zinc-100">
+                  <div
+                    className="h-1.5 rounded-full bg-zinc-400 transition-all duration-300"
+                    style={{
+                      width: `${Math.min(100, Math.round((pagesProcessed / evidencePageCount) * 100))}%`,
+                    }}
+                  />
+                </div>
+              )}
+            </div>
           ) : (analysisStartedAt || analysisCompletedAt) ? (
-            <p className="mt-0.5 text-xs text-zinc-400">
+            <p className="mt-1 text-sm text-zinc-500">
               {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)}</>}
               {analysisCompletedAt && <> · Completed {fmtTime(analysisCompletedAt)}</>}
               {totalMin(analysisStartedAt, analysisCompletedAt) && (
