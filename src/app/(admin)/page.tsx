@@ -7,284 +7,210 @@ import { fetchNewsOverview, isNewsConfigured, type NewsOverview } from "@/lib/ne
 
 export const dynamic = "force-dynamic";
 
-// ── step dot (same visual as RunWorkflowStrip) ────────────────────────────────
+// ── step dot ──────────────────────────────────────────────────────────────────
 
-function StepDot({ done, active, n }: { done: boolean; active: boolean; n: number }) {
-  if (active)
-    return <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-semibold text-blue-700">…</span>;
-  if (done)
-    return <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-100 text-xs font-semibold text-green-700">✓</span>;
-  return <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-500">{n}</span>;
+function StepDot({ state, n }: { state: "done" | "active" | "action" | "waiting"; n: number }) {
+  if (state === "done")
+    return (
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 text-emerald-600">
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      </div>
+    );
+  if (state === "active")
+    return (
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-blue-300 bg-blue-50 text-sm font-medium text-blue-600">
+        …
+      </div>
+    );
+  if (state === "action")
+    return (
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-sm font-medium text-zinc-800">
+        {n}
+      </div>
+    );
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-100 bg-zinc-50 text-sm font-medium text-zinc-300">
+      {n}
+    </div>
+  );
 }
 
-// ── aggregate strip ───────────────────────────────────────────────────────────
+// ── step ──────────────────────────────────────────────────────────────────────
 
-function WeekStrip({
+function Step({
+  n,
+  label,
+  state,
+  detail,
+  isLast,
+}: {
+  n: number;
+  label: string;
+  state: "done" | "active" | "action" | "waiting";
+  detail: string;
+  isLast?: boolean;
+}) {
+  return (
+    <div className="flex flex-1 items-start gap-3">
+      <div className="flex flex-col items-center gap-1">
+        <StepDot state={state} n={n} />
+        {!isLast && <div className="h-full w-px bg-zinc-100" style={{ minHeight: 32 }} />}
+      </div>
+      <div className="pb-8">
+        <p className={`text-sm font-medium ${state === "waiting" ? "text-zinc-300" : "text-zinc-800"}`}>
+          {label}
+        </p>
+        <p className={`mt-0.5 text-sm ${
+          state === "done" ? "text-emerald-600"
+          : state === "active" ? "text-blue-600"
+          : state === "action" ? "text-amber-700 font-medium"
+          : "text-zinc-300"
+        }`}>
+          {detail}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── exception list ────────────────────────────────────────────────────────────
+
+function Exceptions({ groups, weekLabel }: { groups: GroupCycleStatus[]; weekLabel: string }) {
+  const issues: { groupId: string; groupName: string; reason: string; href: string }[] = [];
+
+  for (const g of groups) {
+    const run = g.run;
+    const snaps = g.snapshots;
+    const collectDone = run?.status === "complete" || run?.status === "review";
+    const analyzeDone = run?.analysisDone && (run?.offerCount ?? 0) > 0;
+    const live = snaps.some((s) => s.clientVisible);
+
+    if (!run || !collectDone) {
+      issues.push({ groupId: g.groupId, groupName: g.groupName, reason: "not collected", href: "/runs" });
+    } else if (!analyzeDone && !run.analysisRunning) {
+      issues.push({ groupId: g.groupId, groupName: g.groupName, reason: "not analyzed", href: `/runs/${run.id}` });
+    } else if (snaps.length === 0) {
+      issues.push({ groupId: g.groupId, groupName: g.groupName, reason: "not frozen", href: `/runs/${run.id}` });
+    } else if (!live) {
+      issues.push({ groupId: g.groupId, groupName: g.groupName, reason: "not published", href: `/snapshots/${snaps[0].id}` });
+    }
+  }
+
+  if (issues.length === 0) return null;
+
+  return (
+    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-amber-700">
+        Needs attention
+      </p>
+      <div className="space-y-1">
+        {issues.map((issue) => (
+          <div key={issue.groupId} className="flex items-center justify-between text-sm">
+            <span className="text-amber-800">{issue.groupName}</span>
+            <Link href={issue.href} className="text-amber-600 hover:underline">
+              {issue.reason} →
+            </Link>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── primary cta ───────────────────────────────────────────────────────────────
+
+function PrimaryCTA({
   agg,
   news,
-  cycle,
+  groups,
 }: {
   agg: WeekAggregate;
   news: NewsOverview | null;
-  cycle: string;
+  groups: GroupCycleStatus[];
 }) {
   const collectDone = agg.anyRunComplete;
   const analyzeDone = agg.analysisDone && agg.offerCount > 0;
-  const newsDone = news?.fresh === true;
-  const freezeDone = agg.frozenGroupCount > 0;
-  const reportsDone = agg.liveGroupCount === agg.totalGroupCount && agg.totalGroupCount > 0;
+  const newsDone = news?.fresh === true || !isNewsConfigured();
+  const allFrozen = agg.frozenGroupCount >= agg.totalGroupCount && agg.totalGroupCount > 0;
+  const allLive = agg.liveGroupCount >= agg.totalGroupCount && agg.totalGroupCount > 0;
 
-  return (
-    <div className="flex items-center gap-0 divide-x divide-zinc-100 overflow-x-auto">
-
-      {/* Collect */}
+  if (agg.collectRunning || agg.analysisRunning) {
+    return (
       <Link
         href={agg.latestRunId ? `/runs/${agg.latestRunId}` : "/runs"}
-        className="flex min-w-0 shrink-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
+        className="block rounded-xl bg-blue-600 px-6 py-4 text-center text-base font-medium text-white hover:bg-blue-700"
       >
-        <StepDot done={collectDone} active={agg.collectRunning} n={1} />
-        <span className="text-base font-semibold text-zinc-800">Collect</span>
-        <span className="text-sm text-zinc-400">
-          {agg.collectRunning
-            ? `${agg.doneMissions}/${agg.totalMissions} running`
-            : agg.totalMissions === 0
-              ? "not run"
-              : `${agg.doneMissions}/${agg.totalMissions}`}
-        </span>
+        Running — view progress →
       </Link>
+    );
+  }
 
-      <span className="px-3 text-lg text-zinc-300">→</span>
+  if (!collectDone) {
+    return (
+      <Link
+        href="/runs"
+        className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
+      >
+        Start this week's collection →
+      </Link>
+    );
+  }
 
-      {/* Analyze */}
+  if (!analyzeDone) {
+    return (
       <Link
         href={agg.latestRunId ? `/runs/${agg.latestRunId}` : "/runs"}
-        className="flex min-w-0 shrink-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
+        className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
       >
-        <StepDot done={analyzeDone} active={agg.analysisRunning} n={2} />
-        <span className="text-base font-semibold text-zinc-800">Analyze</span>
-        <span className="text-sm text-zinc-400">
-          {agg.analysisRunning
-            ? "running…"
-            : agg.offerCount > 0
-              ? `${agg.offerCount} offers`
-              : agg.anyRunComplete
-                ? "ready"
-                : "waiting"}
-        </span>
+        Run analysis →
       </Link>
+    );
+  }
 
-      <span className="px-3 text-lg text-zinc-300">→</span>
+  if (!newsDone) {
+    return (
+      <a
+        href="https://news.dlrtools.com/admin"
+        target="_blank"
+        rel="noreferrer"
+        className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
+      >
+        Refresh news →
+      </a>
+    );
+  }
 
-      {/* News */}
-      <div className="flex min-w-0 shrink-0 items-center gap-3 px-5 py-4">
-        <StepDot done={newsDone} active={false} n={3} />
-        <span className="text-base font-semibold text-zinc-800">News</span>
-        {news === null && isNewsConfigured() ? (
-          <span className="text-sm text-zinc-400">unavailable</span>
-        ) : news ? (
-          <>
-            <span className="text-sm text-zinc-400">
-              {news.fresh ? news.week : `stale · last ${news.week}`}
-            </span>
-            {news.brandCounts.length > 0 && (
-              <span className="hidden text-xs text-zinc-400 lg:inline">
-                {[
-                  news.generalCount > 0 ? `General: ${news.generalCount}` : null,
-                  ...news.brandCounts.map((b) => `${b.brand}: ${b.count}`),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="text-sm text-zinc-400">not configured</span>
-        )}
-        {isNewsConfigured() && (
-          <a
-            href="https://news.dlrtools.com/admin"
-            target="_blank"
-            rel="noreferrer"
-            className="ml-1 rounded bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700"
-          >
-            Manage
-          </a>
-        )}
-      </div>
-
-      <span className="px-3 text-lg text-zinc-300">→</span>
-
-      {/* Freeze */}
+  if (!allFrozen) {
+    return (
       <Link
         href={agg.latestRunId ? `/runs/${agg.latestRunId}` : "/runs"}
-        className="flex min-w-0 shrink-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
+        className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
       >
-        <StepDot done={freezeDone && agg.frozenGroupCount >= agg.totalGroupCount} active={false} n={4} />
-        <span className="text-base font-semibold text-zinc-800">Freeze</span>
-        <span className="text-sm text-zinc-400">
-          {agg.frozenGroupCount > 0
-            ? `${agg.frozenGroupCount}/${agg.totalGroupCount} frozen`
-            : analyzeDone
-              ? "ready"
-              : "waiting"}
-        </span>
+        Freeze reports →
       </Link>
+    );
+  }
 
-      <span className="px-3 text-lg text-zinc-300">→</span>
-
-      {/* Reports */}
+  if (!allLive) {
+    return (
       <Link
-        href="/reports"
-        className="flex min-w-0 shrink-0 items-center gap-3 px-5 py-4 hover:bg-zinc-50"
+        href="/snapshots"
+        className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
       >
-        <StepDot done={reportsDone} active={false} n={5} />
-        <span className="text-base font-semibold text-zinc-800">Reports</span>
-        <span className="text-sm text-zinc-400">
-          {agg.liveGroupCount > 0
-            ? `${agg.liveGroupCount}/${agg.totalGroupCount} live`
-            : agg.frozenGroupCount > 0
-              ? "not published"
-              : "waiting"}
-        </span>
+        Publish reports →
       </Link>
-    </div>
-  );
-}
-
-// ── per-group exception table ─────────────────────────────────────────────────
-
-function GroupTable({ groups }: { groups: GroupCycleStatus[] }) {
-  if (groups.every((g) => g.run === null)) return null;
+    );
+  }
 
   return (
-    <div className="overflow-hidden border-t border-zinc-100">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-xs uppercase tracking-wide text-zinc-400">
-            <th className="py-2 pl-5 pr-3 font-medium">Group</th>
-            <th className="px-4 py-2 font-medium">Collect</th>
-            <th className="px-4 py-2 font-medium">Analyze</th>
-            <th className="px-4 py-2 font-medium">Freeze</th>
-            <th className="px-4 py-2 font-medium">Reports</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-50">
-          {groups.map((g) => {
-            const run = g.run;
-            const snaps = g.snapshots;
-            const collectDone = run?.status === "complete" || run?.status === "review";
-            const analyzeDone = run?.analysisDone && (run?.offerCount ?? 0) > 0;
-            const liveCount = snaps.filter((s) => s.clientVisible).length;
-
-            return (
-              <tr key={g.groupId} className="hover:bg-zinc-50/50">
-                <td className="py-2 pl-5 pr-3 font-medium text-zinc-700">
-                  {run ? (
-                    <Link href={`/runs/${run.id}`} className="hover:underline">
-                      {g.groupName}
-                    </Link>
-                  ) : (
-                    g.groupName
-                  )}
-                </td>
-
-                {/* Collect */}
-                <td className={`px-4 py-2 ${!run ? "text-zinc-300" : run.status === "running" ? "text-blue-600" : collectDone ? "text-emerald-600" : "text-amber-600"}`}>
-                  {!run
-                    ? "—"
-                    : run.status === "running"
-                      ? `${run.doneMissions}/${run.totalMissions}`
-                      : collectDone
-                        ? `✓ ${run.totalMissions}`
-                        : run.status === "failed"
-                          ? "✗ failed"
-                          : "queued"}
-                </td>
-
-                {/* Analyze */}
-                <td className={`px-4 py-2 ${!collectDone ? "text-zinc-300" : run?.analysisRunning ? "text-blue-600" : analyzeDone ? "text-emerald-600" : "text-amber-600"}`}>
-                  {!collectDone
-                    ? "—"
-                    : run?.analysisRunning
-                      ? "analyzing…"
-                      : analyzeDone
-                        ? `✓ ${run!.offerCount}`
-                        : run?.analysisDone
-                          ? "0 offers"
-                          : "ready →"}
-                </td>
-
-                {/* Freeze */}
-                <td className={`px-4 py-2 ${snaps.length > 0 ? "text-emerald-600" : !analyzeDone ? "text-zinc-300" : "text-amber-600"}`}>
-                  {snaps.length > 0 ? (
-                    <Link href={`/snapshots/${snaps[0].id}`} className="hover:underline">
-                      ✓ frozen
-                    </Link>
-                  ) : !analyzeDone ? (
-                    "—"
-                  ) : (
-                    <Link href={run ? `/runs/${run.id}` : "/runs"} className="hover:underline">
-                      freeze →
-                    </Link>
-                  )}
-                </td>
-
-                {/* Reports */}
-                <td className={`px-4 py-2 ${liveCount > 0 ? "text-emerald-600" : snaps.length === 0 ? "text-zinc-300" : "text-amber-600"}`}>
-                  {snaps.length === 0 ? (
-                    "—"
-                  ) : liveCount === snaps.length ? (
-                    <Link href={`/reports/${snaps[0].id}`} className="hover:underline">
-                      ✓ live
-                    </Link>
-                  ) : liveCount > 0 ? (
-                    `${liveCount}/${snaps.length} live`
-                  ) : (
-                    <Link href={`/snapshots/${snaps[0].id}`} className="hover:underline">
-                      publish →
-                    </Link>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── cycle block ───────────────────────────────────────────────────────────────
-
-function CycleBlock({
-  cycle,
-  label,
-  agg,
-  groups,
-  news,
-  dim,
-}: {
-  cycle: string;
-  label: string;
-  agg: WeekAggregate;
-  groups: GroupCycleStatus[];
-  news?: NewsOverview | null;
-  dim?: boolean;
-}) {
-  return (
-    <div className={`mb-5 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm ${dim ? "opacity-60" : ""}`}>
-      <div className="flex items-center gap-2 border-b border-zinc-100 px-5 py-2.5">
-        <span className="font-mono text-sm font-semibold text-zinc-700">{cycle}</span>
-        <span className="text-xs text-zinc-400">{label}</span>
-        {agg.totalGroupCount > 0 && (
-          <span className="ml-auto text-xs text-zinc-400">
-            {agg.liveGroupCount}/{agg.totalGroupCount} groups live
-          </span>
-        )}
-      </div>
-      <WeekStrip agg={agg} news={news ?? null} cycle={cycle} />
-      <GroupTable groups={groups} />
-    </div>
+    <Link
+      href="/reports"
+      className="block rounded-xl bg-emerald-600 px-6 py-4 text-center text-base font-medium text-white hover:bg-emerald-700"
+    >
+      View reports →
+    </Link>
   );
 }
 
@@ -293,7 +219,7 @@ function CycleBlock({
 export default async function HomePage() {
   if (!isDatabaseConfigured()) {
     return (
-      <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+      <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">
         Database not configured.
       </div>
     );
@@ -313,32 +239,82 @@ export default async function HomePage() {
     isNewsConfigured() ? fetchNewsOverview() : Promise.resolve(null),
   ]);
 
+  // Derive step states
+  const collectDone = currentAgg.anyRunComplete;
+  const collectActive = currentAgg.collectRunning;
+  const analyzeDone = currentAgg.analysisDone && currentAgg.offerCount > 0;
+  const analyzeActive = currentAgg.analysisRunning;
+  const newsDone = newsOverview?.fresh === true || !isNewsConfigured();
+  const allFrozen = currentAgg.frozenGroupCount >= total && total > 0;
+  const allLive = currentAgg.liveGroupCount >= total && total > 0;
+
+  const collectState = collectActive ? "active" : collectDone ? "done" : "action";
+  const analyzeState = !collectDone ? "waiting" : analyzeActive ? "active" : analyzeDone ? "done" : "action";
+  const newsState = !analyzeDone ? "waiting" : newsDone ? "done" : "action";
+  const reportsState = !newsDone ? "waiting" : allLive ? "done" : allFrozen ? "action" : currentAgg.frozenGroupCount > 0 ? "action" : "waiting";
+
+  // Prior cycle summary
+  const priorAllLive = priorAgg.liveGroupCount >= total && total > 0 && priorAgg.liveGroupCount > 0;
+  const priorIssues = priorGroups.filter(
+    (g) => !g.snapshots.some((s) => s.clientVisible) && (g.run !== null || priorAgg.anyRunComplete)
+  );
+
   return (
-    <div>
-      <div className="mb-5 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-zinc-900">Weekly Ops</h1>
-        <div className="flex items-center gap-4 text-sm text-zinc-500">
-          <Link href="/runs" className="hover:text-zinc-900">Runs</Link>
-          <Link href="/snapshots" className="hover:text-zinc-900">Snapshots</Link>
-          <Link href="/reports" className="hover:text-zinc-900">Reports</Link>
+    <div className="mx-auto max-w-lg">
+      {/* Week label */}
+      <div className="mb-6 flex items-baseline justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-zinc-900">
+            {allLive ? "This week is done ✓" : "What needs doing"}
+          </h1>
+          <p className="mt-0.5 text-sm text-zinc-400 font-mono">{currentCycle}</p>
         </div>
+        <Link href="/runs" className="text-xs text-zinc-400 hover:text-zinc-700">
+          Advanced →
+        </Link>
       </div>
 
-      <CycleBlock
-        cycle={currentCycle}
-        label="Current Cycle"
-        agg={currentAgg}
-        groups={currentGroups}
-        news={newsOverview}
-      />
+      {/* Steps */}
+      <div className="mb-6 flex flex-col rounded-xl border border-zinc-200 bg-white px-6 pt-6">
+        <Step n={1} label="Collect data" state={collectState}
+          detail={collectActive ? `Running…` : collectDone ? "Done" : "Not started this week"} />
+        <Step n={2} label="Analyze offers" state={analyzeState}
+          detail={analyzeActive ? "Running…" : analyzeDone ? "Done" : !collectDone ? "—" : "Ready to run"} />
+        <Step n={3} label="Load news" state={newsState}
+          detail={!analyzeDone ? "—" : newsDone ? (newsOverview ? newsOverview.week : "Current") : "Needs refresh"} />
+        <Step n={4} label="Reports live" state={reportsState} isLast
+          detail={
+            !newsDone ? "—"
+            : allLive ? `${currentAgg.liveGroupCount} of ${total} groups live`
+            : allFrozen ? "Ready to publish"
+            : currentAgg.frozenGroupCount > 0 ? `${currentAgg.frozenGroupCount} of ${total} frozen`
+            : "Not frozen yet"
+          } />
+      </div>
 
-      <CycleBlock
-        cycle={priorCycle}
-        label="Prior Cycle"
-        agg={priorAgg}
-        groups={priorGroups}
-        dim
-      />
+      {/* Primary CTA */}
+      <PrimaryCTA agg={currentAgg} news={newsOverview} groups={currentGroups} />
+
+      {/* Exceptions */}
+      {!allLive && <Exceptions groups={currentGroups} weekLabel={currentCycle} />}
+
+      {/* Prior week */}
+      <div className="mt-8 flex items-center gap-3 border-t border-zinc-100 pt-5">
+        <div className={`h-2 w-2 shrink-0 rounded-full ${priorAllLive ? "bg-emerald-400" : "bg-amber-400"}`} />
+        <span className="text-sm text-zinc-500">
+          {priorCycle}
+          {priorAllLive
+            ? " — complete"
+            : priorIssues.length > 0
+              ? ` — ${priorIssues.length} group${priorIssues.length > 1 ? "s" : ""} not published`
+              : " — no runs"}
+        </span>
+        {!priorAllLive && priorIssues.length > 0 && (
+          <Link href="/snapshots" className="ml-auto text-xs text-zinc-400 hover:text-zinc-700">
+            Fix →
+          </Link>
+        )}
+      </div>
     </div>
   );
 }
