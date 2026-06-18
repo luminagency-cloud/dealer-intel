@@ -8,6 +8,20 @@ export function getISOWeekLabel(date = new Date()): string {
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
+/** Returns { start, end } UTC dates bracketing the given ISO week (Mon 00:00 – Sun 23:59:59). */
+export function getISOWeekBounds(weekLabel: string): { start: Date; end: Date } {
+  const match = weekLabel.match(/^(\d{4})-W(\d{2})$/);
+  const now = new Date();
+  if (!match) return { start: new Date(now.getTime() - 7 * 86400000), end: now };
+  const year = parseInt(match[1]);
+  const week = parseInt(match[2]);
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Day = jan4.getUTCDay() || 7;
+  const monday = new Date(jan4.getTime() + (1 - jan4Day) * 86400000 + (week - 1) * 7 * 86400000);
+  const sunday = new Date(monday.getTime() + 6 * 86400000 + 23 * 3600000 + 59 * 60000 + 59999);
+  return { start: monday, end: sunday };
+}
+
 /** Returns the ISO week label for the week before the given label. */
 export function getPriorISOWeekLabel(cycleLabel: string): string {
   const match = cycleLabel.match(/^(\d{4})-W(\d{2})$/);

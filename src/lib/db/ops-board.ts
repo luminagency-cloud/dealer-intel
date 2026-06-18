@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, gte, inArray, lte } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   collectionRuns,
@@ -10,6 +10,7 @@ import {
   runGroups,
   type RunStatus,
 } from "./schema";
+import { getISOWeekBounds } from "@/lib/cycle";
 
 export type RunSummary = {
   id: string;
@@ -34,7 +35,32 @@ export type GroupCycleStatus = {
   snapshots: SnapshotSummary[];
 };
 
-export async function getCycleGroupStatus(cycle: string): Promise<GroupCycleStatus[]> {
+export type WeekAggregate = {
+  doneMissions: number;
+  totalMissions: number;
+  collectRunning: boolean;
+  anyRunComplete: boolean;
+  offerCount: number;
+  analysisRunning: boolean;
+  analysisDone: boolean;
+  frozenGroupCount: number;
+  liveGroupCount: number;
+  totalGroupCount: number;
+  latestRunId: string | null;
+};
+
+/** Query runs that belong to a given ISO week (by createdAt date range). */
+async function getRunsForWeek(weekLabel: string) {
+  const { start, end } = getISOWeekBounds(weekLabel);
+  return getDb()
+    .select()
+    .from(collectionRuns)
+    .where(and(gte(collectionRuns.createdAt, start), lte(collectionRuns.createdAt, end)))
+    .orderBy(desc(collectionRuns.createdAt));
+}
+
+/** Per-group pipeline status for a given ISO week. */
+export async function getCycleGroupStatus(weekLabel: string): Promise<GroupCycleStatus[]> {
   const db = getDb();
 
   const groups = await db
@@ -45,11 +71,7 @@ export async function getCycleGroupStatus(cycle: string): Promise<GroupCycleStat
   if (groups.length === 0) return [];
   const groupIds = groups.map((g) => g.id);
 
-  const cycleRuns = await db
-    .select()
-    .from(collectionRuns)
-    .where(eq(collectionRuns.cycle, cycle))
-    .orderBy(desc(collectionRuns.createdAt));
+  const cycleRuns = await getRunsForWeek(weekLabel);
 
   if (cycleRuns.length === 0) {
     return groups.map((g) => ({ groupId: g.id, groupName: g.name, run: null, snapshots: [] }));
@@ -99,7 +121,6 @@ export async function getCycleGroupStatus(cycle: string): Promise<GroupCycleStat
     missionMap.set(mr.runId, e);
   }
 
-  // runId → offer count
   const offerMap = new Map<string, number>();
   for (const o of allOffers) offerMap.set(o.runId, (offerMap.get(o.runId) ?? 0) + 1);
 
@@ -121,7 +142,6 @@ export async function getCycleGroupStatus(cycle: string): Promise<GroupCycleStat
     adHocRunToGroups.set(row.runId, s);
   }
 
-  // groupId → best run for this cycle (prefer complete > review > running > pending > failed)
   const priority = (s: RunStatus) =>
     ({ complete: 4, review: 3, running: 2, pending: 1, failed: 0 }[s] ?? 0);
 
@@ -140,7 +160,6 @@ export async function getCycleGroupStatus(cycle: string): Promise<GroupCycleStat
     }
   }
 
-  // groupId → snapshots
   const groupToSnapshots = new Map<string, SnapshotSummary[]>();
   for (const snap of snapshots) {
     if (!snap.runGroupId) continue;
@@ -169,4 +188,65 @@ export async function getCycleGroupStatus(cycle: string): Promise<GroupCycleStat
       snapshots: groupToSnapshots.get(g.id) ?? [],
     };
   });
+}
+
+/** Aggregate pipeline status across all runs in a given ISO week. */
+export async function getWeekAggregate(weekLabel: string, totalGroupCount: number): Promise<WeekAggregate> {
+  const db = getDb();
+  const cycleRuns = await getRunsForWeek(weekLabel);
+
+  if (cycleRuns.length === 0) {
+    return {
+      doneMissions: 0, totalMissions: 0, collectRunning: false, anyRunComplete: false,
+      offerCount: 0, analysisRunning: false, analysisDone: false,
+      frozenGroupCount: 0, liveGroupCount: 0, totalGroupCount,
+      latestRunId: null,
+    };
+  }
+
+  const runIds = cycleRuns.map((r) => r.id);
+
+  const [allMR, allOffers, allSnaps] = await Promise.all([
+    db
+      .select({ runId: missionResults.collectionRunId, status: missionResults.status })
+      .from(missionResults)
+      .where(inArray(missionResults.collectionRunId, runIds)),
+    db
+      .select({ runId: offers.collectionRunId })
+      .from(offers)
+      .where(inArray(offers.collectionRunId, runIds)),
+    db
+      .select({ runGroupId: reportSnapshots.runGroupId, clientVisible: reportSnapshots.clientVisible })
+      .from(reportSnapshots)
+      .where(inArray(reportSnapshots.collectionRunId, runIds)),
+  ]);
+
+  let doneMissions = 0, totalMissions = 0;
+  for (const mr of allMR) {
+    totalMissions++;
+    if (mr.status !== "pending" && mr.status !== "running") doneMissions++;
+  }
+
+  const offerCount = allOffers.length;
+  const collectRunning = cycleRuns.some((r) => r.status === "running");
+  const anyRunComplete = cycleRuns.some((r) => r.status === "complete" || r.status === "review");
+  const analysisRunning = cycleRuns.some((r) => r.analysisStartedAt !== null && r.analysisCompletedAt === null);
+  const analysisDone = cycleRuns.some((r) => r.analysisCompletedAt !== null);
+
+  const frozenGroups = new Set(allSnaps.map((s) => s.runGroupId).filter(Boolean));
+  const liveGroups = new Set(allSnaps.filter((s) => s.clientVisible).map((s) => s.runGroupId).filter(Boolean));
+
+  return {
+    doneMissions,
+    totalMissions,
+    collectRunning,
+    anyRunComplete,
+    offerCount,
+    analysisRunning,
+    analysisDone,
+    frozenGroupCount: frozenGroups.size,
+    liveGroupCount: liveGroups.size,
+    totalGroupCount,
+    latestRunId: cycleRuns[0]?.id ?? null,
+  };
 }
