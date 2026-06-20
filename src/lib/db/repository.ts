@@ -531,3 +531,11 @@ export async function setSnapshotClientVisible(
     .set({ clientVisible: visible })
     .where(eq(reportSnapshots.id, id));
 }
+
+/** Touch a snapshot's approvedAt to now, signalling a manual report rebuild. */
+export async function touchSnapshotApprovedAt(id: string): Promise<void> {
+  await getDb()
+    .update(reportSnapshots)
+    .set({ approvedAt: new Date() })
+    .where(eq(reportSnapshots.id, id));
+}

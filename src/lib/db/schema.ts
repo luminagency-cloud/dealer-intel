@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgEnum,
@@ -594,3 +595,31 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type UserRunGroup = typeof userRunGroups.$inferSelect;
 export type NewUserRunGroup = typeof userRunGroups.$inferInsert;
+
+/** Locally cached news items pulled once per week from the news service.
+ *  Reports read from this table; the home page Refresh button triggers the pull. */
+export const newsItems = pgTable(
+  "news_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** ISO week key matching the pull, e.g. "2026-W25". */
+    weekKey: text("week_key").notNull(),
+    headline: text("headline").notNull(),
+    summary: text("summary").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    /** Date string as returned by the news service, e.g. "2026-06-18". */
+    publishedAt: text("published_at").notNull(),
+    /** Category slug: recall, new_model, sales, regulatory, workforce, incentives, industry. */
+    category: text("category").notNull(),
+    /** Lowercase brand slug (e.g. "nissan"). Null = industry-wide item. */
+    brand: text("brand"),
+    /** When dealer-intel fetched and stored this item. */
+    pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("news_items_source_url_week_idx").on(table.sourceUrl, table.weekKey),
+    index("news_items_week_brand_idx").on(table.weekKey, table.brand),
+  ]
+);
+export type NewsItemRow = typeof newsItems.$inferSelect;
+export type NewNewsItem = typeof newsItems.$inferInsert;

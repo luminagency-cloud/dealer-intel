@@ -104,6 +104,7 @@ interface GridTableProps {
     offer: SnapshotOffer
   ) => React.ReactNode;
   emptyLabel?: string;
+  disableRanking?: boolean;
 }
 
 function GridTable({
@@ -111,6 +112,7 @@ function GridTable({
   rows,
   renderCell,
   emptyLabel = "Not Advertised",
+  disableRanking = false,
 }: GridTableProps) {
   if (rows.length === 0) {
     return (
@@ -154,7 +156,7 @@ function GridTable({
                 return (
                   <td
                     key={dealers[i].siteId ?? dealers[i].siteName}
-                    className={`border border-zinc-200 px-3 py-2 text-center align-top ${bg}`}
+                    className={`border border-zinc-200 px-3 py-2 text-center align-top ${disableRanking ? "" : bg}`}
                   >
                     {cell.offer ? (
                       <div className="space-y-0.5">
@@ -505,7 +507,7 @@ export function ReportContent({
               <a href="#lease" className="font-semibold text-[#1b3a6b] hover:underline">
                 Lease Specials →
               </a>{" "}
-              {leaseNote}
+              {leaseGrid.length} model{leaseGrid.length !== 1 ? "s" : ""} advertised across the group.
             </li>
           )}
           {financeGrid.length > 0 && (
@@ -553,17 +555,22 @@ export function ReportContent({
         <SectionHeading
           num="2"
           title="Lease Specials"
-          sub="Ranked by advertised monthly payment per model (lower = better). Terms and due-at-signing differ — see cell details."
         />
         <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
           <div className="p-4">
             <GridTable
               dealers={dealers}
               rows={leaseGrid}
-              renderCell={(cell, offer) => {
+              disableRanking
+              renderCell={(_cell, offer) => {
                 const mileage =
                   parseMileage(offer.disclaimerText) ??
                   parseMileage(offer.rawText);
+                const missingFields: string[] = [];
+                if (offer.monthlyPayment === null) missingFields.push("payment");
+                if (!offer.termMonths) missingFields.push("term");
+                if (!mileage) missingFields.push("mileage");
+                if (offer.dueAtSigning == null) missingFields.push("DAS");
                 return (
                   <>
                     {offer.monthlyPayment !== null && (
@@ -582,14 +589,17 @@ export function ReportContent({
                         .filter(Boolean)
                         .join(" · ")}
                     </div>
+                    {missingFields.length > 0 && (
+                      <div className="mt-0.5 text-[9px] text-amber-600 opacity-75">
+                        missing: {missingFields.join(", ")}
+                      </div>
+                    )}
                   </>
                 );
               }}
             />
-            <GridLegend hasRanking={leaseGrid.length > 0} />
           </div>
         </div>
-        <Narrative text={leaseNote} />
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -807,6 +817,13 @@ export function ReportContent({
                           >
                             {o.complianceGrade}
                           </span>
+                          {(() => {
+                            const details = o.complianceDetailsJson as Record<string, unknown> | null;
+                            const reason = details?.reason as string | undefined;
+                            return reason ? (
+                              <p className="mt-1 text-sm text-zinc-700">{reason}</p>
+                            ) : null;
+                          })()}
                         </td>
                         <td className="px-4 py-2.5">
                           {o.sourceEvidenceId ? (

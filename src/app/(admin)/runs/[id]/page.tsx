@@ -39,7 +39,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-import { fmtDateTime, fmtMonthYear } from "@/lib/fmt-date";
+import { fmtDateTime, fmtSnapshotLabel } from "@/lib/fmt-date";
 
 function formatDate(date: Date | null) {
   return fmtDateTime(date);
@@ -186,11 +186,11 @@ export default async function RunDetailPage({
         publishSnapshotAction={publishSnapshot.bind(null, run.id)}
         executeAllAction={executeAllMissions.bind(null, run.id)}
         resumeAction={resumeRun.bind(null, run.id)}
-        defaultSnapshotLabel={
-          scopeLabel
-            ? `${scopeLabel} · ${fmtMonthYear(new Date())}`
-            : undefined
-        }
+        defaultSnapshotLabel={fmtSnapshotLabel(
+          new Date(),
+          resolvedGroups.length > 0 ? resolvedGroups.length : 1,
+          evidencePageCount
+        )}
       />
 
       {/* One-line metadata — sits below sticky bar, scrolls away */}
@@ -243,13 +243,11 @@ export default async function RunDetailPage({
           hasOffers={runOffers.length > 0}
           publishAction={publishSnapshot.bind(null, run.id)}
           runGroups={resolvedGroups.length > 1 ? resolvedGroups : undefined}
-          defaultLabel={
-            resolvedGroups.length > 1
-              ? fmtMonthYear(new Date())
-              : scopeLabel
-                ? `${scopeLabel} · ${fmtMonthYear(new Date())}`
-                : undefined
-          }
+          defaultLabel={fmtSnapshotLabel(
+            new Date(),
+            resolvedGroups.length > 0 ? resolvedGroups.length : 1,
+            evidencePageCount
+          )}
         />
       </div>
     </div>

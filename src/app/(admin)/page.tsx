@@ -3,7 +3,8 @@ import { isDatabaseConfigured, getDb, runGroups } from "@/lib/db";
 import { count } from "drizzle-orm";
 import { getISOWeekLabel, getPriorISOWeekLabel } from "@/lib/cycle";
 import { getCycleGroupStatus, getWeekAggregate, type GroupCycleStatus, type WeekAggregate } from "@/lib/db/ops-board";
-import { fetchNewsOverview, isNewsConfigured, type NewsOverview } from "@/lib/news";
+import { getLocalNewsPullStatus, isNewsConfigured } from "@/lib/news";
+import { refreshNews } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -45,12 +46,14 @@ function Step({
   state,
   detail,
   isLast,
+  children,
 }: {
   n: number;
   label: string;
   state: "done" | "active" | "action" | "waiting";
   detail: string;
   isLast?: boolean;
+  children?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-1 items-start gap-3">
@@ -70,6 +73,7 @@ function Step({
         }`}>
           {detail}
         </p>
+        {children}
       </div>
     </div>
   );
@@ -123,16 +127,16 @@ function Exceptions({ groups, weekLabel }: { groups: GroupCycleStatus[]; weekLab
 
 function PrimaryCTA({
   agg,
-  news,
+  newsPulled,
   groups,
 }: {
   agg: WeekAggregate;
-  news: NewsOverview | null;
+  newsPulled: boolean;
   groups: GroupCycleStatus[];
 }) {
   const collectDone = agg.anyRunComplete;
   const analyzeDone = agg.analysisDone && agg.offerCount > 0;
-  const newsDone = news?.fresh === true || !isNewsConfigured();
+  const newsDone = newsPulled || !isNewsConfigured();
   const allFrozen = agg.frozenGroupCount >= agg.totalGroupCount && agg.totalGroupCount > 0;
   const allLive = agg.liveGroupCount >= agg.totalGroupCount && agg.totalGroupCount > 0;
 
@@ -171,14 +175,14 @@ function PrimaryCTA({
 
   if (!newsDone) {
     return (
-      <a
-        href="https://news.dlrtools.com/admin"
-        target="_blank"
-        rel="noreferrer"
-        className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
-      >
-        Refresh news →
-      </a>
+      <form action={refreshNews}>
+        <button
+          type="submit"
+          className="block w-full rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
+        >
+          Pull news →
+        </button>
+      </form>
     );
   }
 
@@ -231,12 +235,12 @@ export default async function HomePage() {
   const [{ n: groupCount }] = await getDb().select({ n: count() }).from(runGroups);
   const total = groupCount ?? 0;
 
-  const [currentGroups, priorGroups, currentAgg, priorAgg, newsOverview] = await Promise.all([
+  const [currentGroups, priorGroups, currentAgg, priorAgg, newsPullStatus] = await Promise.all([
     getCycleGroupStatus(currentCycle),
     getCycleGroupStatus(priorCycle),
     getWeekAggregate(currentCycle, total),
     getWeekAggregate(priorCycle, total),
-    isNewsConfigured() ? fetchNewsOverview() : Promise.resolve(null),
+    isNewsConfigured() ? getLocalNewsPullStatus() : Promise.resolve(null),
   ]);
 
   // Derive step states
@@ -244,7 +248,7 @@ export default async function HomePage() {
   const collectActive = currentAgg.collectRunning;
   const analyzeDone = currentAgg.analysisDone && currentAgg.offerCount > 0;
   const analyzeActive = currentAgg.analysisRunning;
-  const newsDone = newsOverview?.fresh === true || !isNewsConfigured();
+  const newsDone = newsPullStatus !== null || !isNewsConfigured();
   const allFrozen = currentAgg.frozenGroupCount >= total && total > 0;
   const allLive = currentAgg.liveGroupCount >= total && total > 0;
 
@@ -281,7 +285,20 @@ export default async function HomePage() {
         <Step n={2} label="Analyze offers" state={analyzeState}
           detail={analyzeActive ? "Running…" : analyzeDone ? "Done" : !collectDone ? "—" : "Ready to run"} />
         <Step n={3} label="Load news" state={newsState}
-          detail={!analyzeDone ? "—" : newsDone ? (newsOverview ? newsOverview.week : "Current") : "Needs refresh"} />
+          detail={
+            !analyzeDone ? "—"
+            : newsPullStatus
+              ? `Last pulled ${newsPullStatus.pulledAt.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · ${newsPullStatus.itemCount} items`
+              : "Not pulled this week"
+          }>
+          {analyzeDone && isNewsConfigured() && (
+            <form action={refreshNews} className="mt-1.5">
+              <button type="submit" className="text-xs text-zinc-400 hover:text-zinc-600 underline underline-offset-2">
+                Refresh
+              </button>
+            </form>
+          )}
+        </Step>
         <Step n={4} label="Reports live" state={reportsState} isLast
           detail={
             !newsDone ? "—"
@@ -293,7 +310,7 @@ export default async function HomePage() {
       </div>
 
       {/* Primary CTA */}
-      <PrimaryCTA agg={currentAgg} news={newsOverview} groups={currentGroups} />
+      <PrimaryCTA agg={currentAgg} newsPulled={newsDone} groups={currentGroups} />
 
       {/* Exceptions */}
       {!allLive && <Exceptions groups={currentGroups} weekLabel={currentCycle} />}

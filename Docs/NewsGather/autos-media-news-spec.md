@@ -283,8 +283,8 @@ week=2026-W25         // optional; defaults to current ISO week
 
 ### Env vars to add to dealer-intel
 ```
-NEWS_API_URL=https://your-news-app.vercel.app
-NEWS_API_KEY=same-shared-secret
+NEWS_API_URL=https://news.dlrtools.com
+NEWS_API_KEY=<shared secret — see .env>
 ```
 
 ### Fetch pattern in dealer-intel

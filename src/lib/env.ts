@@ -55,12 +55,7 @@ export function requireEnv(key: keyof Env): string {
 }
 
 export const isDatabaseConfigured = () => Boolean(process.env.DATABASE_URL);
-export const isAuthConfigured = () =>
-  Boolean(
-    process.env.AUTH_SECRET &&
-      process.env.ADMIN_EMAIL &&
-      process.env.ADMIN_PASSWORD
-  );
+export const isAuthConfigured = () => Boolean(process.env.AUTH_SECRET);
 export const isR2Configured = () =>
   Boolean(
     process.env.R2_ACCOUNT_ID &&

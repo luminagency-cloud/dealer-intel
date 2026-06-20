@@ -21,3 +21,19 @@ export function fmtMonthYear(date: Date | string | null | undefined): string {
     year: "numeric",
   });
 }
+
+/** Compact snapshot label, e.g. "20Jun-3grps-53pgs" */
+export function fmtSnapshotLabel(
+  date: Date,
+  groupCount: number,
+  pageCount: number
+): string {
+  const raw = date.toLocaleString("en-US", {
+    timeZone: TZ,
+    day: "numeric",
+    month: "short",
+  });
+  // en-US returns "Jun 20" — reorder to "20Jun"
+  const [mon, day] = raw.split(" ");
+  return `${day}${mon}-${groupCount}grps-${pageCount}pgs`;
+}

@@ -5,7 +5,7 @@ import {
   listSnapshotOffers,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
-import { fetchNewsForBrand } from "@/lib/news";
+import { getStoredNewsForReport } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,7 @@ export default async function PublicReportPage({
     ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
     : null;
 
-  const news = await fetchNewsForBrand(primaryBrand);
+  const news = await getStoredNewsForReport(primaryBrand);
 
   return (
     <ReportContent

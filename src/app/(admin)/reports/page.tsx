@@ -3,6 +3,7 @@ import { isDatabaseConfigured } from "@/lib/db";
 import { listReportSnapshots } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { fmtDateTime } from "@/lib/fmt-date";
+import { rebuildReport } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -73,12 +74,22 @@ export default async function ReportsPage() {
                     {formatDate(snap.approvedAt)}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <Link
-                      href={`/reports/${snap.id}`}
-                      className="font-medium text-blue-600 hover:underline"
-                    >
-                      Open report →
-                    </Link>
+                    <div className="flex items-center justify-end gap-4">
+                      <form action={rebuildReport.bind(null, snap.id)}>
+                        <button
+                          type="submit"
+                          className="text-sm text-zinc-400 hover:text-zinc-700"
+                        >
+                          Rebuild
+                        </button>
+                      </form>
+                      <Link
+                        href={`/reports/${snap.id}`}
+                        className="font-medium text-blue-600 hover:underline"
+                      >
+                        Open report →
+                      </Link>
+                    </div>
                   </td>
                 </tr>
               ))}
