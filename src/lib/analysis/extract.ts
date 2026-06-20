@@ -182,20 +182,63 @@ function extractCashIncentive(text: string) {
   return { value, match: m[0].trim() };
 }
 
-/** Service specials price by the job, not by the month: a flat price
- *  ("$39.95 oil change") or a discount ("$25 off"). Captured separately so a
- *  service page yields an offer even without lease/finance fields. */
-function extractServiceAmounts(text: string) {
-  const discount = firstMatch(text, /\$\s?([\d,]{1,5}(?:\.\d{2})?)\s*off\b/i);
-  const price = firstMatch(text, /\$\s?([\d,]{1,5}\.\d{2})\b/);
-  return {
-    discount: discount
-      ? { value: parseAmount(discount[1]), match: discount[0].trim() }
-      : null,
-    price: price
-      ? { value: parseAmount(price[1]), match: price[0].trim() }
-      : null,
-  };
+// Service type keywords in priority order. First match wins.
+// Pairs of [search-substring (lowercase), display label].
+const SERVICE_TYPE_KEYWORDS: [string, string][] = [
+  ["oil change", "Oil Change"],
+  ["oil & filter", "Oil & Filter Change"],
+  ["oil and filter", "Oil & Filter Change"],
+  ["brake pad", "Brake Pads & Rotors"],
+  ["rotor", "Brake Pads & Rotors"],
+  ["brake", "Brake Service"],
+  ["tire rotation", "Tire Rotation"],
+  ["cabin air", "Cabin Air Filter"],
+  ["engine air", "Engine Air Filter"],
+  ["air filter", "Air Filter"],
+  ["alignment", "Alignment"],
+  ["coolant flush", "Coolant Flush"],
+  ["coolant", "Coolant Service"],
+  ["transmission flush", "Transmission Flush"],
+  ["transmission", "Transmission Service"],
+  ["battery", "Battery"],
+  ["wiper", "Wiper Blades"],
+  ["multi-point", "Multi-Point Inspection"],
+  ["multipoint", "Multi-Point Inspection"],
+  ["inspection", "Inspection"],
+  ["detail", "Detail"],
+  ["flush", "Fluid Flush"],
+];
+
+/** Returns a clean human label for a service offer from the text window around
+ *  the price anchor. Avoids nav, phone numbers, expiry dates, and vehicle names. */
+function buildServiceLabel(chunkText: string): string {
+  const lower = chunkText.toLowerCase();
+  for (const [kw, label] of SERVICE_TYPE_KEYWORDS) {
+    if (lower.includes(kw)) return label;
+  }
+  return "Service Special";
+}
+
+/** Captures the service offer value as a human-readable string — no numeric
+ *  parsing. Patterns tried in priority order so "25% off tires" beats "$25"
+ *  and a percentage isn't rendered with a dollar sign.
+ *
+ *  Returns null when no monetary or discount signal is found (no priced offer). */
+function extractServiceOfferText(text: string): string | null {
+  const patterns: [RegExp, number][] = [
+    [/\d+\s*%\s*off\b[^.!\n]{0,50}/i, 0],           // "25% off new tires"
+    [/\$\s?[\d,]+(?:\.\d{2})?\s*off\b[^.!\n]{0,40}/i, 0], // "$25 off cabin air filter"
+    [/save\s+(?:up\s+to\s+)?\$[\d,]+(?:\.\d{2})?/i, 0],   // "save $25"
+    [/free\b[^.!\n]{0,30}/i, 0],                            // "FREE with purchase"
+    [/\d+\s*for\s*\d+/i, 0],                               // "2 for 1"
+    [/buy\s+\d+[^.!\n]{0,30}/i, 0],                        // "buy 2 get 1 free"
+    [/\$\s?[\d,]{1,5}(?:\.\d{2})?\b/, 0],                  // flat price "$24.95" / "$30"
+  ];
+  for (const [re] of patterns) {
+    const m = text.match(re);
+    if (m) return m[0].trim();
+  }
+  return null;
 }
 
 // Offer-specific fine print. A disclaimer is tied to ONE ad and sits next to
@@ -376,36 +419,41 @@ function extractOfferFromText(
   const cash = extractCashIncentive(text);
 
   const isService = hints.missionType === "service_specials";
-  const service = isService ? extractServiceAmounts(text) : null;
-  const serviceCash = service?.discount?.value ?? null;
+  // Service offer text is captured as a human-readable string (e.g. "$25 off",
+  // "25% off tires") — no numeric parse, so a percentage isn't stored as a
+  // dollar amount and non-price offers (2-for-1, FREE) round-trip cleanly.
+  const serviceOfferText = isService ? extractServiceOfferText(text) : null;
 
   const fields = {
     monthlyPayment: payment?.value ?? null,
     apr: apr?.value ?? null,
-    cashIncentive: cash?.value ?? serviceCash,
+    // Service never populates cashIncentive — the offer lives in matches.serviceOffer.
+    cashIncentive: isService ? null : (cash?.value ?? null),
     termMonths: term?.value ?? null,
     dueAtSigning: due?.value ?? null,
   };
 
   const signalCount = Object.values(fields).filter((v) => v !== null).length;
-  const hasServiceSignal = Boolean(service?.discount || service?.price);
+  const hasServiceSignal = Boolean(serviceOfferText);
   if (signalCount === 0 && !hasServiceSignal) return null;
 
   const offerType = classify(fields, hints);
 
-  const anchor =
-    payment?.match ??
-    cash?.match ??
-    apr?.match ??
-    service?.price?.match ??
-    service?.discount?.match ??
-    null;
+  // For service, use the offer text itself as the anchor so anchorIndex points
+  // near the coupon value (used by extractDisclaimerNear).
+  const anchor = isService
+    ? serviceOfferText
+    : (payment?.match ?? cash?.match ?? apr?.match ?? null);
   const anchorIndex = anchor ? text.indexOf(anchor) : -1;
   const anchorContext =
     anchorIndex >= 0
       ? text.slice(Math.max(0, anchorIndex - 140), anchorIndex + 160)
       : null;
-  const vehicle = extractVehicle(text, hints, anchorContext);
+  // Service offers are shop work, not vehicle-specific. Attaching a vehicle
+  // model pulled from page chrome (e.g. "Grand Cherokee" in a Featured Vehicles
+  // section) produces wrong labels AND breaks dedup (same offer, different model
+  // → two rows). Always null for service.
+  const vehicle = isService ? { make: null, model: null, trim: null } : extractVehicle(text, hints, anchorContext);
   const disclaimer = extractDisclaimerNear(text, anchorIndex);
 
   const matches: Record<string, string> = {};
@@ -413,9 +461,8 @@ function extractOfferFromText(
   if (apr) matches.apr = apr.match;
   if (term) matches.termMonths = term.match;
   if (due) matches.dueAtSigning = due.match;
-  if (cash) matches.cashIncentive = cash.match;
-  if (service?.discount) matches.serviceDiscount = service.discount.match;
-  if (service?.price) matches.servicePrice = service.price.match;
+  if (!isService && cash) matches.cashIncentive = cash.match;
+  if (serviceOfferText) matches.serviceOffer = serviceOfferText;
 
   const confidence = Math.min(
     1,
@@ -424,6 +471,12 @@ function extractOfferFromText(
       (vehicle.make ? 0.1 : 0) +
       (disclaimer ? 0.1 : 0)
   );
+
+  // Service: label = "what's it for" (Oil Change, Brake Service…);
+  // offer value lives in matches.serviceOffer ("$25 off", "25% off", "$24.95").
+  const rawText = isService
+    ? buildServiceLabel(text)
+    : contextAround(text, anchor);
 
   return {
     offerType,
@@ -436,7 +489,7 @@ function extractOfferFromText(
     termMonths: fields.termMonths,
     dueAtSigning: fields.dueAtSigning,
     disclaimerText: disclaimer,
-    rawText: contextAround(text, anchor),
+    rawText,
     confidence: Number(confidence.toFixed(2)),
     matches,
   };

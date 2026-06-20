@@ -2,12 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { touchSnapshotApprovedAt } from "@/lib/db/repository";
-import { requireAdminSession } from "@/lib/session";
-
-export { refreshNews } from "../actions";
+import { requireSession } from "@/lib/session";
 
 export async function rebuildReport(snapshotId: string) {
-  await requireAdminSession();
+  await requireSession();
   await touchSnapshotApprovedAt(snapshotId);
   revalidatePath("/reports", "layout");
   revalidatePath("/");

@@ -37,16 +37,20 @@ export function SnapshotSection({
       <div className="border-b border-zinc-100 px-4 py-3">
         <h2 className="text-xl font-semibold text-zinc-900">
           Snapshots{" "}
-          {snapshots.length > 0 && (
+          {isMultiGroup && runGroups ? (
+            <span className="font-normal text-zinc-500">
+              — {runGroups.length} groups
+            </span>
+          ) : snapshots.length > 0 ? (
             <span className="font-normal text-zinc-500">
               — {snapshots.length}
             </span>
-          )}
+          ) : null}
         </h2>
         <p className="mt-1 text-sm text-zinc-500">
           {isMultiGroup
-            ? "Combined run — freeze each group independently or all at once. Reports never cross group boundaries."
-            : "Freeze this run's offers into an immutable snapshot for reporting. Reports read snapshots only, never the live run."}
+            ? "Combined run — publish each group independently or all at once. Reports never cross group boundaries."
+            : "Publish this run's offers as an immutable snapshot for reporting. Reports read snapshots only, never the live run."}
         </p>
       </div>
 
@@ -77,7 +81,7 @@ export function SnapshotSection({
                         ✓ {existing.offerCount} offers
                       </Link>
                     ) : (
-                      <span className="text-sm text-zinc-300">not frozen</span>
+                      <span className="text-sm text-zinc-300">not published</span>
                     )}
                     <span className="w-36 text-right text-sm text-zinc-500">
                       {existing ? formatDate(existing.approvedAt) : "—"}
@@ -88,10 +92,10 @@ export function SnapshotSection({
                       <button
                         type="submit"
                         disabled={!hasOffers}
-                        title={hasOffers ? undefined : "Run analysis first — no offers to freeze"}
+                        title={hasOffers ? undefined : "Run analysis first — no offers to publish"}
                         className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {existing ? "Re-freeze" : "Freeze"}
+                        {existing ? "Re-publish" : "Publish"}
                       </button>
                     </form>
                   </div>
@@ -106,10 +110,10 @@ export function SnapshotSection({
               <button
                 type="submit"
                 disabled={!hasOffers}
-                title={hasOffers ? undefined : "Run analysis first — no offers to freeze"}
+                title={hasOffers ? undefined : "Run analysis first — no offers to publish"}
                 className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Freeze All {runGroups.length} Groups
+                Publish All {runGroups.length} Groups
               </button>
             </form>
           </div>
@@ -131,10 +135,10 @@ export function SnapshotSection({
             <button
               type="submit"
               disabled={!hasOffers}
-              title={hasOffers ? undefined : "Run analysis first — no offers to freeze"}
+              title={hasOffers ? undefined : "Run analysis first — no offers to publish"}
               className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Freeze Snapshot
+              Publish Snapshot
             </button>
           </form>
         )

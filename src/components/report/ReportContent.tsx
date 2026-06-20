@@ -708,19 +708,24 @@ export function ReportContent({
                     </p>
                   ) : (
                     <ul className="divide-y divide-zinc-100">
-                      {dOffers.map((o) => (
+                      {dOffers.map((o) => {
+                        const matchMap = (
+                          o.normalizedJson as { matches?: Record<string, string> } | null
+                        )?.matches ?? {};
+                        return (
                         <li key={o.id} className="px-4 py-2.5">
                           <div className="text-sm text-zinc-800">
-                            {o.vehicleModel
-                              ? `${o.vehicleModel} — `
-                              : ""}
-                            {o.rawText?.slice(0, 80) ?? "Service special"}
+                            {o.rawText ?? "Service Special"}
                           </div>
-                          {o.cashIncentive != null && (
+                          {o.cashIncentive != null ? (
                             <div className="mt-0.5 text-xs font-medium text-emerald-700">
                               {fmtMoney(o.cashIncentive)} off
                             </div>
-                          )}
+                          ) : matchMap.serviceOffer ? (
+                            <div className="mt-0.5 text-xs font-medium text-emerald-700">
+                              {matchMap.serviceOffer}
+                            </div>
+                          ) : null}
                           {o.sourceEvidenceId && (
                             <a
                               href={`/api/evidence/${o.sourceEvidenceId}/file`}
@@ -732,7 +737,8 @@ export function ReportContent({
                             </a>
                           )}
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>
                   )}
                 </div>

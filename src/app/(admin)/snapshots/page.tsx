@@ -28,9 +28,9 @@ export default async function SnapshotsPage() {
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Snapshots</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Frozen analysis datasets. Toggle{" "}
-          <span className="font-medium">Client Visible</span> to release a
-          snapshot to dealer users in the viewer app.
+          Published report datasets. Toggle{" "}
+          <span className="font-medium">Release</span> to make a snapshot
+          visible to dealer users in the viewer app.
         </p>
       </div>
 
@@ -48,8 +48,8 @@ export default async function SnapshotsPage() {
                 <th className="px-4 py-3">Scope</th>
                 <th className="px-4 py-3 text-right">Offers</th>
                 <th className="px-4 py-3 text-right">Sites</th>
-                <th className="px-4 py-3">Approved</th>
-                <th className="px-4 py-3">Client Visible</th>
+                <th className="px-4 py-3">Published</th>
+                <th className="px-4 py-3">Release</th>
                 <th className="px-4 py-3">Run</th>
               </tr>
             </thead>
@@ -93,7 +93,7 @@ export default async function SnapshotsPage() {
                             : "rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-500 hover:bg-zinc-200"
                         }
                       >
-                        {snap.clientVisible ? "Visible" : "Hidden"}
+                        {snap.clientVisible ? "Released" : "Draft"}
                       </button>
                     </form>
                   </td>
