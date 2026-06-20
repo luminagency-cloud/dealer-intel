@@ -5,6 +5,7 @@ import {
   listSnapshotOffers,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
+import { fetchNewsForBrand } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 
@@ -24,11 +25,22 @@ export default async function PublicReportPage({
       : Promise.resolve(new Set<string>()),
   ]);
 
+  const makeCounts = new Map<string, number>();
+  for (const o of offers) {
+    if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
+  }
+  const primaryBrand = makeCounts.size > 0
+    ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    : null;
+
+  const news = await fetchNewsForBrand(primaryBrand);
+
   return (
     <ReportContent
       snapshot={snapshot}
       offers={offers}
       primarySiteIds={primarySiteIds}
+      news={news}
       adminControls={false}
     />
   );

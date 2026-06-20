@@ -543,6 +543,10 @@ Dismiss chat widgets and overlays.
 
 # Weekly Operational Workflow
 
+Run Weekly News (autos.media news service — must be fresh before reports)
+
+↓
+
 Scheduled Run (group-scoped)
 
 ↓
@@ -567,11 +571,17 @@ Publish Snapshot
 
 ↓
 
-Generate Reports
+Generate Reports (news section auto-populates from fresh news service)
 
 ## Target
 
 Less than 15 minutes of operator intervention per week.
+
+## News Freshness Gate
+
+Reports include a brand news section pulled live from news.dlrtools.com.
+The home page dashboard shows a green/amber status indicator.
+Green = news ran this ISO week. Amber = stale — run news before publishing reports.
 
 ---
 

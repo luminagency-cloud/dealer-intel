@@ -33,7 +33,7 @@ _Last updated: June 2026_
 |---|---|
 | Inventory section | Separate data source; Phase 2 item. May import or link. |
 | MTD Sales | Proprietary data source; may come in as a PDF import or external link |
-| Brand News | Future version; may live in a separate tool and get linked in |
+| ~~Brand News~~ | Done — live via autos.media news service (news.dlrtools.com). See Docs/NewsGather/autos-media-news-spec.md |
 | Phase 11 v2 trend deltas | Per-metric change vs. prior snapshot in the report |
 | Disclaimer modal capture for dealer_inspire / dealer_alchemist | Selectors don't match their modal pattern yet |
 

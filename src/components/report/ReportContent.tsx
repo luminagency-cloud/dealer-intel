@@ -490,7 +490,7 @@ export function ReportContent({
       {/* ------------------------------------------------------------------ */}
       {/* 1 · Brand News                                                      */}
       {/* ------------------------------------------------------------------ */}
-      <BrandNewsSection news={news} brand={news?.brand} />
+      <BrandNewsSection news={news} brand={news?.brand ?? undefined} />
 
       {/* ------------------------------------------------------------------ */}
       {/* Executive brief                                                     */}

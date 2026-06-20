@@ -17,6 +17,8 @@ const envSchema = z.object({
   ADGRADER_BASE_URL: z.string().min(1).optional(),
   ADGRADER_CLIENT_ID: z.string().min(1).optional(),
   ADGRADER_CLIENT_SECRET: z.string().min(1).optional(),
+  NEWS_API_URL: z.string().url().optional(),
+  NEWS_API_KEY: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
