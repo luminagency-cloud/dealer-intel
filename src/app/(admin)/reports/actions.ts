@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { touchSnapshotApprovedAt } from "@/lib/db/repository";
+import { redirect } from "next/navigation";
+import { touchSnapshotApprovedAt, deleteReportSnapshot } from "@/lib/db/repository";
 import { requireSession } from "@/lib/session";
 
 export async function rebuildReport(snapshotId: string) {
@@ -9,4 +10,13 @@ export async function rebuildReport(snapshotId: string) {
   await touchSnapshotApprovedAt(snapshotId);
   revalidatePath("/reports", "layout");
   revalidatePath("/");
+}
+
+export async function deleteReport(snapshotId: string) {
+  await requireSession();
+  await deleteReportSnapshot(snapshotId);
+  revalidatePath("/reports", "layout");
+  revalidatePath("/snapshots");
+  revalidatePath("/");
+  redirect("/reports");
 }

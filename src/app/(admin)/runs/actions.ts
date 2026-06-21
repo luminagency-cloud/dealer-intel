@@ -9,12 +9,13 @@ import {
 } from "@/lib/db/repository";
 import { removeEvidence, uploadEvidence } from "@/lib/evidence";
 import {
+  forceReCollectSingle,
   markContentRemoved,
   requeueStalledRun,
   retryMissionResult,
   startRunExecution,
 } from "@/lib/run-executor";
-import { startAnalysis } from "@/lib/analysis";
+import { startAnalysis, startAnalysisForSiteMission } from "@/lib/analysis";
 import { createSnapshotFromRun } from "@/lib/snapshot";
 import { deleteRunDeep } from "@/lib/deep-delete";
 import {
@@ -25,6 +26,7 @@ import {
   missionTypeEnum,
   missions,
   runGroupMembers,
+  runGroups,
   type EvidenceType,
   type MissionType,
   type RunStatus,
@@ -37,10 +39,10 @@ import { getISOWeekLabel } from "@/lib/cycle";
 
 export async function createRun(formData?: FormData) {
   await requireSession();
-  // Scope select encodes "groups" (multi-group checkboxes in groupIds),
-  // "custom" (ad-hoc dealer checkboxes in siteIds), or "" for all sites.
+  // Scope select encodes "all-groups" (every group combined), "groups"
+  // (multi-group checkboxes in groupIds), or "custom" (ad-hoc dealer checkboxes).
   const scopeValue = formData?.get("scope");
-  const scope = typeof scopeValue === "string" ? scopeValue : "";
+  const scope = typeof scopeValue === "string" ? scopeValue : "all-groups";
 
   let siteIds: string[] = [];
 
@@ -52,6 +54,26 @@ export async function createRun(formData?: FormData) {
       [];
     if (siteIds.length === 0) {
       redirect(`/runs?error=${encodeURIComponent("Pick at least one dealer")}`);
+    }
+  }
+
+  // For "all-groups" scope: load every group, mirror the "groups" path.
+  let resolvedRunGroupIdFromAllGroups: string | null = null;
+  if (scope === "all-groups") {
+    const allGroups = await getDb().select({ id: runGroups.id }).from(runGroups);
+    if (allGroups.length === 0) {
+      redirect(`/runs?error=${encodeURIComponent("No groups defined — create a group before running")}`);
+    }
+    if (allGroups.length === 1) {
+      resolvedRunGroupIdFromAllGroups = allGroups[0].id;
+    } else {
+      const members = await getDb()
+        .select({ siteId: runGroupMembers.siteId })
+        .from(runGroupMembers);
+      siteIds = [...new Set(members.map((m) => m.siteId))];
+      if (siteIds.length === 0) {
+        redirect(`/runs?error=${encodeURIComponent("Groups have no member sites")}`);
+      }
     }
   }
 
@@ -106,7 +128,7 @@ export async function createRun(formData?: FormData) {
       ? cycleValue.trim()
       : getISOWeekLabel();
 
-  const run = await createCollectionRun({ runGroupId: resolvedRunGroupId, cycle });
+  const run = await createCollectionRun({ runGroupId: resolvedRunGroupId ?? resolvedRunGroupIdFromAllGroups, cycle });
   if (siteIds.length > 0) {
     await getDb()
       .insert(collectionRunSites)
@@ -262,6 +284,31 @@ export async function runAnalysis(runId: string) {
   );
 }
 
+export async function runAnalysisForSiteMission(
+  runId: string,
+  siteId: string,
+  missionType: string
+) {
+  await requireSession();
+  const result = await startAnalysisForSiteMission(
+    runId,
+    siteId,
+    missionType as import("@/lib/db").MissionType
+  );
+  revalidatePath(`/runs/${runId}`);
+  if (result === "busy") {
+    redirect(
+      `/runs/${runId}?error=${encodeURIComponent("Analysis already running for this run — wait for it to finish")}#collection`
+    );
+  }
+  if (result === "no_evidence") {
+    redirect(
+      `/runs/${runId}?error=${encodeURIComponent("No evidence to analyze for this dealer + mission")}#collection`
+    );
+  }
+  redirect(`/runs/${runId}#collection`);
+}
+
 /** Phase 10: freeze the run's current analysis output into a report snapshot,
  *  the immutable reporting input. Advances a run still in review to published.
  *
@@ -283,10 +330,12 @@ export async function publishSnapshot(runId: string, formData: FormData) {
   if (!run.runGroupId) {
     const groups = await resolveRunGroups(runId);
     if (groups.length > 1) {
-      const groupIdValue = formData.get("groupId");
+      const groupIds = formData
+        .getAll("groupId")
+        .filter((v): v is string => typeof v === "string" && v.length > 0);
       const targetGroups =
-        typeof groupIdValue === "string" && groupIdValue
-          ? groups.filter((g) => g.id === groupIdValue)
+        groupIds.length > 0
+          ? groups.filter((g) => groupIds.includes(g.id))
           : groups;
 
       const created = (
@@ -308,8 +357,7 @@ export async function publishSnapshot(runId: string, formData: FormData) {
       revalidatePath(`/runs/${runId}`);
       revalidatePath("/runs");
       revalidatePath("/snapshots");
-      // Single group frozen → go straight to that snapshot; all groups → list.
-      redirect(created.length === 1 ? `/snapshots/${created[0].id}` : "/snapshots");
+      redirect(`/runs/${runId}`);
     }
   }
 
@@ -329,7 +377,7 @@ export async function publishSnapshot(runId: string, formData: FormData) {
   revalidatePath(`/runs/${runId}`);
   revalidatePath("/runs");
   revalidatePath("/snapshots");
-  redirect(`/snapshots/${snapshot.id}`);
+  redirect(`/runs/${runId}`);
 }
 
 export async function retryResult(path: string, resultId: string) {
@@ -337,6 +385,19 @@ export async function retryResult(path: string, resultId: string) {
   await retryMissionResult(resultId);
   revalidatePath(path);
   redirect(path);
+}
+
+/** Force re-collect a single dealer+mission on any run, including completed
+ *  runs. Resets the result to pending and kicks the drainer. */
+export async function forceReCollect(
+  runId: string,
+  siteId: string,
+  missionId: string
+) {
+  await requireSession();
+  await forceReCollectSingle(runId, siteId, missionId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(`/runs/${runId}`);
 }
 
 /** Resume a run whose in-flight rows were orphaned by an interrupted executor. */

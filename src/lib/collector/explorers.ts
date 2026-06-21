@@ -112,11 +112,10 @@ async function readDisclaimerModal(
       let anchor = full;
       const cut = anchor.search(/disclaimer/i);
       if (cut > 0) anchor = anchor.slice(0, cut).trim();
+      // Strip trailing CTA/nav/expiry noise that precedes or follows the offer name.
       anchor = anchor
-        .replace(
-          /\b(view\s+\d+\s+qualifying\s+vehicle|view vehicle details|view details|shop now|open in same tab).*$/i,
-          ""
-        )
+        .replace(/\b(never\s+expires?|expires?\s+\d[\d/\-\.]*|exp\.?\s+\d[\d/\-\.]*)\b.*/i, "")
+        .replace(/\b(request\s+more\s+info|more\s+info|learn\s+more|get\s+coupon|print\s+coupon|schedule\s+service|book\s+now|shop\s+now|view\s+\d+\s+qualifying\s+vehicle|view\s+vehicle\s+details|view\s+details|open\s+in\s+same\s+tab)\b.*/i, "")
         .trim();
       return { anchor: anchor.slice(0, 110), text: full.slice(0, 8000) };
     });
@@ -147,9 +146,7 @@ export async function captureDisclaimers(page: Page): Promise<ExtraShot[]> {
           const modal = await readDisclaimerModal(page);
           const anchor = modal.anchor || preAnchor;
           shots.push({
-            label: anchor
-              ? `Disclaimer — ${anchor}`
-              : `Disclaimer ${shots.length + 1}`,
+            label: anchor || `Disclaimer ${shots.length + 1}`,
             image: await page.screenshot({ type: "png" }),
             kind: "disclaimer_screenshot",
             text: modal.text || undefined,

@@ -2,8 +2,9 @@ import Link from "next/link";
 import { isDatabaseConfigured } from "@/lib/db";
 import { listReportSnapshots } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { fmtDateTime } from "@/lib/fmt-date";
-import { rebuildReport } from "./actions";
+import { rebuildReport, deleteReport } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,14 @@ export default async function ReportsPage() {
                         >
                           Rebuild
                         </button>
+                      </form>
+                      <form action={deleteReport.bind(null, snap.id)}>
+                        <ConfirmSubmitButton
+                          confirmMessage="Delete this report snapshot? This cannot be undone."
+                          className="text-sm text-red-400 hover:text-red-600"
+                        >
+                          Delete
+                        </ConfirmSubmitButton>
                       </form>
                       <Link
                         href={`/reports/${snap.id}`}

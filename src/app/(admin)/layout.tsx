@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { signOut } from "@/auth";
 import { requireSession } from "@/lib/session";
+import { SettingsDropdown } from "@/components/settings-dropdown";
 
 async function logout() {
   "use server";
@@ -23,15 +24,6 @@ export default async function AdminLayout({
               Dealer Intel
             </Link>
             <nav className="flex items-center gap-4 text-sm text-zinc-600">
-              <Link href="/dealers" className="hover:text-zinc-900">
-                Dealers
-              </Link>
-              <Link href="/missions" className="hover:text-zinc-900">
-                Missions
-              </Link>
-              <Link href="/groups" className="hover:text-zinc-900">
-                Run Groups
-              </Link>
               <Link href="/runs" className="hover:text-zinc-900">
                 Runs
               </Link>
@@ -44,9 +36,7 @@ export default async function AdminLayout({
               <Link href="/reports" className="hover:text-zinc-900">
                 Reports
               </Link>
-              <Link href="/users" className="hover:text-zinc-900">
-                Users
-              </Link>
+              <SettingsDropdown />
             </nav>
           </div>
           <div className="flex items-center gap-4">

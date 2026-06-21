@@ -10,6 +10,7 @@ import {
 import {
   getCollectionRun,
   listComplianceGradesForRun,
+  listOfferCountsByMissionForRun,
   listOffersForRun,
   listResultsForRun,
   listSnapshotsForRun,
@@ -17,7 +18,7 @@ import {
   resolveRunGroups,
 } from "@/lib/db/repository";
 import { isRunExecuting } from "@/lib/run-executor";
-import { isAnalysisRunning, getAnalysisProgress } from "@/lib/analysis";
+import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { MissionRunPanel } from "@/components/mission-run-panel";
@@ -30,10 +31,12 @@ import {
   deleteRun,
   executeAllMissions,
   executeWorkItem,
+  forceReCollect,
   publishSnapshot,
   resumeRun,
   retryResult,
   runAnalysis,
+  runAnalysisForSiteMission,
   updateRunStatus,
 } from "../actions";
 
@@ -60,6 +63,7 @@ export default async function RunDetailPage({
 
   const [
     runOffers,
+    offerCountRows,
     runGrades,
     runSnapshots,
     siteOptions,
@@ -68,6 +72,7 @@ export default async function RunDetailPage({
     [runGroup],
   ] = await Promise.all([
     listOffersForRun(run.id),
+    listOfferCountsByMissionForRun(run.id),
     listComplianceGradesForRun(run.id),
     listSnapshotsForRun(run.id),
     getDb()
@@ -91,10 +96,9 @@ export default async function RunDetailPage({
       ? resolvedGroups.map((g) => g.name).join(" + ")
       : null;
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
-  const offerCountsBySite = runOffers.reduce((acc, o) => {
-    acc.set(o.siteId, (acc.get(o.siteId) ?? 0) + 1);
-    return acc;
-  }, new Map<string, number>());
+  const offerCountsBySiteMission = new Map<string, number>(
+    offerCountRows.map((r) => [`${r.siteId}:${r.missionType}`, r.count])
+  );
   const nextStatuses = RUN_TRANSITIONS[run.status].filter(
     (s) => !(run.status === "pending" && s === "running")
   );
@@ -118,6 +122,7 @@ export default async function RunDetailPage({
     runResults.some((r) => r.status === "pending" || r.status === "running");
   const analyzing = isAnalysisRunning(run.id);
   const analysisProgressData = getAnalysisProgress(run.id);
+  const partialAnalysisKeys = getPartialAnalysisKeys(run.id);
   // Any captured pages means HTML snapshots exist — safe proxy without loading evidence.
   const canAnalyze =
     run.status !== "failed" &&
@@ -125,7 +130,7 @@ export default async function RunDetailPage({
 
   return (
     <div>
-      <AutoRefresh active={executing || analyzing} />
+      <AutoRefresh active={executing || analyzing || partialAnalysisKeys.size > 0} />
 
       {/* Compact title row — stays above the sticky workflow bar */}
       <div className="mb-2 flex items-center justify-between py-2">
@@ -206,7 +211,7 @@ export default async function RunDetailPage({
             runId={run.id}
             items={missionRows}
             results={results}
-            offerCountsBySite={offerCountsBySite}
+            offerCountsBySiteMission={offerCountsBySiteMission}
             executing={executing}
             canCollect={canCollect}
             stalled={stalled}
@@ -215,6 +220,9 @@ export default async function RunDetailPage({
             executeItemAction={executeWorkItem.bind(null, run.id)}
             executeAllAction={executeAllMissions.bind(null, run.id)}
             retryAction={retryResult.bind(null, `/runs/${run.id}`)}
+            forceReCollectAction={forceReCollect.bind(null, run.id)}
+            reAnalyzeSiteMissionAction={runAnalysisForSiteMission.bind(null, run.id)}
+            partialAnalysisKeys={partialAnalysisKeys}
             resumeAction={resumeRun.bind(null, run.id)}
             error={error}
           />

@@ -6,4 +6,4 @@ export {
   type ComplianceRequest,
   type ComplianceGradeResult,
 } from "./compliance";
-export { startAnalysis, isAnalysisRunning, getAnalysisProgress } from "./runner";
+export { startAnalysis, startAnalysisForSiteMission, isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "./runner";

@@ -188,13 +188,18 @@ const SERVICE_TYPE_KEYWORDS: [string, string][] = [
   ["oil change", "Oil Change"],
   ["oil & filter", "Oil & Filter Change"],
   ["oil and filter", "Oil & Filter Change"],
+  ["remote start", "Remote Start"],
   ["brake pad", "Brake Pads & Rotors"],
   ["rotor", "Brake Pads & Rotors"],
   ["brake", "Brake Service"],
   ["tire rotation", "Tire Rotation"],
+  ["price match", "Price Match"],
   ["cabin air", "Cabin Air Filter"],
   ["engine air", "Engine Air Filter"],
   ["air filter", "Air Filter"],
+  ["a/c performance", "A/C Performance Check"],
+  ["a/c check", "A/C Check"],
+  ["air conditioning", "A/C Service"],
   ["alignment", "Alignment"],
   ["coolant flush", "Coolant Flush"],
   ["coolant", "Coolant Service"],
@@ -205,6 +210,8 @@ const SERVICE_TYPE_KEYWORDS: [string, string][] = [
   ["multi-point", "Multi-Point Inspection"],
   ["multipoint", "Multi-Point Inspection"],
   ["inspection", "Inspection"],
+  ["loaner", "Complimentary Loaner"],
+  ["rental", "Complimentary Rental"],
   ["detail", "Detail"],
   ["flush", "Fluid Flush"],
 ];
@@ -226,13 +233,16 @@ function buildServiceLabel(chunkText: string): string {
  *  Returns null when no monetary or discount signal is found (no priced offer). */
 function extractServiceOfferText(text: string): string | null {
   const patterns: [RegExp, number][] = [
-    [/\d+\s*%\s*off\b[^.!\n]{0,50}/i, 0],           // "25% off new tires"
-    [/\$\s?[\d,]+(?:\.\d{2})?\s*off\b[^.!\n]{0,40}/i, 0], // "$25 off cabin air filter"
-    [/save\s+(?:up\s+to\s+)?\$[\d,]+(?:\.\d{2})?/i, 0],   // "save $25"
+    [/\d+\s*%\s*off\b[^.!\n]{0,50}/i, 0],                  // "25% off new tires"
+    [/\$\s?[\d,]+(?:\.\d{2})?\s*off\b[^.!\n]{0,40}/i, 0],  // "$25 off cabin air filter"
+    [/save\s+(?:up\s+to\s+)?\$[\d,]+(?:\.\d{2})?/i, 0],    // "save $25"
+    [/complimentary\b[^.!\n]{0,50}/i, 0],                   // "Complimentary Rental w/Major Maintenance"
     [/free\b[^.!\n]{0,30}/i, 0],                            // "FREE with purchase"
-    [/\d+\s*for\s*\d+/i, 0],                               // "2 for 1"
-    [/buy\s+\d+[^.!\n]{0,30}/i, 0],                        // "buy 2 get 1 free"
-    [/\$\s?[\d,]{1,5}(?:\.\d{2})?\b/, 0],                  // flat price "$24.95" / "$30"
+    [/\d+\s*for\s*\d+/i, 0],                                // "2 for 1"
+    [/buy\s+\d+[^.!\n]{0,30}/i, 0],                         // "buy 2 get 1 free"
+    [/\d+\s*%\s*price match\b[^.!\n]{0,30}/i, 0],           // "120% Price Match on Tire Purchases"
+    [/price match\b[^.!\n]{0,30}/i, 0],                     // "Price Match Guarantee"
+    [/\$\s?[\d,]{1,5}(?:\.\d{2})?\b/, 0],                   // flat price "$24.95" / "$30"
   ];
   for (const [re] of patterns) {
     const m = text.match(re);
@@ -464,19 +474,31 @@ function extractOfferFromText(
   if (!isService && cash) matches.cashIncentive = cash.match;
   if (serviceOfferText) matches.serviceOffer = serviceOfferText;
 
-  const confidence = Math.min(
-    1,
-    0.2 * signalCount +
-      (hasServiceSignal ? 0.2 : 0) +
-      (vehicle.make ? 0.1 : 0) +
-      (disclaimer ? 0.1 : 0)
-  );
-
   // Service: label = "what's it for" (Oil Change, Brake Service…);
   // offer value lives in matches.serviceOffer ("$25 off", "25% off", "$24.95").
   const rawText = isService
     ? buildServiceLabel(text)
     : contextAround(text, anchor);
+
+  // Service confidence is scored independently from vehicle offers:
+  // finding a price/discount is the dominant signal (0.4), a recognized
+  // service label (not the generic fallback) adds 0.2. This pushes
+  // well-extracted service offers above the AI threshold so they skip AI
+  // enrichment — service offers are vehicle-free by design, so the null-model
+  // AI trigger must not fire for them.
+  const confidence = isService
+    ? Math.min(
+        1,
+        (hasServiceSignal ? 0.4 : 0) +
+          (rawText !== "Service Special" ? 0.2 : 0) +
+          (disclaimer ? 0.1 : 0)
+      )
+    : Math.min(
+        1,
+        0.2 * signalCount +
+          (vehicle.make ? 0.1 : 0) +
+          (disclaimer ? 0.1 : 0)
+      );
 
   return {
     offerType,
@@ -497,18 +519,29 @@ function extractOfferFromText(
 
 // --- Multi-offer segmentation -------------------------------------------
 
-/** Anchor positions for service-specials pages: flat prices ($39.95) and
- *  discount phrases ($25 off). Used the same way as offerAnchorPositions —
- *  each match becomes the centre of an independent offer window. */
-function serviceAnchorPositions(text: string): number[] {
+interface ServiceAnchor {
+  pos: number;
+  /** The matched offer value text (e.g. "$299.95", "$25 off", "10% off anything needed"). */
+  text: string;
+}
+
+/** Anchors for service-specials pages: flat prices, dollar-off, and
+ *  percentage-off phrases. Returns matched text alongside position so we can
+ *  inject the exact anchor value into the offer rather than re-searching the
+ *  window and risking picking up a different price that happens to appear
+ *  earlier in the surrounding text. */
+function serviceAnchors(text: string): ServiceAnchor[] {
   const priceRe = /\$\s?[\d,]{1,5}\.\d{2}\b/gi;
   const discountRe = /\$\s?[\d,]{1,5}(?:\.\d{2})?\s*off\b/gi;
-  const positions: number[] = [];
+  const percentRe = /\d+\s*%\s*off\b[^.!\n]{0,60}/gi;
+  const results: ServiceAnchor[] = [];
   let m: RegExpExecArray | null;
-  for (const re of [priceRe, discountRe]) {
-    while ((m = re.exec(text)) !== null) positions.push(m.index);
+  for (const re of [priceRe, discountRe, percentRe]) {
+    while ((m = re.exec(text)) !== null) {
+      results.push({ pos: m.index, text: m[0].trim() });
+    }
   }
-  return positions.sort((a, b) => a - b);
+  return results.sort((a, b) => a.pos - b.pos);
 }
 
 /** Find every priced-offer anchor position in page text — monthly payment
@@ -533,7 +566,9 @@ function offerAnchorPositions(text: string): number[] {
  *  of which text window they came from (e.g. a sticky header repeats the
  *  current-model payment). Vehicle model is intentionally excluded so a
  *  null-model offer from one window doesn't shadow a model-identified offer
- *  from another window covering the same anchor. */
+ *  from another window covering the same anchor. For service offers the label
+ *  (rawText) is included so two different services with the same discount
+ *  (e.g. both "10% off") are not collapsed into one row. */
 function offerSig(o: ExtractedOffer): string {
   return [
     o.offerType,
@@ -543,37 +578,128 @@ function offerSig(o: ExtractedOffer): string {
     o.termMonths ?? "",
     o.dueAtSigning ?? "",
     o.cashIncentive ?? "",
-    o.matches.servicePrice ?? "",
+    o.matches.serviceOffer ?? "",
+    o.offerType === "service" ? (o.rawText ?? "") : "",
   ].join("|");
 }
 
-/** Reads HTML, segments offer cards by payment anchor, and returns one
- *  ExtractedOffer per distinct priced ad on the page. Returns an empty array
- *  when no monetary signal is present (hero image, nav page, etc.). */
+/** Splits raw HTML into per-card text chunks using DOM block structure.
+ *  Tracks nesting depth to find the level where sibling block elements repeat —
+ *  that is the offer-card layer on service-specials pages. Returns one text
+ *  string per card, or empty array when no repeating card structure is found. */
+function splitHtmlIntoCards(html: string): string[] {
+  const BLOCK = new Set(['div', 'section', 'article', 'li', 'figure', 'aside']);
+
+  interface Frame { tag: string; start: number; depth: number; }
+  const stack: Frame[] = [];
+  const blocks: Array<{ depth: number; text: string }> = [];
+
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = tagRe.exec(html)) !== null) {
+    if (m[0].slice(-2) === '/>') continue; // self-closing
+    const isClose = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    if (!BLOCK.has(tag)) continue;
+
+    if (!isClose) {
+      stack.push({ tag, start: m.index, depth: stack.length });
+    } else {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].tag === tag) {
+          const { start, depth } = stack[i];
+          const end = m.index + m[0].length;
+          const text = htmlToText(html.slice(start, end)).trim();
+          // Card-sized: long enough to be a full offer, short enough to be one card
+          if (text.length >= 60 && text.length <= 4000) {
+            blocks.push({ depth, text });
+          }
+          stack.splice(i);
+          break;
+        }
+      }
+    }
+  }
+
+  if (blocks.length === 0) return [];
+
+  // A "rich card" has both a price/discount signal AND a recognizable service
+  // keyword. Pure price sub-divs (e.g. a <div> containing only "$699.95") have
+  // no service keyword and are excluded — preventing a "Regularly $699.95"
+  // element from being counted as a second Remote Start offer.
+  const hasOfferSignal = (t: string) =>
+    /\$[\d,]+|\d+\s*%\s*off\b|free\b|complimentary\b|price match\b/i.test(t);
+  const hasServiceKeyword = (t: string) =>
+    SERVICE_TYPE_KEYWORDS.some(([kw]) => t.toLowerCase().includes(kw));
+  const isRichCard = (t: string) => hasOfferSignal(t) && hasServiceKeyword(t);
+
+  // Group rich-card blocks by depth. The card layer has the most siblings
+  // (e.g. 6 cards); their parent container appears as a single element.
+  const byDepth = new Map<number, string[]>();
+  for (const { depth, text } of blocks) {
+    if (!isRichCard(text)) continue;
+    const arr = byDepth.get(depth) ?? [];
+    arr.push(text);
+    byDepth.set(depth, arr);
+  }
+
+  let best: string[] = [];
+  for (const arr of byDepth.values()) {
+    if (arr.length > best.length) best = arr;
+  }
+
+  // Need at least 2 cards to be confident we found the card layer, not noise.
+  return best.length >= 2 ? best : [];
+}
+
+/** Reads HTML, segments offer cards, and returns one ExtractedOffer per
+ *  distinct priced ad on the page. Returns empty array when no signal found. */
 export function extractOffers(
   html: string,
   hints: ExtractHints
 ): ExtractedOffer[] {
+  // Service specials: split by DOM card boundaries first — true card isolation
+  // with no character windowing. Each offer card in the HTML grid is a sibling
+  // block element; splitHtmlIntoCards finds that layer automatically.
+  if (hints.missionType === "service_specials") {
+    const cards = splitHtmlIntoCards(html);
+    if (cards.length > 0) {
+      const results: ExtractedOffer[] = [];
+      const seen = new Set<string>();
+      for (const cardText of cards) {
+        const offer = extractOfferFromText(cardText, hints);
+        if (!offer) continue;
+        const sig = offerSig(offer);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        results.push(offer);
+      }
+      if (results.length > 0) return results;
+    }
+    // Card structure not detected — fall back to anchor-based windowing.
+  }
+
   const text = htmlToText(html);
   if (!text) return [];
 
-  // Service specials: window by flat-price / discount anchors, same pattern as
-  // finance/lease windowing by $X/mo. One URL can have many service coupons.
+  // Service specials fallback: window around price / discount anchors.
   if (hints.missionType === "service_specials") {
-    const positions = serviceAnchorPositions(text);
-    if (positions.length === 0) {
+    const anchors = serviceAnchors(text);
+    if (anchors.length === 0) {
       const offer = extractOfferFromText(text, hints);
       return offer ? [offer] : [];
     }
     const results: ExtractedOffer[] = [];
     const seen = new Set<string>();
-    for (const pos of positions) {
+    for (const anchor of anchors) {
       const chunk = text.slice(
-        Math.max(0, pos - WINDOW_BEFORE),
-        Math.min(text.length, pos + WINDOW_AFTER)
+        Math.max(0, anchor.pos - WINDOW_BEFORE),
+        Math.min(text.length, anchor.pos + WINDOW_AFTER)
       );
       const offer = extractOfferFromText(chunk, hints);
       if (!offer) continue;
+      offer.matches.serviceOffer = anchor.text;
       const sig = offerSig(offer);
       if (seen.has(sig)) continue;
       seen.add(sig);

@@ -127,6 +127,37 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
     return this.batchPromise;
   }
 
+  private async callGradeAd(
+    input: ComplianceRequest,
+    batchId: string,
+    withImage: boolean
+  ): Promise<Response> {
+    const baseBody: Record<string, unknown> = {
+      rawText: input.adText ?? undefined,
+      disclaimerText: input.disclaimerText ?? undefined,
+      metadata: {
+        batchId,
+        dealerName: input.dealerName ?? "Unknown Dealer",
+        originalFileName: `evidence-${input.evidenceId}.jpg`,
+        selectedMarketStates: input.marketStates,
+      },
+    };
+
+    if (withImage && input.screenshotBuffer) {
+      const { data: imageBase64, mimeType: imageMimeType } = await prepareImage(
+        input.screenshotBuffer
+      );
+      baseBody.imageBase64 = imageBase64;
+      baseBody.imageMimeType = imageMimeType;
+    }
+
+    return fetch(`${this.baseUrl}/api/external/v1/gradeAd`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: JSON.stringify(baseBody),
+    });
+  }
+
   async grade(input: ComplianceRequest): Promise<ComplianceGradeResult> {
     // Fall back to stub when there's no image or no market state — AdScore
     // requires both. Log so the gap is visible in server output.
@@ -144,33 +175,29 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
     }
 
     const batchId = await this.ensureBatch();
-    const { data: imageBase64, mimeType: imageMimeType } = await prepareImage(
-      input.screenshotBuffer
-    );
-
-    const body = {
-      imageBase64,
-      imageMimeType,
-      rawText: input.adText ?? undefined,
-      disclaimerText: input.disclaimerText ?? undefined,
-      metadata: {
-        batchId,
-        dealerName: input.dealerName ?? "Unknown Dealer",
-        originalFileName: `evidence-${input.evidenceId}.jpg`,
-        selectedMarketStates: input.marketStates,
-      },
-    };
-
-    const resp = await fetch(`${this.baseUrl}/api/external/v1/gradeAd`, {
-      method: "POST",
-      headers: this.authHeaders(),
-      body: JSON.stringify(body),
-    });
+    let resp = await this.callGradeAd(input, batchId, true);
 
     if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      console.error(`[compliance] gradeAd failed ${resp.status}: ${text}`);
-      return this.stub.grade(input);
+      const errorText = await resp.text().catch(() => "");
+      if (resp.status === 422) {
+        // AdScore's AI failed to produce valid JSON from our payload (usually
+        // the image). Retry once without the image — text-only path.
+        console.warn(
+          `[compliance] gradeAd 422 for evidence ${input.evidenceId} ` +
+            `(offerType=${input.offerType}, adTextLen=${input.adText?.length ?? 0}, ` +
+            `disclaimerLen=${input.disclaimerText?.length ?? 0}, hasImage=true) — ` +
+            `retrying without image. AdScore error: ${errorText}`
+        );
+        resp = await this.callGradeAd(input, batchId, false);
+      }
+      if (!resp.ok) {
+        const text = resp.status === 422 ? await resp.text().catch(() => "") : errorText;
+        console.error(
+          `[compliance] gradeAd failed ${resp.status} for evidence ${input.evidenceId} ` +
+            `(offerType=${input.offerType}, dealer=${input.dealerName ?? "?"}): ${text}`
+        );
+        return this.stub.grade(input);
+      }
     }
 
     const json = (await resp.json()) as {

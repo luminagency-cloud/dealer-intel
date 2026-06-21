@@ -46,7 +46,7 @@ export function MissionRunPanel({
   runId,
   items,
   results,
-  offerCountsBySite,
+  offerCountsBySiteMission,
   executing,
   canCollect,
   stalled,
@@ -55,14 +55,17 @@ export function MissionRunPanel({
   executeItemAction,
   executeAllAction,
   retryAction,
+  forceReCollectAction,
+  reAnalyzeSiteMissionAction,
+  partialAnalysisKeys,
   resumeAction,
   error,
 }: {
   runId: string;
   items: PanelWorkItem[];
   results: Map<string, MissionResult>;
-  /** Offer count per siteId after analysis runs. Empty map before analysis. */
-  offerCountsBySite: Map<string, number>;
+  /** Offer count per "siteId:missionType" after analysis runs. Empty map before analysis. */
+  offerCountsBySiteMission: Map<string, number>;
   executing: boolean;
   /** Run is in a state where collection is allowed (pending or running). */
   canCollect: boolean;
@@ -73,10 +76,19 @@ export function MissionRunPanel({
   executeItemAction: (siteId: string, missionId: string) => Promise<void>;
   executeAllAction: () => Promise<void>;
   retryAction: (resultId: string) => Promise<void>;
+  /** Force-requeue a specific dealer+mission on a completed/any-status run. */
+  forceReCollectAction?: (siteId: string, missionId: string) => Promise<void>;
+  /** Re-run offer extraction for one dealer+mission without touching the rest of the run. */
+  reAnalyzeSiteMissionAction?: (siteId: string, missionType: string) => Promise<void>;
+  /** "siteId:missionType" keys currently being partially re-analyzed. */
+  partialAnalysisKeys?: Set<string>;
   resumeAction?: () => Promise<void>;
   error?: string;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Auto-collapse when the run is done — but stay open if a partial re-analysis
+  // is in flight so the operator can see the per-row "Analyzing…" indicator.
+  const anyPartialAnalysis = (partialAnalysisKeys?.size ?? 0) > 0;
+  const [collapsed, setCollapsed] = useState(!canCollect && !executing && !anyPartialAnalysis);
   // null = All (no filter); Set = only rows whose result.status is in the set.
   const [filter, setFilter] = useState<Set<MissionResultStatus> | null>(null);
 
@@ -251,6 +263,7 @@ export function MissionRunPanel({
               <tbody className="divide-y divide-zinc-100">
                 {visibleItems.map(({ mission, site }) => {
                   const result = results.get(`${site.id}:${mission.id}`);
+                  const reAnalyzing = partialAnalysisKeys?.has(`${site.id}:${mission.missionType}`) ?? false;
                   const busy =
                     result?.status === "pending" || result?.status === "running";
                   const retryable =
@@ -275,9 +288,7 @@ export function MissionRunPanel({
                         {result ? result.pagesCaptured : "—"}
                       </td>
                       <td className="px-4 py-3 text-zinc-600">
-                        {offerCountsBySite.has(site.id)
-                          ? offerCountsBySite.get(site.id)
-                          : "—"}
+                        {offerCountsBySiteMission.get(`${site.id}:${mission.missionType}`) ?? "—"}
                       </td>
                       <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-500">
                         {result?.error ?? result?.successfulUrl ?? "—"}
@@ -290,9 +301,31 @@ export function MissionRunPanel({
                           >
                             Evidence
                           </Link>
+                          {reAnalyzeSiteMissionAction && !executing && (
+                            reAnalyzing ? (
+                              <span className="text-xs text-violet-600 font-medium animate-pulse">
+                                Analyzing…
+                              </span>
+                            ) : (
+                              <form
+                                action={reAnalyzeSiteMissionAction.bind(
+                                  null,
+                                  site.id,
+                                  mission.missionType
+                                )}
+                              >
+                                <button
+                                  type="submit"
+                                  className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                                >
+                                  Re-analyze
+                                </button>
+                              </form>
+                            )
+                          )}
                           {busy ? (
                             <span className="text-xs text-zinc-400">—</span>
-                          ) : retryable ? (
+                          ) : retryable && canCollect && !executing ? (
                             <form action={retryAction.bind(null, result.id)}>
                               <button
                                 type="submit"
@@ -304,6 +337,21 @@ export function MissionRunPanel({
                           ) : canCollect && !executing ? (
                             <form
                               action={executeItemAction.bind(
+                                null,
+                                site.id,
+                                mission.id
+                              )}
+                            >
+                              <button
+                                type="submit"
+                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
+                              >
+                                Re-collect
+                              </button>
+                            </form>
+                          ) : !canCollect && !executing && forceReCollectAction ? (
+                            <form
+                              action={forceReCollectAction.bind(
                                 null,
                                 site.id,
                                 mission.id

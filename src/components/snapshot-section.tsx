@@ -13,7 +13,7 @@ function formatDate(date: Date | null) {
  *  frozen reporting snapshot, and list the snapshots already cut from it.
  *
  *  Pass `runGroups` for combined multi-group runs — the panel renders
- *  per-group rows so each group can be frozen independently. */
+ *  per-group rows with checkboxes so the operator can publish selected groups. */
 export function SnapshotSection({
   snapshots,
   canPublish,
@@ -32,6 +32,27 @@ export function SnapshotSection({
   const [label, setLabel] = useState(defaultLabel ?? "");
   const isMultiGroup = runGroups && runGroups.length > 1;
 
+  // Default: unpublished groups checked, already-published unchecked.
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    if (!runGroups) return {};
+    return Object.fromEntries(
+      runGroups.map((g) => [
+        g.id,
+        !snapshots.some((s) => s.runGroupId === g.id),
+      ])
+    );
+  });
+
+  const allChecked =
+    (runGroups?.length ?? 0) > 0 && (runGroups?.every((g) => checked[g.id]) ?? false);
+  const someChecked = runGroups?.some((g) => checked[g.id]) ?? false;
+
+  function toggleAll() {
+    if (!runGroups) return;
+    const next = !allChecked;
+    setChecked(Object.fromEntries(runGroups.map((g) => [g.id, next])));
+  }
+
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-100 px-4 py-3">
@@ -49,14 +70,15 @@ export function SnapshotSection({
         </h2>
         <p className="mt-1 text-sm text-zinc-500">
           {isMultiGroup
-            ? "Combined run — publish each group independently or all at once. Reports never cross group boundaries."
+            ? "Combined run — check the groups to publish, then hit Publish Selected. Reports never cross group boundaries."
             : "Publish this run's offers as an immutable snapshot for reporting. Reports read snapshots only, never the live run."}
         </p>
       </div>
 
-      {/* Multi-group: shared label + per-group freeze rows */}
+      {/* Multi-group: shared label + checkbox rows */}
       {isMultiGroup && canPublish ? (
-        <>
+        <form action={publishAction}>
+          <input type="hidden" name="label" value={label} />
           <div className="border-b border-zinc-100 px-4 py-3">
             <input
               type="text"
@@ -66,58 +88,84 @@ export function SnapshotSection({
               className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-400 focus:outline-none"
             />
           </div>
-          <ul className="divide-y divide-zinc-100">
-            {runGroups.map((group) => {
-              const existing = snapshots.find((s) => s.runGroupId === group.id);
-              return (
-                <li key={group.id} className="flex items-center justify-between px-4 py-3 text-sm">
-                  <span className="font-medium text-zinc-900">{group.name}</span>
-                  <div className="flex items-center gap-4">
-                    {existing ? (
-                      <Link
-                        href={`/snapshots/${existing.id}`}
-                        className="text-sm text-zinc-500 hover:underline"
-                      >
-                        ✓ {existing.offerCount} offers
-                      </Link>
-                    ) : (
-                      <span className="text-sm text-zinc-300">not published</span>
-                    )}
-                    <span className="w-36 text-right text-sm text-zinc-500">
+          <table className="w-full text-sm">
+            <thead className="border-b border-zinc-100 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="w-10 px-4 py-2 text-left">
+                  <input
+                    type="checkbox"
+                    checked={allChecked}
+                    onChange={toggleAll}
+                    className="rounded border-zinc-300"
+                    title="Select all"
+                  />
+                </th>
+                <th className="px-4 py-2 text-left">Group</th>
+                <th className="px-4 py-2 text-right">Status</th>
+                <th className="px-4 py-2 text-right">Published</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {runGroups.map((group) => {
+                const existing = snapshots.find((s) => s.runGroupId === group.id);
+                return (
+                  <tr key={group.id}>
+                    <td className="px-4 py-3">
+                      {checked[group.id] && (
+                        <input type="hidden" name="groupId" value={group.id} />
+                      )}
+                      <input
+                        type="checkbox"
+                        checked={!!checked[group.id]}
+                        onChange={(e) =>
+                          setChecked((prev) => ({
+                            ...prev,
+                            [group.id]: e.target.checked,
+                          }))
+                        }
+                        className="rounded border-zinc-300"
+                      />
+                    </td>
+                    <td className="px-4 py-3 font-medium text-zinc-900">
+                      {group.name}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {existing ? (
+                        <Link
+                          href={`/snapshots/${existing.id}`}
+                          className="text-zinc-500 hover:underline"
+                        >
+                          ✓ {existing.offerCount} offers
+                        </Link>
+                      ) : (
+                        <span className="text-zinc-300">not published</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-zinc-500">
                       {existing ? formatDate(existing.approvedAt) : "—"}
-                    </span>
-                    <form action={publishAction}>
-                      <input type="hidden" name="groupId" value={group.id} />
-                      <input type="hidden" name="label" value={label} />
-                      <button
-                        type="submit"
-                        disabled={!hasOffers}
-                        title={hasOffers ? undefined : "Run analysis first — no offers to publish"}
-                        className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {existing ? "Re-publish" : "Publish"}
-                      </button>
-                    </form>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          {/* Freeze All */}
-          <div className="border-t border-zinc-100 px-4 py-3">
-            <form action={publishAction} className="flex justify-end">
-              <input type="hidden" name="label" value={label} />
-              <button
-                type="submit"
-                disabled={!hasOffers}
-                title={hasOffers ? undefined : "Run analysis first — no offers to publish"}
-                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Publish All {runGroups.length} Groups
-              </button>
-            </form>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="border-t border-zinc-100 px-4 py-3 flex justify-end">
+            <button
+              type="submit"
+              disabled={!hasOffers || !someChecked}
+              title={
+                !hasOffers
+                  ? "Run analysis first — no offers to publish"
+                  : !someChecked
+                    ? "Select at least one group"
+                    : undefined
+              }
+              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Publish Selected
+            </button>
           </div>
-        </>
+        </form>
       ) : (
         /* Single-group / all-sites: original single form */
         canPublish && (

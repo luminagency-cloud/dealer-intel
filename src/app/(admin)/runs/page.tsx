@@ -144,7 +144,7 @@ export default async function RunsPage({
                         ? groupNames[run.runGroupId] ?? "(deleted group)"
                         : adHocNames.has(run.id)
                           ? adHocNames.get(run.id)!.join(", ")
-                          : "All sites"}
+                          : "All groups"}
                     </td>
                     <td className="px-4 py-3">
                       <RunStatusBadge status={run.status} />
@@ -176,7 +176,7 @@ export default async function RunsPage({
       )}
       <p className="mt-4 text-xs text-zinc-400">
         Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Scope: all
-        sites, one or more groups, or a custom dealer selection.
+        groups, one or more specific groups, or a custom dealer selection.
       </p>
     </div>
   );

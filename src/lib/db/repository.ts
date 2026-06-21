@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   collectionRunMissions,
@@ -276,6 +276,25 @@ export async function listOffersForRun(
     .select()
     .from(offers)
     .where(eq(offers.collectionRunId, collectionRunId));
+}
+
+export async function listOfferCountsByMissionForRun(
+  collectionRunId: string
+): Promise<{ siteId: string; missionType: string; count: number }[]> {
+  const rows = await getDb()
+    .select({
+      siteId: offers.siteId,
+      missionType: evidence.missionType,
+      count: count(),
+    })
+    .from(offers)
+    .innerJoin(
+      evidence,
+      and(eq(offers.sourceEvidenceId, evidence.id), isNotNull(offers.sourceEvidenceId))
+    )
+    .where(eq(offers.collectionRunId, collectionRunId))
+    .groupBy(offers.siteId, evidence.missionType);
+  return rows.map((r) => ({ siteId: r.siteId, missionType: r.missionType, count: r.count }));
 }
 
 export async function updateOffer(

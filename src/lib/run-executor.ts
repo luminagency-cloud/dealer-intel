@@ -3,6 +3,7 @@ import {
   getDb,
   collectionRuns,
   missionResults,
+  missions,
   sites,
   type MissionResultStatus,
   type RunStatus,
@@ -224,9 +225,8 @@ async function drainRun(runId: string): Promise<void> {
       .from(collectionRuns)
       .where(eq(collectionRuns.id, runId));
     if (!run) return;
-    // Surface progress on the run page; finalize re-settles at the end. Leave
-    // an already-published run alone.
-    if (run.status === "pending" || run.status === "review" || run.status === "failed") {
+    // Surface progress on the run page; finalize re-settles at the end.
+    if (run.status === "pending" || run.status === "review" || run.status === "failed" || run.status === "complete") {
       await db
         .update(collectionRuns)
         .set({ status: "running", startedAt: run.startedAt ?? new Date() })
@@ -422,6 +422,51 @@ export async function requeueStalledRun(runId: string): Promise<void> {
         inArray(missionResults.status, ["pending", "running"])
       )
     );
+  ensureDrainer(runId);
+}
+
+/** Force-requeue a single site+mission result regardless of run status.
+ *  Used by the operator to re-collect one dealer on an already-complete run
+ *  without having to start a new run. The run transitions back to running
+ *  while collection is in flight, then re-finalises when done. */
+export async function forceReCollectSingle(
+  runId: string,
+  siteId: string,
+  missionId: string
+): Promise<void> {
+  const db = getDb();
+  const [mission] = await db
+    .select()
+    .from(missions)
+    .where(eq(missions.id, missionId));
+  if (!mission) throw new Error("Mission not found");
+
+  await db
+    .insert(missionResults)
+    .values({
+      collectionRunId: runId,
+      missionId,
+      siteId,
+      missionType: mission.missionType,
+      status: "pending",
+      pagesCaptured: 0,
+    })
+    .onConflictDoUpdate({
+      target: [
+        missionResults.collectionRunId,
+        missionResults.siteId,
+        missionResults.missionId,
+      ],
+      set: {
+        status: "pending",
+        pagesCaptured: 0,
+        successfulUrl: null,
+        error: null,
+        startedAt: null,
+        completedAt: null,
+      },
+    });
+
   ensureDrainer(runId);
 }
 

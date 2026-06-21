@@ -36,6 +36,7 @@ _Last updated: June 2026_
 | ~~Brand News~~ | Done — live via autos.media news service (news.dlrtools.com). See Docs/NewsGather/autos-media-news-spec.md |
 | Phase 11 v2 trend deltas | Per-metric change vs. prior snapshot in the report |
 | Disclaimer modal capture for dealer_inspire / dealer_alchemist | Selectors don't match their modal pattern yet |
+| Run page live-progress efficiency | `AutoRefresh` fires `router.refresh()` every 4s, re-running 8 DB queries to update two status badges. Fix: add `GET /api/runs/[id]/progress` (returns only work-item statuses as JSON) + a client component that polls it. Much cheaper; could safely drop to 1-2s interval. Not worth touching pre-v1. |
 
 ---
 

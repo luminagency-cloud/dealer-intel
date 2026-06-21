@@ -16,7 +16,7 @@ export function RunScopePicker({
   defaultCycle: string;
 }) {
   const [cycle, setCycle] = useState(defaultCycle);
-  const [scope, setScope] = useState("");
+  const [scope, setScope] = useState("all-groups");
   const [checkedGroups, setCheckedGroups] = useState<Set<string>>(new Set());
   const [checkedSites, setCheckedSites] = useState<Set<string>>(new Set());
   const [checkedMissions, setCheckedMissions] = useState<Set<string>>(
@@ -94,10 +94,17 @@ export function RunScopePicker({
         aria-label="Run scope"
         className="max-w-56 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
       >
-        <option value="">Scope: All sites</option>
+        <option value="all-groups">Scope: All groups</option>
         <option value="groups">Pick groups…</option>
         <option value="custom">Pick dealers…</option>
       </select>
+
+      {/* No-group warning */}
+      {groups.length === 0 && (
+        <span className="text-xs text-amber-600">
+          No groups defined — reporting unavailable
+        </span>
+      )}
 
       {/* Group picker panel */}
       {scope === "groups" && (

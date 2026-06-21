@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import {
   getDb,
   collectionRuns,
@@ -7,6 +7,7 @@ import {
   offers,
   sites,
   type Evidence,
+  type MissionType,
 } from "@/lib/db";
 import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
 import { extractOffers, findKnownModel, htmlToText } from "./extract";
@@ -36,6 +37,19 @@ const analysisProgress = (globalState.__analysisProgress ??= new Map<
 
 export function isAnalysisRunning(runId: string): boolean {
   return activeAnalyses.has(runId);
+}
+
+/** Returns the set of "siteId:missionType" pairs currently being partially
+ *  re-analyzed within this run. Empty set = no partial analyses in flight. */
+export function getPartialAnalysisKeys(runId: string): Set<string> {
+  const prefix = `${runId}:`;
+  const keys = new Set<string>();
+  for (const key of activeAnalyses) {
+    if (key.startsWith(prefix)) {
+      keys.add(key.slice(prefix.length));
+    }
+  }
+  return keys;
 }
 
 export function getAnalysisProgress(
@@ -208,6 +222,15 @@ async function processAnalysis(
       .delete(complianceGrades)
       .where(eq(complianceGrades.collectionRunId, runId));
 
+    // Void prior-run offers for every site this run covers. Scoped by siteId
+    // so runs covering different dealer sets don't step on each other.
+    const siteIdsInRun = [...new Set(rows.map((r) => r.evidence.siteId))];
+    if (siteIdsInRun.length > 0) {
+      await db
+        .delete(offers)
+        .where(and(inArray(offers.siteId, siteIdsInRun), ne(offers.collectionRunId, runId)));
+    }
+
     const grader = getComplianceGrader(runId);
     const enricher = getOfferEnricher();
     const aiThreshold = aiConfidenceThreshold();
@@ -264,13 +287,14 @@ async function processAnalysis(
           offer.termMonths ?? "",
           offer.cashIncentive ?? "",
           offer.dueAtSigning ?? "",
+          offer.matches?.serviceOffer ?? "",
         ].join("|");
         if (seen.has(signature)) continue;
         seen.add(signature);
 
         let effective = offer;
         let aiAssisted = false;
-        if (offer.confidence < aiThreshold || effective.vehicleModel === null) {
+        if (offer.confidence < aiThreshold || (effective.vehicleModel === null && effective.offerType !== "service")) {
           const enrichment = await enricher.enrich({
             pageText,
             brand: site.brand,
@@ -390,6 +414,7 @@ async function processAnalysis(
           effective.termMonths ?? "",
           effective.cashIncentive ?? "",
           effective.dueAtSigning ?? "",
+          offer.matches?.serviceOffer ?? "",
         ].join("|");
         if (seen.has(signature)) continue;
         seen.add(signature);
@@ -480,6 +505,66 @@ export async function runAnalysisDirect(runId: string): Promise<void> {
   await processAnalysis(runId, rows);
 }
 
+async function loadAnalyzableEvidenceForSiteMission(
+  runId: string,
+  siteId: string,
+  missionType: MissionType
+): Promise<EvidenceWithSite[]> {
+  const rows = await getDb()
+    .select({
+      evidence,
+      brand: sites.brand,
+      name: sites.name,
+      state: sites.state,
+      otherStates: sites.otherStates,
+    })
+    .from(evidence)
+    .innerJoin(sites, eq(sites.id, evidence.siteId))
+    .where(
+      and(
+        eq(evidence.collectionRunId, runId),
+        eq(evidence.siteId, siteId),
+        eq(evidence.missionType, missionType),
+        eq(evidence.evidenceType, "html_snapshot")
+      )
+    );
+  return rows.map((r) => ({
+    evidence: r.evidence,
+    site: { brand: r.brand, name: r.name, state: r.state, otherStates: r.otherStates },
+  }));
+}
+
+async function loadDisclaimerEvidenceForSiteMission(
+  runId: string,
+  siteId: string,
+  missionType: MissionType
+): Promise<EvidenceWithSite[]> {
+  const rows = await getDb()
+    .select({
+      evidence,
+      brand: sites.brand,
+      name: sites.name,
+      state: sites.state,
+      otherStates: sites.otherStates,
+    })
+    .from(evidence)
+    .innerJoin(sites, eq(sites.id, evidence.siteId))
+    .where(
+      and(
+        eq(evidence.collectionRunId, runId),
+        eq(evidence.siteId, siteId),
+        eq(evidence.missionType, missionType),
+        eq(evidence.evidenceType, "disclaimer_screenshot")
+      )
+    );
+  return rows
+    .filter((r) => Boolean(r.evidence.textContent))
+    .map((r) => ({
+      evidence: r.evidence,
+      site: { brand: r.brand, name: r.name, state: r.state, otherStates: r.otherStates },
+    }));
+}
+
 export async function startAnalysis(runId: string): Promise<number | null> {
   if (activeAnalyses.has(runId)) return null;
   try {
@@ -499,4 +584,132 @@ export async function startAnalysis(runId: string): Promise<number | null> {
     activeAnalyses.delete(runId);
     throw err;
   }
+}
+
+/** Re-run extraction for a single site+mission within a run.
+ *
+ *  Deletes only the offers and compliance grades sourced from this site+mission's
+ *  evidence, then re-inserts fresh results. Safe to call while the rest of the
+ *  run's offers are intact. Blocked if a full-run analysis is in flight. */
+export async function startAnalysisForSiteMission(
+  runId: string,
+  siteId: string,
+  missionType: MissionType
+): Promise<"started" | "busy" | "no_evidence"> {
+  // Block if a full-run analysis is already running.
+  if (activeAnalyses.has(runId)) return "busy";
+  const key = `${runId}:${siteId}:${missionType}`;
+  if (activeAnalyses.has(key)) return "busy";
+
+  const htmlRows = await loadAnalyzableEvidenceForSiteMission(runId, siteId, missionType);
+  const disclaimerRows = await loadDisclaimerEvidenceForSiteMission(runId, siteId, missionType);
+  if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
+
+  activeAnalyses.add(key);
+
+  void (async () => {
+    try {
+      const db = getDb();
+      const allEvidenceIds = [
+        ...htmlRows.map((r) => r.evidence.id),
+        ...disclaimerRows.map((r) => r.evidence.id),
+      ];
+
+      // Delete existing offers for this site — both from this run and from all
+      // prior runs. Prior-run offers are voided so a new analysis is the truth.
+      await db
+        .delete(offers)
+        .where(eq(offers.siteId, siteId));
+      await db
+        .delete(complianceGrades)
+        .where(
+          and(
+            eq(complianceGrades.collectionRunId, runId),
+            inArray(complianceGrades.evidenceId, allEvidenceIds)
+          )
+        );
+
+      const grader = getComplianceGrader(runId);
+      const enricher = getOfferEnricher();
+      const aiThreshold = aiConfidenceThreshold();
+      const capturedDisclaimers = await loadCapturedDisclaimers(runId);
+      const screenshotIndex = await loadScreenshotIndex(runId);
+      const screenshotCache = new Map<string, Buffer | null>();
+      const seen = new Set<string>();
+
+      for (const { evidence: row, site } of htmlRows) {
+        const html = await getEvidenceText(row);
+        if (!html) continue;
+        const extracted = extractOffers(html, { missionType: row.missionType, brand: site.brand });
+        const pageText = htmlToText(html);
+        const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
+        const screenshotKey = `${row.siteId}:${row.missionType}:${row.label ?? ""}`;
+        const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
+        let screenshotBuffer: Buffer | null = null;
+        if (screenshotRow) {
+          if (!screenshotCache.has(screenshotRow.id)) {
+            screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
+          }
+          screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
+        }
+        for (const offer of extracted) {
+          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.dueAtSigning ?? "", offer.matches?.serviceOffer ?? ""].join("|");
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          let effective = offer;
+          let aiAssisted = false;
+          if (offer.confidence < aiThreshold || (effective.vehicleModel === null && effective.offerType !== "service")) {
+            const enrichment = await enricher.enrich({ pageText, brand: site.brand, current: effective, screenshotBuffer });
+            if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
+          }
+          const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
+          const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
+          const vehicleModel = matched?.model ?? effective.vehicleModel;
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
+          const result = COMPLIANCE_TYPES.includes(effective.offerType)
+            ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
+            : { grade: "n/a", details: { notApplicable: true, offerType: effective.offerType } };
+          await db.insert(complianceGrades).values({ evidenceId: row.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+        }
+      }
+
+      for (const { evidence: row, site } of disclaimerRows) {
+        const text = row.textContent!;
+        const extracted = extractOffers(text, { missionType: row.missionType, brand: site.brand });
+        const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
+        if (!screenshotCache.has(row.id)) screenshotCache.set(row.id, await getEvidenceBody(row));
+        const screenshotBuffer = screenshotCache.get(row.id) ?? null;
+        for (const offer of extracted) {
+          let effective = offer;
+          if (!effective.vehicleModel && row.label) {
+            const labelModel = findKnownModel(row.label);
+            if (labelModel) effective = { ...effective, vehicleModel: labelModel };
+          }
+          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.dueAtSigning ?? "", offer.matches?.serviceOffer ?? ""].join("|");
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          let aiAssisted = false;
+          if (effective.confidence < aiThreshold || effective.vehicleModel === null) {
+            const enrichment = await enricher.enrich({ pageText: text, brand: site.brand, current: effective, screenshotBuffer });
+            if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
+          }
+          const disclaimerText = disclaimerPortion(text).slice(0, 1000);
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
+          const result = COMPLIANCE_TYPES.includes(effective.offerType)
+            ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
+            : { grade: "n/a", details: { notApplicable: true, offerType: effective.offerType } };
+          await db.insert(complianceGrades).values({ evidenceId: row.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+        }
+      }
+    } finally {
+      activeAnalyses.delete(key);
+    }
+  })().catch((err) => {
+    console.error(`partial analysis for ${runId} ${siteId} ${missionType} crashed:`, err);
+    activeAnalyses.delete(key);
+  });
+
+  return "started";
 }

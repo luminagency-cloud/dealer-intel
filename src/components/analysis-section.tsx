@@ -22,6 +22,14 @@ function confidenceStyle(confidence: number | null): string {
   return "text-red-700";
 }
 
+const TYPE_ORDER: Record<string, number> = {
+  lease: 0,
+  finance: 1,
+  cash: 2,
+  service: 3,
+  promotional: 4,
+};
+
 function fmtTime(d: Date | null | undefined): string {
   if (!d) return "—";
   return new Date(d).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -62,13 +70,25 @@ export function AnalysisSection({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [siteFilter, setSiteFilter] = useState<string>("all");
+  // Default to sorted once analysis is complete; unsorted while it's running so
+  // new rows appear at the bottom as they arrive.
+  const [sorted, setSorted] = useState(!analyzing);
 
   const gradeByEvidence = new Map(grades.map((g) => [g.evidenceId, g.grade]));
 
-  const visible =
+  const filtered =
     siteFilter === "all"
       ? offers
       : offers.filter((o) => o.siteId === siteFilter);
+
+  const visible = sorted
+    ? [...filtered].sort((a, b) => {
+        const nameA = siteNames[a.siteId] ?? "";
+        const nameB = siteNames[b.siteId] ?? "";
+        if (nameA !== nameB) return nameA.localeCompare(nameB);
+        return (TYPE_ORDER[a.offerType] ?? 99) - (TYPE_ORDER[b.offerType] ?? 99);
+      })
+    : filtered;
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -84,7 +104,7 @@ export function AnalysisSection({
               {offers.length > 0 && (
                 <span className="font-normal text-zinc-500">
                   — {offers.length} offer{offers.length === 1 ? "" : "s"}
-                  {siteFilter !== "all" && ` · ${visible.length} shown`}
+                  {siteFilter !== "all" && ` · ${filtered.length} shown`}
                 </span>
               )}
               <span className="ml-2 text-sm font-normal text-zinc-400">
@@ -92,20 +112,33 @@ export function AnalysisSection({
               </span>
             </button>
             {!collapsed && offers.length > 0 && (
-              <select
-                value={siteFilter}
-                onChange={(e) => setSiteFilter(e.target.value)}
-                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 focus:outline-none"
-              >
-                <option value="all">All sites</option>
-                {siteOptions
-                  .filter((s) => offers.some((o) => o.siteId === s.id))
-                  .map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.name}
-                    </option>
-                  ))}
-              </select>
+              <>
+                <select
+                  value={siteFilter}
+                  onChange={(e) => setSiteFilter(e.target.value)}
+                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 focus:outline-none"
+                >
+                  <option value="all">All sites</option>
+                  {siteOptions
+                    .filter((s) => offers.some((o) => o.siteId === s.id))
+                    .map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setSorted((s) => !s)}
+                  className={`rounded-md border px-2.5 py-1 text-sm transition-colors ${
+                    sorted
+                      ? "border-zinc-900 bg-zinc-900 text-white"
+                      : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+                  }`}
+                >
+                  Dealer &amp; Type
+                </button>
+              </>
             )}
           </div>
           {analyzing ? (
@@ -209,12 +242,16 @@ export function AnalysisSection({
                           {OFFER_TYPE_LABELS[offer.offerType]}
                         </td>
                         <td className="px-4 py-3 text-zinc-700">
-                          {vehicle || "—"}
+                          {offer.offerType === "service"
+                            ? (offer.rawText || "—")
+                            : (vehicle || "—")}
                         </td>
                         <td className="px-4 py-3 text-zinc-700">
-                          {offer.monthlyPayment === null
-                            ? "—"
-                            : `${money(offer.monthlyPayment)}/mo`}
+                          {offer.offerType === "service"
+                            ? ((offer.normalizedJson as { matches?: { serviceOffer?: string } } | null)?.matches?.serviceOffer ?? "—")
+                            : offer.monthlyPayment === null
+                              ? "—"
+                              : `${money(offer.monthlyPayment)}/mo`}
                         </td>
                         <td className="px-4 py-3 text-zinc-700">
                           {offer.apr === null ? "—" : `${offer.apr}%`}

@@ -594,6 +594,16 @@ export function ReportContent({
                         missing: {missingFields.join(", ")}
                       </div>
                     )}
+                    {offer.sourceEvidenceId && (
+                      <a
+                        href={`/api/evidence/${offer.sourceEvidenceId}/file`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 block text-[9px] text-blue-500 hover:underline"
+                      >
+                        View ad ↗
+                      </a>
+                    )}
                   </>
                 );
               }}
@@ -609,13 +619,14 @@ export function ReportContent({
         <SectionHeading
           num="3"
           title="Finance (APR) Specials"
-          sub="Ranked by advertised APR per model (lower = better). Term length varies and is shown in each cell."
+          sub="Advertised APR per model. Term length varies and is shown in each cell."
         />
         <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
           <div className="p-4">
             <GridTable
               dealers={dealers}
               rows={financeGrid}
+              disableRanking
               renderCell={(_cell, offer) => (
                 <>
                   {offer.apr !== null && (
@@ -627,10 +638,8 @@ export function ReportContent({
                 </>
               )}
             />
-            <GridLegend hasRanking={financeGrid.length > 0} />
           </div>
         </div>
-        <Narrative text={financeNote} />
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -760,25 +769,30 @@ export function ReportContent({
             sub={`Compliance grades for ${anchor?.siteName ?? "anchor"} offers.`}
           />
           <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
-            <div className="flex flex-wrap gap-4 px-6 py-5">
-              {Object.entries(realComplianceCounts).map(([grade, count]) => (
-                <div key={grade} className="text-center">
-                  <div
-                    className={`text-3xl font-bold ${
-                      grade === "pass"
-                        ? "text-emerald-600"
-                        : grade === "fail"
-                          ? "text-red-600"
-                          : "text-amber-600"
-                    }`}
-                  >
-                    {count}
+            <div className="px-6 pt-5 pb-4 border-b border-zinc-100">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">
+                This week&apos;s ad grades
+              </p>
+              <div className="flex flex-wrap gap-6">
+                {Object.entries(realComplianceCounts).map(([grade, count]) => (
+                  <div key={grade} className="text-center">
+                    <div
+                      className={`text-4xl font-extrabold leading-none ${
+                        grade === "pass"
+                          ? "text-emerald-600"
+                          : grade === "fail"
+                            ? "text-red-600"
+                            : "text-amber-600"
+                      }`}
+                    >
+                      {grade.toUpperCase()}
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-zinc-500">
+                      {count} ad{count !== 1 ? "s" : ""}
+                    </div>
                   </div>
-                  <div className="mt-0.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    {grade}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
             {/* Per-offer compliance table for anchor */}
             {(() => {
@@ -797,23 +811,31 @@ export function ReportContent({
                       <th className="px-4 py-2 text-left font-medium">Offer</th>
                       <th className="px-4 py-2 text-left font-medium">Type</th>
                       <th className="px-4 py-2 text-left font-medium">Grade</th>
-                      <th className="px-4 py-2 text-left font-medium">Evidence</th>
+                      <th className="px-4 py-2 text-left font-medium">Original Ad</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100">
-                    {anchorGraded.map((o) => (
+                    {anchorGraded.map((o) => {
+                      const details = o.complianceDetailsJson as Record<string, unknown> | null;
+                      const reason = details?.reason as string | undefined;
+                      return (
                       <tr key={o.id}>
-                        <td className="px-4 py-2.5 text-zinc-800">
-                          {[o.vehicleMake, o.vehicleModel, o.vehicleTrim]
-                            .filter(Boolean)
-                            .join(" ") || "—"}
+                        <td className="px-4 py-3 text-zinc-800">
+                          <div className="font-medium">
+                            {[o.vehicleMake, o.vehicleModel, o.vehicleTrim]
+                              .filter(Boolean)
+                              .join(" ") || "—"}
+                          </div>
+                          {reason && (
+                            <p className="mt-1 text-sm text-zinc-600 leading-snug">{reason}</p>
+                          )}
                         </td>
-                        <td className="px-4 py-2.5 capitalize text-zinc-600">
+                        <td className="px-4 py-3 capitalize text-zinc-600 align-top">
                           {o.offerType}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-3 align-top">
                           <span
-                            className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            className={`inline-flex rounded-full px-2.5 py-1 text-sm font-semibold ${
                               o.complianceGrade === "pass"
                                 ? "bg-green-100 text-green-800"
                                 : o.complianceGrade === "fail"
@@ -823,30 +845,24 @@ export function ReportContent({
                           >
                             {o.complianceGrade}
                           </span>
-                          {(() => {
-                            const details = o.complianceDetailsJson as Record<string, unknown> | null;
-                            const reason = details?.reason as string | undefined;
-                            return reason ? (
-                              <p className="mt-1 text-sm text-zinc-700">{reason}</p>
-                            ) : null;
-                          })()}
                         </td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-4 py-3 align-top">
                           {o.sourceEvidenceId ? (
                             <a
                               href={`/api/evidence/${o.sourceEvidenceId}/file`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-xs text-blue-600 hover:underline"
+                              className="text-sm text-blue-600 hover:underline"
                             >
                               View
                             </a>
                           ) : (
-                            <span className="text-xs text-zinc-400">—</span>
+                            <span className="text-sm text-zinc-400">—</span>
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               );
