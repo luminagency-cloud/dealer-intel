@@ -614,9 +614,9 @@ export function ReportContent({
                               {fmtMoney(o.cashIncentive)} off
                             </div>
                           )}
-                          {o.sourceEvidenceId && (
+                          {o.evidenceUrl && (
                             <a
-                              href={`/api/evidence/${o.sourceEvidenceId}/file`}
+                              href={o.evidenceUrl}
                               target="_blank"
                               rel="noreferrer"
                               className="mt-0.5 block text-xs text-blue-600 hover:underline"
@@ -708,9 +708,9 @@ export function ReportContent({
                           </span>
                         </td>
                         <td className="px-4 py-2.5">
-                          {o.sourceEvidenceId ? (
+                          {o.evidenceUrl ? (
                             <a
-                              href={`/api/evidence/${o.sourceEvidenceId}/file`}
+                              href={o.evidenceUrl}
                               target="_blank"
                               rel="noreferrer"
                               className="text-xs text-blue-600 hover:underline"

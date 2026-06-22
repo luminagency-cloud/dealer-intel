@@ -114,9 +114,9 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  {offer.sourceEvidenceId ? (
+                  {(offer.evidenceUrl ?? offer.sourceEvidenceId) ? (
                     <a
-                      href={`/api/evidence/${offer.sourceEvidenceId}/file`}
+                      href={offer.evidenceUrl ?? `/api/evidence/${offer.sourceEvidenceId}/file`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-xs text-blue-600 hover:underline"

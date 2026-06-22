@@ -543,6 +543,10 @@ export const snapshotOffers = pgTable("snapshot_offers", {
   sourceEvidenceId: uuid("source_evidence_id").references(() => evidence.id, {
     onDelete: "set null",
   }),
+  /** Direct public R2 URL for the evidence file, frozen at snapshot time from
+   *  R2_PUBLIC_URL + the object key. Null when R2_PUBLIC_URL was not set at
+   *  publish time. The viewer uses this; the admin falls back to the API route. */
+  evidenceUrl: text("evidence_url"),
   missionType: missionTypeEnum("mission_type").notNull(),
   offerType: offerTypeEnum("offer_type").notNull(),
   vehicleMake: text("vehicle_make"),

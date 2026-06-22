@@ -1,0 +1,1 @@
+ALTER TABLE "snapshot_offers" ADD COLUMN "evidence_url" text;

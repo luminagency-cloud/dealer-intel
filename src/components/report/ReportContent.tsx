@@ -594,9 +594,9 @@ export function ReportContent({
                         missing: {missingFields.join(", ")}
                       </div>
                     )}
-                    {offer.sourceEvidenceId && (
+                    {(offer.evidenceUrl ?? offer.sourceEvidenceId) && (
                       <a
-                        href={`/api/evidence/${offer.sourceEvidenceId}/file`}
+                        href={offer.evidenceUrl ?? `/api/evidence/${offer.sourceEvidenceId}/file`}
                         target="_blank"
                         rel="noreferrer"
                         className="mt-1 block text-[9px] text-blue-500 hover:underline"
@@ -735,9 +735,9 @@ export function ReportContent({
                               {matchMap.serviceOffer}
                             </div>
                           ) : null}
-                          {o.sourceEvidenceId && (
+                          {(o.evidenceUrl ?? o.sourceEvidenceId) && (
                             <a
-                              href={`/api/evidence/${o.sourceEvidenceId}/file`}
+                              href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
                               target="_blank"
                               rel="noreferrer"
                               className="mt-0.5 block text-xs text-blue-600 hover:underline"
@@ -800,6 +800,7 @@ export function ReportContent({
                 (o) =>
                   o.siteId &&
                   anchorSiteIds.has(o.siteId) &&
+                  o.offerType !== "service" &&
                   o.complianceGrade &&
                   o.complianceGrade !== "n/a"
               );
@@ -827,7 +828,7 @@ export function ReportContent({
                               .join(" ") || "—"}
                           </div>
                           {reason && (
-                            <p className="mt-1 text-sm text-zinc-600 leading-snug">{reason}</p>
+                            <p className="mt-1 text-sm text-zinc-800 leading-snug">{reason}</p>
                           )}
                         </td>
                         <td className="px-4 py-3 capitalize text-zinc-600 align-top">
@@ -847,9 +848,9 @@ export function ReportContent({
                           </span>
                         </td>
                         <td className="px-4 py-3 align-top">
-                          {o.sourceEvidenceId ? (
+                          {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
                             <a
-                              href={`/api/evidence/${o.sourceEvidenceId}/file`}
+                              href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
                               target="_blank"
                               rel="noreferrer"
                               className="text-sm text-blue-600 hover:underline"

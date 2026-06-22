@@ -103,6 +103,14 @@ export async function getEvidenceText(row: Evidence): Promise<string | null> {
   return body ? body.toString("utf-8") : null;
 }
 
+/** Direct public URL for an R2 object key, using the configured public domain.
+ *  Returns null when R2_PUBLIC_URL is not set (private-only bucket). */
+export function getEvidencePublicUrl(key: string): string | null {
+  const base = process.env.R2_PUBLIC_URL;
+  if (!base) return null;
+  return `${base.replace(/\/$/, "")}/${key}`;
+}
+
 /** Short-lived presigned GET URL for an evidence row's stored object. */
 export async function getEvidenceDownloadUrl(row: Evidence): Promise<string> {
   const key = evidenceKey(row);

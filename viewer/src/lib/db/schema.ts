@@ -94,6 +94,7 @@ export const snapshotOffers = pgTable("snapshot_offers", {
   siteBrand: text("site_brand"),
   siteState: text("site_state"),
   sourceEvidenceId: uuid("source_evidence_id"),
+  evidenceUrl: text("evidence_url"),
   missionType: missionTypeEnum("mission_type").notNull(),
   offerType: offerTypeEnum("offer_type").notNull(),
   vehicleMake: text("vehicle_make"),

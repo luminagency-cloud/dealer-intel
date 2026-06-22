@@ -11,6 +11,7 @@ import {
   snapshotOffers,
   type ReportSnapshot,
 } from "@/lib/db";
+import { getEvidencePublicUrl, evidenceKey } from "@/lib/evidence";
 
 /**
  * Phase 10 — Snapshot Publishing. The wall between analysis and reporting.
@@ -47,6 +48,8 @@ export async function createSnapshotFromRun(
       siteBrand: sites.brand,
       siteState: sites.state,
       missionType: evidence.missionType,
+      evidenceScreenshotUrl: evidence.screenshotUrl,
+      evidenceHtmlUrl: evidence.htmlUrl,
       grade: complianceGrades.grade,
       gradeDetails: complianceGrades.detailsJson,
     })
@@ -102,13 +105,17 @@ export async function createSnapshotFromRun(
     .returning();
 
   await db.insert(snapshotOffers).values(
-    filteredRows.map((r) => ({
+    filteredRows.map((r) => {
+      const key = r.evidenceScreenshotUrl ?? r.evidenceHtmlUrl ?? null;
+      const evidenceUrl = key ? getEvidencePublicUrl(key) : null;
+      return {
       snapshotId: snapshot.id,
       siteId: r.offer.siteId,
       siteName: r.siteName,
       siteBrand: r.siteBrand,
       siteState: r.siteState,
       sourceEvidenceId: r.offer.sourceEvidenceId,
+      evidenceUrl,
       // Mission type lives on the evidence; fall back to homepage when the
       // source evidence is gone (shouldn't happen for a live run).
       missionType: r.missionType ?? "homepage_offers",
@@ -127,7 +134,8 @@ export async function createSnapshotFromRun(
       confidence: r.offer.confidence,
       complianceGrade: r.grade ?? null,
       complianceDetailsJson: r.gradeDetails ?? null,
-    }))
+      };
+    })
   );
 
   return snapshot;

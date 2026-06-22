@@ -14,6 +14,7 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().min(1).optional(),
   R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   R2_BUCKET: z.string().min(1).optional(),
+  R2_PUBLIC_URL: z.string().url().optional(),
   ADGRADER_BASE_URL: z.string().min(1).optional(),
   ADGRADER_CLIENT_ID: z.string().min(1).optional(),
   ADGRADER_CLIENT_SECRET: z.string().min(1).optional(),
