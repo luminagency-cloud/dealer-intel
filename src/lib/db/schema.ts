@@ -600,6 +600,50 @@ export type NewUser = typeof users.$inferInsert;
 export type UserRunGroup = typeof userRunGroups.$inferSelect;
 export type NewUserRunGroup = typeof userRunGroups.$inferInsert;
 
+// ---------------------------------------------------------------------------
+// Inventory results
+// ---------------------------------------------------------------------------
+
+/** One inventory API result per dealer per batch run. */
+export const inventoryResults = pgTable(
+  "inventory_results",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    siteId: uuid("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    /** Groups all results from a single "Run Inventory" action. */
+    batchId: uuid("batch_id").notNull(),
+    /** ISO week key, e.g. "2026-W26". */
+    weekKey: text("week_key").notNull(),
+    collectedAt: timestamp("collected_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** "ok" = API returned 200; "failed" = API returned an error. */
+    status: text("status").notNull(),
+    detectedPlatform: text("detected_platform"),
+    accessRoute: text("access_route"),
+    attempts: integer("attempts"),
+    sourceUrl: text("source_url"),
+    /** { inStock, inTransit, displayValue } */
+    totals: jsonb("totals"),
+    /** Array of { make, inStock, inTransit } */
+    makeSubtotals: jsonb("make_subtotals"),
+    /** Array of { make, model, inStock, inTransit, status } */
+    models: jsonb("models"),
+    warnings: text("warnings").array(),
+    /** Populated on failure: { message, code, statusCode, isRateLimited } */
+    error: jsonb("error"),
+  },
+  (table) => [
+    index("inventory_results_site_idx").on(table.siteId),
+    index("inventory_results_batch_idx").on(table.batchId),
+    index("inventory_results_week_idx").on(table.weekKey),
+  ]
+);
+export type InventoryResult = typeof inventoryResults.$inferSelect;
+export type NewInventoryResult = typeof inventoryResults.$inferInsert;
+
 /** Locally cached news items pulled once per week from the news service.
  *  Reports read from this table; the home page Refresh button triggers the pull. */
 export const newsItems = pgTable(
