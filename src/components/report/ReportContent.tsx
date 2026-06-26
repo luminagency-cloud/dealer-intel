@@ -1,5 +1,7 @@
 "use client";
 
+import React from "react";
+
 /**
  * Competitive Market Analysis — full report UI (Phase 11 v2).
  *
@@ -23,7 +25,7 @@ import {
   type DealerCol,
   type GridRow,
 } from "@/lib/report";
-import type { ReportSnapshot, SnapshotOffer } from "@/lib/db";
+import type { InventoryResult, ReportSnapshot, SnapshotOffer } from "@/lib/db";
 import type { NewsData, NewsItem } from "@/lib/news";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,8 @@ export interface ReportContentProps {
   /** News data from the autos.media news service. Null = service not yet
    *  connected; shows a placeholder. */
   news?: NewsData | null;
+  /** Latest inventory result per site, used for the Inventory Snapshot section. */
+  inventoryData?: InventoryResult[];
   /** When true, show admin-only controls (Copy Link, Export CSV). */
   adminControls?: boolean;
   /** Tailwind classes for the outermost wrapper div. Defaults to
@@ -122,16 +126,22 @@ function GridTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
+      <table className="w-full border-collapse text-sm" style={{ tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: "160px" }} />
+          {dealers.map((d) => (
+            <col key={d.siteId ?? d.siteName} style={{ width: "120px" }} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
-            <th className="w-36 border border-zinc-200 bg-zinc-100 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600">
+            <th className="border border-zinc-200 bg-zinc-100 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600">
               Model
             </th>
             {dealers.map((d) => (
               <th
                 key={d.siteId ?? d.siteName}
-                className={`border border-zinc-200 px-3 py-2 text-center text-xs font-semibold uppercase tracking-wide ${
+                className={`border border-zinc-200 px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide ${
                   d.isPrimary
                     ? "bg-[#1b5e3b] text-white"
                     : "bg-zinc-700 text-white"
@@ -262,6 +272,16 @@ function NewsCard({ item }: { item: NewsItem }) {
   );
 }
 
+function ReturnToSummary() {
+  return (
+    <div className="mt-4 text-right">
+      <a href="#summary" className="text-xs font-medium text-zinc-400 hover:text-[#1b3a6b] hover:underline">
+        ↑ Return to summary
+      </a>
+    </div>
+  );
+}
+
 function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; brand?: string }) {
   const brandLabel = brand
     ? `Current ${brand} developments relevant to this dealer group.`
@@ -285,6 +305,7 @@ function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; 
           Brand &amp; industry news will appear here once the news service is connected.
         </div>
       )}
+      <ReturnToSummary />
     </section>
   );
 }
@@ -325,6 +346,7 @@ export function ReportContent({
   primarySiteIds,
   groupSnapshots = [],
   news,
+  inventoryData = [],
   adminControls = false,
   containerClassName = "mx-auto max-w-6xl px-4 py-8",
 }: ReportContentProps) {
@@ -409,6 +431,107 @@ export function ReportContent({
     Object.entries(complianceCounts).filter(([g]) => g !== "n/a")
   );
   const hasCompliance = Object.keys(realComplianceCounts).length > 0;
+
+  // ---------------------------------------------------------------------------
+  // Inventory snapshot data
+  // ---------------------------------------------------------------------------
+  // Build a per-dealer inventory view by joining inventoryData to the dealers
+  // list via siteId, then computing totals/makes/models from JSONB fields.
+  interface InvMakeRow { make: string; inStock: number }
+  interface InvModelRow { make: string; model: string; inStock: number }
+  interface DealerInventory {
+    siteId: string | null;
+    siteName: string;
+    isPrimary: boolean;
+    totalUnits: number;
+    makes: InvMakeRow[];
+    models: InvModelRow[];
+  }
+
+  const dealerInventory: DealerInventory[] = dealers
+    .map((d) => {
+      const row = inventoryData.find((r) => r.siteId === d.siteId);
+      if (!row) return null;
+      const totals = row.totals as { inStock?: number; inTransit?: number } | null;
+      const makeSubtotals = (row.makeSubtotals as Array<{ make: string; inStock?: number; inTransit?: number }> | null) ?? [];
+      const models = (row.models as Array<{ make: string; model: string; inStock?: number; inTransit?: number }> | null) ?? [];
+      return {
+        siteId: d.siteId,
+        siteName: d.siteName,
+        isPrimary: d.isPrimary,
+        totalUnits: (totals?.inStock ?? 0) + (totals?.inTransit ?? 0),
+        makes: makeSubtotals.map((m) => ({ make: m.make, inStock: (m.inStock ?? 0) + (m.inTransit ?? 0) })),
+        models: models.map((m) => ({ make: m.make, model: m.model, inStock: (m.inStock ?? 0) + (m.inTransit ?? 0) })),
+      };
+    })
+    .filter(Boolean) as DealerInventory[];
+
+  const hasInventory = dealerInventory.length > 0;
+
+  // Summary stats
+  const invTotalMarket = dealerInventory.reduce((s, d) => s + d.totalUnits, 0);
+  const invMarketAvg = dealerInventory.length > 0 ? Math.round(invTotalMarket / dealerInventory.length) : 0;
+  const invAnchor = dealerInventory.find((d) => d.isPrimary);
+  const invAnchorUnits = invAnchor?.totalUnits ?? 0;
+  const invSorted = [...dealerInventory].sort((a, b) => b.totalUnits - a.totalUnits);
+  const invAnchorRank = invSorted.findIndex((d) => d.isPrimary) + 1;
+
+  // All unique makes across the market
+  const allMakes = [...new Set(dealerInventory.flatMap((d) => d.makes.map((m) => m.make)))].sort();
+
+  // All unique models per make
+  const allModelsByMake: Record<string, string[]> = {};
+  for (const make of allMakes) {
+    const models = [...new Set(dealerInventory.flatMap((d) => d.models.filter((m) => m.make === make).map((m) => m.model)))].sort();
+    if (models.length > 0) allModelsByMake[make] = models;
+  }
+
+  // Per-model unit lookup: [siteId][make][model] = units
+  const invModelLookup: Record<string, Record<string, Record<string, number>>> = {};
+  for (const d of dealerInventory) {
+    invModelLookup[d.siteName] = {};
+    for (const m of d.models) {
+      if (!invModelLookup[d.siteName][m.make]) invModelLookup[d.siteName][m.make] = {};
+      invModelLookup[d.siteName][m.make][m.model] = (invModelLookup[d.siteName][m.make][m.model] ?? 0) + m.inStock;
+    }
+  }
+
+  // Key takeaways (rule-based)
+  function invTakeaways() {
+    if (!invAnchor) return null;
+    const leader = invSorted[0];
+    const anchorModels = invAnchor.models;
+
+    // Strength: models where anchor leads market
+    const modelTotals = new Map<string, { leader: string; leaderN: number; anchorN: number }>();
+    for (const make of allMakes) {
+      for (const model of (allModelsByMake[make] ?? [])) {
+        let leaderName = "";
+        let leaderN = 0;
+        const anchorN = invAnchor.models.find((m) => m.make === make && m.model === model)?.inStock ?? 0;
+        for (const d of dealerInventory) {
+          const n = d.models.find((m) => m.make === make && m.model === model)?.inStock ?? 0;
+          if (n > leaderN) { leaderN = n; leaderName = d.siteName; }
+        }
+        modelTotals.set(`${make}|${model}`, { leader: leaderName, leaderN, anchorN });
+      }
+    }
+    const anchorLeadModels = [...modelTotals.entries()]
+      .filter(([, v]) => v.leader === invAnchor.siteName)
+      .map(([k]) => k.split("|")[1]);
+
+    const gapDealer = leader.isPrimary ? invSorted[1] : leader;
+    const gap = gapDealer ? gapDealer.totalUnits - invAnchorUnits : 0;
+
+    // Watch: make where gap is largest
+    const makeGaps = invAnchor.makes.map((am) => {
+      const leaderMakeN = Math.max(...dealerInventory.map((d) => d.makes.find((m) => m.make === am.make)?.inStock ?? 0));
+      return { make: am.make, gap: leaderMakeN - am.inStock, leaderN: leaderMakeN, anchorN: am.inStock };
+    }).sort((a, b) => b.gap - a.gap);
+
+    return { anchorLeadModels, gapDealer, gap, makeGaps, anchorModels };
+  }
+  const invInsights = hasInventory ? invTakeaways() : null;
 
   // ---------------------------------------------------------------------------
   // Capture date
@@ -497,7 +620,7 @@ export function ReportContent({
       {/* ------------------------------------------------------------------ */}
       {/* Executive brief                                                     */}
       {/* ------------------------------------------------------------------ */}
-      <div className="mb-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div id="summary" className="mb-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
         <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-zinc-500">
           Report Summary
         </h2>
@@ -532,6 +655,14 @@ export function ReportContent({
                 Service Specials →
               </a>{" "}
               {serviceNote}
+            </li>
+          )}
+          {hasInventory && (
+            <li>
+              <a href="#inventory" className="font-semibold text-[#1b3a6b] hover:underline">
+                Inventory Snapshot →
+              </a>{" "}
+              {invAnchor?.siteName ?? "Anchor"} holds {invAnchorUnits} units ({invAnchorRank > 0 ? `ranked #${invAnchorRank} of ${dealerInventory.length}` : "no rank"}) vs. {invTotalMarket} total in market.
             </li>
           )}
           {hasCompliance && (
@@ -610,6 +741,7 @@ export function ReportContent({
             />
           </div>
         </div>
+        <ReturnToSummary />
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -640,6 +772,7 @@ export function ReportContent({
             />
           </div>
         </div>
+        <ReturnToSummary />
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -674,6 +807,7 @@ export function ReportContent({
           </div>
         )}
         <Narrative text={cashNote} />
+        <ReturnToSummary />
       </section>
 
       {/* ------------------------------------------------------------------ */}
@@ -756,10 +890,230 @@ export function ReportContent({
           </div>
         )}
         <Narrative text={serviceNote} />
+        <ReturnToSummary />
       </section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 5 · Compliance                                                      */}
+      {/* 5 · Inventory Snapshot                                              */}
+      {/* ------------------------------------------------------------------ */}
+      {hasInventory && (
+        <section id="inventory" className="mb-10">
+          <SectionHeading
+            num="5"
+            title="Inventory Snapshot"
+            sub={`New vehicle inventory across ${dealerInventory.length} dealers.`}
+          />
+
+          {/* KPI tiles */}
+          <div className="mb-4 grid grid-cols-3 gap-3">
+            {[
+              {
+                value: invAnchorUnits.toLocaleString(),
+                label: `${invAnchor?.siteName ?? "Anchor"} Units`,
+                sub: invAnchorRank > 0 ? `#${invAnchorRank} of ${dealerInventory.length} dealers` : "",
+                color: "text-emerald-600",
+              },
+              {
+                value: invMarketAvg.toLocaleString(),
+                label: "Market Average",
+                sub: `Across ${dealerInventory.length} dealers`,
+                color: "text-blue-600",
+              },
+              {
+                value: invTotalMarket.toLocaleString(),
+                label: "Total Market Supply",
+                sub: `${dealerInventory.length} dealers combined`,
+                color: "text-zinc-800",
+              },
+            ].map((t) => (
+              <div key={t.label} className="rounded-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm text-center">
+                <div className={`text-3xl font-extrabold ${t.color}`}>{t.value}</div>
+                <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500">{t.label}</div>
+                {t.sub && <div className="text-[10px] text-zinc-400">{t.sub}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Total Inventory Ranking */}
+          <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+            <div className="border-b border-zinc-100 px-4 py-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Total Inventory Ranking</h3>
+            </div>
+            <div className="divide-y divide-zinc-50 px-4 py-1">
+              {invSorted.map((d, i) => {
+                const pct = invTotalMarket > 0 ? (d.totalUnits / invSorted[0].totalUnits) * 100 : 0;
+                return (
+                  <div key={d.siteName} className={`flex items-center gap-3 py-1.5 ${d.isPrimary ? "font-semibold" : ""}`}>
+                    <span className="w-5 text-right text-xs text-zinc-400">{d.isPrimary ? "★" : i + 1}</span>
+                    <span className="w-36 shrink-0 text-xs text-zinc-700">{d.siteName}{d.isPrimary ? " ★" : ""}</span>
+                    <div className="flex-1">
+                      <div
+                        className={`h-4 rounded ${d.isPrimary ? "bg-[#1b3a6b]" : "bg-blue-300"}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="w-8 text-right text-xs font-medium text-zinc-700">{d.totalUnits}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {invInsights && invInsights.gapDealer && !invAnchor?.isPrimary && (
+              <div className="border-t border-zinc-100 bg-amber-50 px-4 py-2 text-xs text-zinc-600">
+                <span className="font-semibold uppercase tracking-wide text-amber-700">Inventory Gap Alert</span>{" "}
+                {invInsights.gapDealer.siteName} carries {Math.abs(invInsights.gap)} more units than {invAnchor?.siteName ?? "anchor"}.
+              </div>
+            )}
+            {invInsights && invInsights.gapDealer && invAnchorRank === 1 && (
+              <div className="border-t border-zinc-100 bg-emerald-50 px-4 py-2 text-xs text-zinc-600">
+                <span className="font-semibold uppercase tracking-wide text-emerald-700">Market Leader</span>{" "}
+                {invAnchor?.siteName ?? "Anchor"} leads the competitive set with {invAnchorUnits} units — {invInsights.gap < 0 ? Math.abs(invInsights.gap) : ""} more than {invInsights.gapDealer.siteName}.
+              </div>
+            )}
+          </div>
+
+          {/* Anchor brand breakdown */}
+          {invAnchor && invAnchor.makes.length > 0 && (
+            <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+              <div className="border-b border-zinc-100 px-4 py-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{invAnchor.siteName} — Brand Breakdown</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
+                {[...invAnchor.makes].sort((a, b) => b.inStock - a.inStock).map((m) => (
+                  <div key={m.make} className="rounded border border-zinc-100 bg-zinc-50 px-3 py-2 text-center">
+                    <div className="text-[10px] font-medium text-zinc-500">{m.make}</div>
+                    <div className="text-xl font-bold text-[#1b3a6b]">{m.inStock}</div>
+                    <div className="text-[10px] text-zinc-400">{invAnchorUnits > 0 ? Math.round((m.inStock / invAnchorUnits) * 100) : 0}% of stock</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Model-by-Dealer table */}
+          {Object.keys(allModelsByMake).length > 0 && (
+            <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+              <div className="border-b border-zinc-100 px-4 py-2 flex items-baseline gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Model-by-Dealer Breakdown</h3>
+                <span className="text-[10px] text-zinc-400">Shading = inventory density · darkest = row leader</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs" style={{ tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "140px" }} />
+                    {dealerInventory.map((d) => <col key={d.siteName} style={{ width: "90px" }} />)}
+                    <col style={{ width: "70px" }} />
+                  </colgroup>
+                  <thead>
+                    <tr className="border-b border-zinc-100 bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-500">
+                      <th className="px-3 py-1.5 text-left font-medium">Model</th>
+                      {dealerInventory.map((d) => (
+                        <th key={d.siteName} className={`px-2 py-1.5 text-center font-medium ${d.isPrimary ? "bg-[#1b3a6b] text-white" : ""}`}>
+                          {d.siteName}{d.isPrimary ? " ★" : ""}
+                        </th>
+                      ))}
+                      <th className="px-2 py-1.5 text-right font-medium">Market</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-50">
+                    {allMakes.filter((make) => allModelsByMake[make]?.length > 0).map((make) => (
+                      <React.Fragment key={`make-${make}`}>
+                        <tr className="bg-zinc-100">
+                          <td colSpan={dealerInventory.length + 2} className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                            {make}
+                          </td>
+                        </tr>
+                        {(allModelsByMake[make] ?? []).map((model) => {
+                          const vals = dealerInventory.map((d) => invModelLookup[d.siteName]?.[make]?.[model] ?? 0);
+                          const maxVal = Math.max(...vals, 1);
+                          const marketTotal = vals.reduce((s, v) => s + v, 0);
+                          return (
+                            <tr key={`${make}|${model}`} className="hover:bg-zinc-50/50">
+                              <td className="px-3 py-1.5 text-zinc-700">{model}</td>
+                              {dealerInventory.map((d, di) => {
+                                const n = vals[di];
+                                const intensity = n === 0 ? 0 : n === maxVal ? 1 : 0.3 + (n / maxVal) * 0.5;
+                                const isLeader = n === maxVal && n > 0;
+                                const isPrimary = d.isPrimary;
+                                return (
+                                  <td
+                                    key={d.siteName}
+                                    className={`px-2 py-1.5 text-center font-medium ${n === 0 ? "text-zinc-300" : isLeader ? "text-white" : isPrimary ? "text-white" : "text-zinc-700"}`}
+                                    style={{
+                                      backgroundColor: n === 0 ? "transparent" : isLeader
+                                        ? "#1b3a6b"
+                                        : isPrimary
+                                        ? `rgba(27,58,107,${intensity})`
+                                        : `rgba(59,130,246,${intensity})`,
+                                    }}
+                                  >
+                                    {n === 0 ? "—" : n}
+                                  </td>
+                                );
+                              })}
+                              <td className="px-2 py-1.5 text-right font-semibold text-zinc-700">{marketTotal}</td>
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
+                    ))}
+                    <tr className="border-t-2 border-zinc-200 bg-zinc-50 font-bold">
+                      <td className="px-3 py-1.5 text-zinc-700">TOTAL</td>
+                      {dealerInventory.map((d) => (
+                        <td key={d.siteName} className={`px-2 py-1.5 text-center ${d.isPrimary ? "text-[#1b3a6b]" : "text-zinc-700"}`}>
+                          {d.totalUnits}
+                        </td>
+                      ))}
+                      <td className="px-2 py-1.5 text-right text-zinc-700">{invTotalMarket}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Key Takeaways */}
+          {invInsights && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {invInsights.anchorLeadModels.length > 0 && (
+                <div className="rounded-lg border-l-4 border-emerald-500 bg-emerald-50 px-3 py-2.5">
+                  <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-700">Strength</div>
+                  <p className="text-xs text-zinc-700">
+                    Market leader in {invInsights.anchorLeadModels.slice(0, 3).join(", ")}
+                    {invInsights.anchorLeadModels.length > 3 ? ` and ${invInsights.anchorLeadModels.length - 3} more` : ""}.
+                  </p>
+                </div>
+              )}
+              {invInsights.makeGaps.length > 0 && invInsights.makeGaps[0].gap > 0 && (
+                <div className="rounded-lg border-l-4 border-amber-500 bg-amber-50 px-3 py-2.5">
+                  <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-amber-700">Watch</div>
+                  <p className="text-xs text-zinc-700">
+                    {invInsights.makeGaps[0].make} supply gap vs. market leader ({invInsights.makeGaps[0].anchorN} vs. {invInsights.makeGaps[0].leaderN} units).
+                  </p>
+                </div>
+              )}
+              {invInsights.makeGaps.length > 1 && invInsights.makeGaps[invInsights.makeGaps.length - 1].gap <= 0 && (
+                <div className="rounded-lg border-l-4 border-blue-500 bg-blue-50 px-3 py-2.5">
+                  <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-blue-700">Opportunity</div>
+                  <p className="text-xs text-zinc-700">
+                    Leading in {invInsights.makeGaps[invInsights.makeGaps.length - 1].make} with minimal competition from the field.
+                  </p>
+                </div>
+              )}
+              <div className="rounded-lg border-l-4 border-zinc-300 bg-zinc-50 px-3 py-2.5">
+                <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Context</div>
+                <p className="text-xs text-zinc-700">
+                  {invSorted[0].siteName} leads the market with {invSorted[0].totalUnits} units
+                  {invSorted[0].isPrimary ? " — anchor holds the top position." : ` — ${Math.round((invSorted[0].totalUnits / invTotalMarket) * 100)}% of total market supply.`}
+                </p>
+              </div>
+            </div>
+          )}
+          <ReturnToSummary />
+        </section>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 6 · Compliance                                                      */}
       {/* ------------------------------------------------------------------ */}
       {hasCompliance && (
         <section id="compliance" className="mb-10">
@@ -869,6 +1223,7 @@ export function ReportContent({
               );
             })()}
           </div>
+          <ReturnToSummary />
         </section>
       )}
 

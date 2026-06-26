@@ -7,6 +7,7 @@ import {
   complianceGrades,
   siteMissions,
   evidence,
+  inventoryResults,
   missionResults,
   missions,
   offers,
@@ -36,6 +37,7 @@ import {
   type SiteRelationship,
   type SnapshotOffer,
   type User,
+  type InventoryResult,
 } from "./schema";
 
 /**
@@ -460,6 +462,36 @@ export async function getPrimarySiteIds(
       )
     );
   return new Set(rows.map((r) => r.siteId));
+}
+
+// --- Inventory --------------------------------------------------------------
+
+/** Latest successful inventory result per site, for the given site ids.
+ *  Used by the report to add an Inventory Snapshot section. */
+export async function listLatestInventoryForSites(
+  siteIds: string[]
+): Promise<InventoryResult[]> {
+  if (siteIds.length === 0) return [];
+  const rows = await getDb()
+    .select()
+    .from(inventoryResults)
+    .where(
+      and(
+        inArray(inventoryResults.siteId, siteIds),
+        eq(inventoryResults.status, "ok")
+      )
+    )
+    .orderBy(desc(inventoryResults.collectedAt));
+  // Keep only the most recent row per site
+  const seen = new Set<string>();
+  const latest: InventoryResult[] = [];
+  for (const row of rows) {
+    if (!seen.has(row.siteId)) {
+      seen.add(row.siteId);
+      latest.push(row);
+    }
+  }
+  return latest;
 }
 
 // --- Users ------------------------------------------------------------------

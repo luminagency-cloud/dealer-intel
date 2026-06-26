@@ -1,6 +1,6 @@
 {
   "name": "dealer-intel",
-  "version": "1.5.14",
+  "version": "1.5.18",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "postinstall": "playwright install chromium"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
@@ -22,7 +23,7 @@
     "drizzle-orm": "^0.45.2",
     "next": "16.2.9",
     "next-auth": "^5.0.0-beta.31",
-    "playwright": "^1.60.0",
+    "playwright": "^1.61.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "sharp": "^0.35.1",

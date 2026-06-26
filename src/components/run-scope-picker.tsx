@@ -52,11 +52,11 @@ export function RunScopePicker({
       <input type="hidden" name="missionPickerShown" value="1" />
 
       {/* Mission checkboxes */}
-      <div className="flex items-center gap-2.5 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5">
+      <div className="flex items-center gap-2.5 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 dark:border-zinc-600 dark:bg-zinc-800">
         {missions.map((mission) => (
           <label
             key={mission.id}
-            className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-700"
+            className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-700 dark:text-zinc-200"
           >
             <input
               type="checkbox"
@@ -79,7 +79,7 @@ export function RunScopePicker({
         onChange={(e) => setCycle(e.target.value)}
         aria-label="Reporting cycle"
         placeholder="2026-W31"
-        className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm font-mono"
+        className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm font-mono text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
       />
 
       {/* Scope selector */}
@@ -92,7 +92,7 @@ export function RunScopePicker({
           setCheckedSites(new Set());
         }}
         aria-label="Run scope"
-        className="max-w-56 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
+        className="max-w-56 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
       >
         <option value="all-groups">Scope: All groups</option>
         <option value="groups">Pick groups…</option>

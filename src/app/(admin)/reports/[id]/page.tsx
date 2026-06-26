@@ -5,6 +5,7 @@ import {
   getReportSnapshot,
   listSnapshotOffers,
   listSnapshotsForGroup,
+  listLatestInventoryForSites,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 import { getStoredNewsForReport } from "@/lib/news";
@@ -29,6 +30,10 @@ export default async function AdminReportPage({
       ? listSnapshotsForGroup(snapshot.runGroupId)
       : Promise.resolve([snapshot]),
   ]);
+
+  // Distinct site ids from snapshot offers → fetch latest inventory per site
+  const snapshotSiteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
+  const inventoryData = await listLatestInventoryForSites(snapshotSiteIds);
 
   // Infer brand from the most common vehicleMake across offers.
   // Will be null until dealers have a brand field; news fetch gracefully
@@ -56,6 +61,7 @@ export default async function AdminReportPage({
         primarySiteIds={primarySiteIds}
         groupSnapshots={groupSnapshots}
         news={news}
+        inventoryData={inventoryData}
         adminControls={true}
         containerClassName="mx-auto max-w-6xl"
       />

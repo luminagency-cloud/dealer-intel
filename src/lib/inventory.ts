@@ -117,11 +117,18 @@ export type InventoryRunSummary = {
   failed: number;
 };
 
-/** Collect inventory for a site and store the result. Returns the saved row id. */
+export type CollectAndStoreResult = {
+  id: string;
+  status: "ok" | "failed";
+  totals?: InventoryTotals;
+  error?: { message: string; code: string; statusCode?: number; isRateLimited?: boolean };
+};
+
+/** Collect inventory for a site and store the result. */
 export async function collectAndStore(
   site: { id: string; url: string; brand: string | null; platform: string | null; name: string },
   batchId: string
-): Promise<string> {
+): Promise<CollectAndStoreResult> {
   const weekKey = getISOWeekLabel();
   const makeAllowList = brandsToMakeAllowList(site.brand);
 
@@ -136,31 +143,20 @@ export async function collectAndStore(
   const db = getDb();
 
   if (!apiResult) {
+    const err = { message: "Network error — no response from inventory API", code: "network_error" };
     const [row] = await db
       .insert(inventoryResults)
-      .values({
-        siteId: site.id,
-        batchId,
-        weekKey,
-        status: "failed",
-        error: { message: "Network error — no response from inventory API", code: "network_error" },
-      })
+      .values({ siteId: site.id, batchId, weekKey, status: "failed", error: err })
       .returning({ id: inventoryResults.id });
-    return row.id;
+    return { id: row.id, status: "failed", error: err };
   }
 
   if (!apiResult.ok) {
     const [row] = await db
       .insert(inventoryResults)
-      .values({
-        siteId: site.id,
-        batchId,
-        weekKey,
-        status: "failed",
-        error: apiResult.error,
-      })
+      .values({ siteId: site.id, batchId, weekKey, status: "failed", error: apiResult.error })
       .returning({ id: inventoryResults.id });
-    return row.id;
+    return { id: row.id, status: "failed", error: apiResult.error };
   }
 
   const [row] = await db
@@ -180,7 +176,7 @@ export async function collectAndStore(
       warnings: apiResult.warnings ?? [],
     })
     .returning({ id: inventoryResults.id });
-  return row.id;
+  return { id: row.id, status: "ok", totals: apiResult.totals };
 }
 
 // ---------------------------------------------------------------------------
