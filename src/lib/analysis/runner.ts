@@ -214,8 +214,8 @@ async function processAnalysis(
   runId: string,
   rows: EvidenceWithSite[]
 ): Promise<void> {
+  console.log(`[analysis] run=${runId} html_snapshot rows=${rows.length}`);
   const db = getDb();
-  analysisProgress.set(runId, { processed: 0, total: rows.length });
   try {
     await db.delete(offers).where(eq(offers.collectionRunId, runId));
     await db
@@ -236,19 +236,36 @@ async function processAnalysis(
     const aiThreshold = aiConfidenceThreshold();
     const capturedDisclaimers = await loadCapturedDisclaimers(runId);
     const screenshotIndex = await loadScreenshotIndex(runId);
+    const disclaimerEvidence = await loadDisclaimerEvidence(runId);
+    analysisProgress.set(runId, { processed: 0, total: rows.length + disclaimerEvidence.length });
     // Cache R2 fetches: screenshot bytes keyed by evidence row ID.
     const screenshotCache = new Map<string, Buffer | null>();
 
     const seen = new Set<string>();
+    // Track which sites produced at least one offer (text or disclaimer passes).
+    // Sites with zero offers after both passes are candidates for the image pass.
+    const siteOfferInserted = new Set<string>();
 
     for (const { evidence: row, site } of rows) {
-      const html = await getEvidenceText(row);
-      if (!html) continue;
+      console.log(`[analysis] processing evidence id=${row.id} site="${site.name}" missionType=${row.missionType} htmlUrl=${row.htmlUrl}`);
+      let html: string | null;
+      try {
+        html = await getEvidenceText(row);
+      } catch (err) {
+        console.error(`[analysis] R2 fetch FAILED for evidence id=${row.id} site="${site.name}":`, err);
+        continue;
+      }
+      if (!html) {
+        console.warn(`[analysis] html is null/empty for evidence id=${row.id} site="${site.name}" — skipping`);
+        continue;
+      }
+      console.log(`[analysis] html fetched ok for site="${site.name}", length=${html.length}`);
 
       const extracted = extractOffers(html, {
         missionType: row.missionType,
         brand: site.brand,
       });
+      console.log(`[analysis] extracted ${extracted.length} offers for site="${site.name}"`);
       const pageText = htmlToText(html);
 
       // Market states for this site: primary state + any additional ones.
@@ -288,6 +305,7 @@ async function processAnalysis(
           offer.cashIncentive ?? "",
           offer.dueAtSigning ?? "",
           offer.matches?.serviceOffer ?? "",
+          offer.offerType === "service" ? (offer.rawText ?? "") : "",
         ].join("|");
         if (seen.has(signature)) continue;
         seen.add(signature);
@@ -333,6 +351,7 @@ async function processAnalysis(
           disclaimerText,
           confidence: effective.confidence,
         });
+        siteOfferInserted.add(row.siteId);
 
         // Compliance only applies to priced offers (lease / finance / cash).
         // Service and promotional offers are skipped — no API call, grade = n/a.
@@ -372,13 +391,16 @@ async function processAnalysis(
     // the HTML snapshot contains no price text — but the modal text_content has
     // the full offer details. We run the same extraction + dedup pipeline here;
     // the shared `seen` Set prevents duplicates with HTML-extracted offers.
-    const disclaimerEvidence = await loadDisclaimerEvidence(runId);
     for (const { evidence: row, site } of disclaimerEvidence) {
+      if (row.missionType === "service_specials") continue;
       const text = row.textContent!;
       const extracted = extractOffers(text, {
         missionType: row.missionType,
         brand: site.brand,
       });
+
+      const prog = analysisProgress.get(runId);
+      if (prog) prog.processed += 1;
 
       const marketStates = [
         site.state,
@@ -415,6 +437,7 @@ async function processAnalysis(
           effective.cashIncentive ?? "",
           effective.dueAtSigning ?? "",
           offer.matches?.serviceOffer ?? "",
+          effective.offerType === "service" ? (effective.rawText ?? "") : "",
         ].join("|");
         if (seen.has(signature)) continue;
         seen.add(signature);
@@ -453,6 +476,7 @@ async function processAnalysis(
           disclaimerText,
           confidence: effective.confidence,
         });
+        siteOfferInserted.add(row.siteId);
 
         const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
         const result = COMPLIANCE_TYPES.includes(effective.offerType)
@@ -482,6 +506,128 @@ async function processAnalysis(
               gradedAt: new Date(),
             },
           });
+      }
+    }
+
+    // Image pass: sites that produced zero text-extractable offers may have
+    // image-only content (e.g. carousel slides on platforms that render offers
+    // as graphics). Send each screenshot evidence row to Claude Vision to
+    // extract offers directly from the image. No-op when AI is not configured.
+    const imagePassSiteIds = siteIdsInRun.filter((id) => !siteOfferInserted.has(id));
+    if (imagePassSiteIds.length > 0) {
+      const aiActive = Boolean(process.env.ANTHROPIC_API_KEY);
+      const zeroSiteNames = imagePassSiteIds.map((id) => {
+        const r = rows.find((r) => r.evidence.siteId === id);
+        return r?.site.name ?? id;
+      });
+      if (!aiActive) {
+        console.warn(
+          `[analysis] WARNING: ${imagePassSiteIds.length} site(s) produced zero text offers and appear image-only, ` +
+          `but ANTHROPIC_API_KEY is not set so the image pass is disabled. ` +
+          `These sites will have no offers: ${zeroSiteNames.join(", ")}. ` +
+          `Set ANTHROPIC_API_KEY in .env to enable Claude Vision extraction for image-only platforms.`
+        );
+      } else {
+        console.log(`[analysis] image pass: ${imagePassSiteIds.length} sites with zero text offers: ${zeroSiteNames.join(", ")}`);
+      }
+      const imageSiteSet = new Set(imagePassSiteIds);
+      // Group screenshot evidence by siteId from the already-loaded index.
+      const screenshotsBySite = new Map<string, Evidence[]>();
+      for (const screenshotRow of screenshotIndex.values()) {
+        if (!imageSiteSet.has(screenshotRow.siteId)) continue;
+        if (screenshotRow.missionType === "service_specials") continue;
+        const arr = screenshotsBySite.get(screenshotRow.siteId) ?? [];
+        arr.push(screenshotRow);
+        screenshotsBySite.set(screenshotRow.siteId, arr);
+      }
+      // Update progress total to include these images.
+      const imageTotal = [...screenshotsBySite.values()].reduce((s, a) => s + a.length, 0);
+      const iprog = analysisProgress.get(runId);
+      if (iprog) iprog.total += imageTotal;
+
+      const siteInfoMap = new Map(rows.map((r) => [r.evidence.siteId, r.site]));
+
+      for (const siteId of imagePassSiteIds) {
+        const shots = screenshotsBySite.get(siteId) ?? [];
+        const site = siteInfoMap.get(siteId);
+        if (!site || shots.length === 0) continue;
+        const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
+
+        for (const screenshotRow of shots) {
+          const buf = await getEvidenceBody(screenshotRow);
+          if (buf) {
+            // Stub offer with confidence=0 so the existing AI pass fires.
+            // The enricher sees confidence < threshold + vehicleModel === null
+            // and reads the offer directly from the screenshot image.
+            const stub: import("./extract").ExtractedOffer = {
+              offerType: "promotional",
+              vehicleMake: null, vehicleModel: null, vehicleTrim: null,
+              monthlyPayment: null, apr: null, cashIncentive: null,
+              termMonths: null, dueAtSigning: null, disclaimerText: null,
+              rawText: null, confidence: 0, matches: {},
+            };
+            const enrichment = await enricher.enrich({
+              pageText: "",
+              brand: site.brand,
+              current: stub,
+              screenshotBuffer: buf,
+            });
+            if (enrichment && enrichment.confidence >= 0.3) {
+              const sig = [
+                siteId,
+                enrichment.offerType,
+                enrichment.vehicleModel ?? "",
+                enrichment.monthlyPayment ?? "",
+                enrichment.apr ?? "",
+                enrichment.termMonths ?? "",
+                enrichment.cashIncentive ?? "",
+                enrichment.dueAtSigning ?? "",
+              ].join("|");
+              if (!seen.has(sig)) {
+                seen.add(sig);
+                await db.insert(offers).values({
+                  collectionRunId: runId,
+                  siteId,
+                  sourceEvidenceId: screenshotRow.id,
+                  offerType: enrichment.offerType,
+                  vehicleMake: enrichment.vehicleMake,
+                  vehicleModel: enrichment.vehicleModel,
+                  vehicleTrim: enrichment.vehicleTrim,
+                  monthlyPayment: enrichment.monthlyPayment,
+                  apr: enrichment.apr,
+                  cashIncentive: enrichment.cashIncentive,
+                  termMonths: enrichment.termMonths,
+                  dueAtSigning: enrichment.dueAtSigning,
+                  rawText: null,
+                  normalizedJson: { aiAssisted: true, source: "image_extraction" },
+                  disclaimerText: enrichment.disclaimerText,
+                  confidence: enrichment.confidence,
+                });
+                const COMPLIANCE_TYPES: typeof enrichment.offerType[] = ["lease", "finance", "cash"];
+                const result = COMPLIANCE_TYPES.includes(enrichment.offerType)
+                  ? await grader.grade({
+                      evidenceId: screenshotRow.id,
+                      offerType: enrichment.offerType,
+                      disclaimerText: enrichment.disclaimerText,
+                      adText: null,
+                      dealerName: site.name,
+                      marketStates,
+                      screenshotBuffer: buf,
+                    })
+                  : { grade: "n/a", details: { notApplicable: true, offerType: enrichment.offerType } };
+                await db
+                  .insert(complianceGrades)
+                  .values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
+                  .onConflictDoUpdate({
+                    target: complianceGrades.evidenceId,
+                    set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() },
+                  });
+              }
+            }
+          }
+          const iprog2 = analysisProgress.get(runId);
+          if (iprog2) iprog2.processed += 1;
+        }
       }
     }
 
@@ -569,7 +715,11 @@ export async function startAnalysis(runId: string): Promise<number | null> {
   if (activeAnalyses.has(runId)) return null;
   try {
     const rows = await loadAnalyzableEvidence(runId);
-    if (rows.length === 0) return 0;
+    console.log(`[analysis] startAnalysis run=${runId} found ${rows.length} html_snapshot rows`);
+    if (rows.length === 0) {
+      console.warn(`[analysis] no html_snapshot evidence for run=${runId} — returning 0`);
+      return 0;
+    }
     activeAnalyses.add(runId);
     await getDb()
       .update(collectionRuns)
@@ -653,7 +803,7 @@ export async function startAnalysisForSiteMission(
           screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
         }
         for (const offer of extracted) {
-          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.dueAtSigning ?? "", offer.matches?.serviceOffer ?? ""].join("|");
+          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
           if (seen.has(sig)) continue;
           seen.add(sig);
           let effective = offer;
@@ -675,6 +825,7 @@ export async function startAnalysisForSiteMission(
       }
 
       for (const { evidence: row, site } of disclaimerRows) {
+        if (row.missionType === "service_specials") continue;
         const text = row.textContent!;
         const extracted = extractOffers(text, { missionType: row.missionType, brand: site.brand });
         const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
@@ -686,7 +837,7 @@ export async function startAnalysisForSiteMission(
             const labelModel = findKnownModel(row.label);
             if (labelModel) effective = { ...effective, vehicleModel: labelModel };
           }
-          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.dueAtSigning ?? "", offer.matches?.serviceOffer ?? ""].join("|");
+          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", effective.offerType === "service" ? (effective.rawText ?? "") : ""].join("|");
           if (seen.has(sig)) continue;
           seen.add(sig);
           let aiAssisted = false;

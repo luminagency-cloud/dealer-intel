@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   getDb,
   collectionRuns,
+  evidence,
   missionResults,
   missions,
   sites,
@@ -440,6 +441,19 @@ export async function forceReCollectSingle(
     .from(missions)
     .where(eq(missions.id, missionId));
   if (!mission) throw new Error("Mission not found");
+
+  // Purge stale evidence for this site+mission so re-analysis never sees a mix
+  // of old and new captures. R2 objects are orphaned (acceptable — they expire
+  // or are cleaned up with the run); the DB rows are what analysis reads.
+  await db
+    .delete(evidence)
+    .where(
+      and(
+        eq(evidence.collectionRunId, runId),
+        eq(evidence.siteId, siteId),
+        eq(evidence.missionType, mission.missionType)
+      )
+    );
 
   await db
     .insert(missionResults)
