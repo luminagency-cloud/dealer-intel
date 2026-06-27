@@ -56,9 +56,7 @@ export interface OfferEnricher {
 
 /** Default when no API key is configured: AI is off, rule-based stands. */
 export class NoopOfferEnricher implements OfferEnricher {
-  async enrich(): Promise<OfferEnrichment | null> {
-    return null;
-  }
+  async enrich(): Promise<OfferEnrichment | null> { return null; }
 }
 
 const EnrichmentSchema = z.object({
@@ -165,6 +163,7 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       return null;
     }
   }
+
 }
 
 /** Returns the Claude enricher when a key is configured, else the no-op. The

@@ -146,7 +146,7 @@ export function AnalysisSection({
               <p className="text-sm text-zinc-500">
                 {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)} · </>}
                 {evidencePageCount > 0 && pagesProcessed !== null
-                  ? `Analyzing page ${pagesProcessed} of ${evidencePageCount} · ${offers.length} offer${offers.length !== 1 ? "s" : ""} found`
+                  ? `Analyzing item ${pagesProcessed} of ${evidencePageCount} · ${offers.length} offer${offers.length !== 1 ? "s" : ""} found`
                   : evidencePageCount > 0
                     ? `${offers.length} offer${offers.length !== 1 ? "s" : ""} found so far · ${evidencePageCount} page${evidencePageCount !== 1 ? "s" : ""} to process`
                     : "Starting…"}

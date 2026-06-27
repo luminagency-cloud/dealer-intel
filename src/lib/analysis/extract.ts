@@ -217,11 +217,40 @@ const SERVICE_TYPE_KEYWORDS: [string, string][] = [
 ];
 
 /** Returns a clean human label for a service offer from the text window around
- *  the price anchor. Avoids nav, phone numbers, expiry dates, and vehicle names. */
+ *  the price anchor. Prefers a recognized keyword label; falls back to the
+ *  card's own title text (first meaningful phrase before the price) rather
+ *  than a generic "Service Special". */
 function buildServiceLabel(chunkText: string): string {
   const lower = chunkText.toLowerCase();
   for (const [kw, label] of SERVICE_TYPE_KEYWORDS) {
     if (lower.includes(kw)) return label;
+  }
+  // Extract the card title: text immediately before the price anchor.
+  // Modal/print-coupon cards prepend a dealer address block; the service name
+  // is always the last meaningful phrase before "STARTING AT $price".
+  // Strategy: find text after the last phone number (which marks the end of the
+  // address block), then strip trailing "STARTING AT".
+  const beforePrice = chunkText.split(/\$\s?[\d,]+/)[0].trim();
+  if (beforePrice.length > 0) {
+    // Find position after the last phone-like sequence (NXX-NXX-XXXX or NXX.NXX.XXXX)
+    const phoneRe = /\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/g;
+    let lastPhoneEnd = -1;
+    let pm: RegExpExecArray | null;
+    while ((pm = phoneRe.exec(beforePrice)) !== null) {
+      lastPhoneEnd = pm.index + pm[0].length;
+    }
+    const afterPhone = lastPhoneEnd >= 0
+      ? beforePrice.slice(lastPhoneEnd)
+      : beforePrice;
+    const label = afterPhone
+      .replace(/[•\-–—|]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\s*(starting\s+at|starting|at)\s*$/i, '')
+      .replace(/^[\s,;:®™]+/, '')
+      .trim()
+      .slice(0, 60);
+    if (label.length >= 4) return label;
   }
   return "Service Special";
 }
@@ -634,23 +663,31 @@ function splitHtmlIntoCards(html: string): string[] {
     SERVICE_TYPE_KEYWORDS.some(([kw]) => t.toLowerCase().includes(kw));
   const isRichCard = (t: string) => hasOfferSignal(t) && hasServiceKeyword(t);
 
-  // Group rich-card blocks by depth. The card layer has the most siblings
-  // (e.g. 6 cards); their parent container appears as a single element.
-  const byDepth = new Map<number, string[]>();
+  // Use rich-card blocks (price + service keyword) to identify which DOM depth
+  // is the offer-card layer — that depth has the most sibling rich cards.
+  // Once we know the right depth, return ALL priced blocks at that depth, not
+  // just the keyword-matched ones. This captures offers like "BG Drive Line
+  // Service" or "BG Fuel/Air Induction" whose text has no recognized service
+  // keyword but is clearly a priced offer at the same card depth.
+  const richByDepth = new Map<number, number>();
   for (const { depth, text } of blocks) {
     if (!isRichCard(text)) continue;
-    const arr = byDepth.get(depth) ?? [];
-    arr.push(text);
-    byDepth.set(depth, arr);
+    richByDepth.set(depth, (richByDepth.get(depth) ?? 0) + 1);
   }
 
-  let best: string[] = [];
-  for (const arr of byDepth.values()) {
-    if (arr.length > best.length) best = arr;
+  let bestDepth = -1;
+  let bestCount = 0;
+  for (const [depth, count] of richByDepth) {
+    if (count > bestCount) { bestCount = count; bestDepth = depth; }
   }
 
-  // Need at least 2 cards to be confident we found the card layer, not noise.
-  return best.length >= 2 ? best : [];
+  // Need at least 2 rich cards at the winning depth to be confident.
+  if (bestDepth < 0 || bestCount < 2) return [];
+
+  // Return all priced blocks (not just keyword-matched) at the card depth.
+  return blocks
+    .filter(b => b.depth === bestDepth && hasOfferSignal(b.text))
+    .map(b => b.text);
 }
 
 /** Reads HTML, segments offer cards, and returns one ExtractedOffer per
@@ -686,10 +723,10 @@ export function extractOffers(
   // Service specials fallback: window around price / discount anchors.
   if (hints.missionType === "service_specials") {
     const anchors = serviceAnchors(text);
-    if (anchors.length === 0) {
-      const offer = extractOfferFromText(text, hints);
-      return offer ? [offer] : [];
-    }
+    // No service-specific price/discount anchors → page has no service specials.
+    // Do NOT fall back to full-page extraction; that picks up vehicle prices,
+    // nav links, or other page chrome unrelated to service offers.
+    if (anchors.length === 0) return [];
     const results: ExtractedOffer[] = [];
     const seen = new Set<string>();
     for (const anchor of anchors) {
@@ -704,10 +741,6 @@ export function extractOffers(
       if (seen.has(sig)) continue;
       seen.add(sig);
       results.push(offer);
-    }
-    if (results.length === 0) {
-      const offer = extractOfferFromText(text, hints);
-      return offer ? [offer] : [];
     }
     return results;
   }

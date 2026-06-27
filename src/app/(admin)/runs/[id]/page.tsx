@@ -237,7 +237,7 @@ export default async function RunDetailPage({
           analyzing={analyzing}
           analysisStartedAt={run.analysisStartedAt}
           analysisCompletedAt={run.analysisCompletedAt}
-          evidencePageCount={evidencePageCount}
+          evidencePageCount={analysisProgressData?.total ?? evidencePageCount}
           pagesProcessed={analysisProgressData?.processed ?? null}
           runAnalysisAction={runAnalysis.bind(null, run.id)}
           canAnalyze={canAnalyze}

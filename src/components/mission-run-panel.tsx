@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import type { Mission, MissionResult, MissionResultStatus, Site, SiteMission } from "@/lib/db";
 import { MissionStatusBadge } from "@/components/mission-status-badge";
@@ -91,6 +91,9 @@ export function MissionRunPanel({
   const [collapsed, setCollapsed] = useState(!canCollect && !executing && !anyPartialAnalysis);
   // null = All (no filter); Set = only rows whose result.status is in the set.
   const [filter, setFilter] = useState<Set<MissionResultStatus> | null>(null);
+  // Bulk selection: Set of "siteId:missionId" keys.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPending, startBulkTransition] = useTransition();
 
   const all = [...results.values()];
   const done = all.filter(
@@ -123,6 +126,48 @@ export function MissionRunPanel({
         const result = results.get(`${site.id}:${mission.id}`);
         return result ? filter!.has(result.status) : false;
       });
+
+  const canBulkRecollect = !executing && (canCollect || !!forceReCollectAction);
+
+  function toggleRow(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const allKeys = visibleItems.map(({ site, mission }) => `${site.id}:${mission.id}`);
+    const allSelected = allKeys.every((k) => selected.has(k));
+    setSelected(allSelected ? new Set() : new Set(allKeys));
+  }
+
+  const visibleKeys = visibleItems.map(({ site, mission }) => `${site.id}:${mission.id}`);
+  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((k) => selected.has(k));
+  const someVisibleSelected = visibleKeys.some((k) => selected.has(k));
+
+  function handleBulkRecollect() {
+    startBulkTransition(async () => {
+      for (const { site, mission } of visibleItems) {
+        const key = `${site.id}:${mission.id}`;
+        if (!selected.has(key)) continue;
+        const result = results.get(key);
+        const retryable = result && ["needs_review", "failure", "not_found"].includes(result.status);
+        if (canCollect && !executing) {
+          if (retryable && result) {
+            await retryAction(result.id);
+          } else {
+            await executeItemAction(site.id, mission.id);
+          }
+        } else if (!canCollect && !executing && forceReCollectAction) {
+          await forceReCollectAction(site.id, mission.id);
+        }
+      }
+      setSelected(new Set());
+    });
+  }
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
@@ -187,7 +232,7 @@ export function MissionRunPanel({
           ) : null)}
       </div>
 
-      {/* Status filters */}
+      {/* Status filters + bulk actions */}
       {!collapsed && items.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 border-b border-zinc-100 px-4 py-2">
           <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-zinc-700">
@@ -214,6 +259,21 @@ export function MissionRunPanel({
               {FILTER_LABELS[status]}
             </label>
           ))}
+          {canBulkRecollect && someVisibleSelected && (
+            <>
+              <span className="h-4 w-px bg-zinc-200" />
+              <button
+                type="button"
+                onClick={handleBulkRecollect}
+                disabled={bulkPending}
+                className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
+              >
+                {bulkPending
+                  ? "Queuing…"
+                  : `Re-collect selected (${visibleKeys.filter((k) => selected.has(k)).length})`}
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -251,6 +311,17 @@ export function MissionRunPanel({
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                  {canBulkRecollect && (
+                    <th className="pl-4 py-2 w-8">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        ref={(el) => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                        onChange={toggleSelectAll}
+                        className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900"
+                      />
+                    </th>
+                  )}
                   <th className="px-4 py-2 font-medium">Site</th>
                   <th className="px-4 py-2 font-medium">Mission</th>
                   <th className="px-4 py-2 font-medium">Status</th>
@@ -273,6 +344,16 @@ export function MissionRunPanel({
                     );
                   return (
                     <tr key={`${site.id}:${mission.id}`}>
+                      {canBulkRecollect && (
+                        <td className="pl-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selected.has(`${site.id}:${mission.id}`)}
+                            onChange={() => toggleRow(`${site.id}:${mission.id}`)}
+                            className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-900"
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-zinc-900">{site.name}</td>
                       <td className="px-4 py-3 text-zinc-900">{mission.name}</td>
                       <td className="px-4 py-3">

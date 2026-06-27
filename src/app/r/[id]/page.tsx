@@ -3,6 +3,7 @@ import {
   getPrimarySiteIds,
   getReportSnapshot,
   listSnapshotOffers,
+  listLatestInventoryForSites,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 import { getStoredNewsForReport } from "@/lib/news";
@@ -25,6 +26,9 @@ export default async function PublicReportPage({
       : Promise.resolve(new Set<string>()),
   ]);
 
+  const snapshotSiteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
+  const inventoryData = await listLatestInventoryForSites(snapshotSiteIds);
+
   const makeCounts = new Map<string, number>();
   for (const o of offers) {
     if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
@@ -41,6 +45,7 @@ export default async function PublicReportPage({
       offers={offers}
       primarySiteIds={primarySiteIds}
       news={news}
+      inventoryData={inventoryData}
       adminControls={false}
     />
   );

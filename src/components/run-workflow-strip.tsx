@@ -132,11 +132,13 @@ export function RunWorkflowStrip({
           <span className="text-sm text-zinc-400">
             {hasSnapshot
               ? `${snapshots.length} snapshot${snapshots.length > 1 ? "s" : ""}`
-              : offerCount > 0
-                ? "ready to freeze"
-                : "waiting for offers"}
+              : analyzing
+                ? "waiting for analysis"
+                : offerCount > 0
+                  ? "ready to freeze"
+                  : "waiting for offers"}
           </span>
-          {canPublish && offerCount > 0 && (
+          {canPublish && offerCount > 0 && !analyzing && (
             <form
               action={publishSnapshotAction}
               onClick={(e) => e.stopPropagation()}

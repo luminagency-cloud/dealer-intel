@@ -45,11 +45,23 @@ export interface ExtraShot {
 
 const MAX_DISCLAIMERS = 8;
 
+// Selectors for offer disclaimer triggers. Each entry is tried in order; the
+// first that finds visible buttons wins. Footer/nav links are excluded via the
+// :not() guard — those legal-disclaimer page links match class*="disclaimer"
+// but are never offer modals.
+// Never match anything inside a page footer or nav — those "Legal Disclaimer"
+// links are site boilerplate, not offer modal triggers.
+const NOT_IN_FOOTER =
+  ':not(footer *, [class*="footer" i] *, [id*="footer" i] *, nav *, [role="navigation"] *)';
+
 const DISCLAIMER_BUTTON_SELECTORS = [
-  '[class*="disclaimer" i]:is(button, a)',
-  'button:has-text("Disclaimer")',
-  'button:has-text("Details & Disclaimer")',
-  'a:has-text("Disclaimer")',
+  // DDC / Dealer.com offer cards: disclosure trigger inside the promo card.
+  `.ddc-offer-disclosure${NOT_IN_FOOTER}, [class*="offer" i] button[class*="disclaimer" i]${NOT_IN_FOOTER}, [class*="offer" i] a[class*="disclaimer" i]${NOT_IN_FOOTER}`,
+  // Generic class-based.
+  `[class*="disclaimer" i]:is(button, a)${NOT_IN_FOOTER}`,
+  `button:has-text("Disclaimer")${NOT_IN_FOOTER}`,
+  `button:has-text("Details & Disclaimer")${NOT_IN_FOOTER}`,
+  `a:has-text("Disclaimer")${NOT_IN_FOOTER}`,
 ];
 
 /** Ad-anchor from the disclaimer's ancestor card — works when the offer is
@@ -141,8 +153,16 @@ export async function captureDisclaimers(page: Page): Promise<ExtraShot[]> {
           // Inline offers carry text in the ancestor card; image promos don't —
           // for those the offer text appears in the modal after the click.
           const preAnchor = await ancestorAdAnchor(page, selector, i);
+          const urlBefore = page.url();
           await button.click({ timeout: 1_000 });
           await page.waitForTimeout(700);
+          // If clicking navigated away (e.g. a footer "Legal Disclaimer" href
+          // that slipped through), go back and abort this selector entirely —
+          // we are on the wrong page.
+          if (page.url() !== urlBefore) {
+            await page.goBack({ timeout: 10_000 }).catch(() => {});
+            break;
+          }
           const modal = await readDisclaimerModal(page);
           const anchor = modal.anchor || preAnchor;
           shots.push({

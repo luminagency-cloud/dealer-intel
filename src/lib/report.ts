@@ -230,7 +230,7 @@ export function computeKpis(
 
   const complianceCounts: Record<string, number> = {};
   for (const o of anchorOffers) {
-    if (o.complianceGrade) {
+    if (o.complianceGrade && o.offerType !== "service") {
       complianceCounts[o.complianceGrade] =
         (complianceCounts[o.complianceGrade] ?? 0) + 1;
     }
