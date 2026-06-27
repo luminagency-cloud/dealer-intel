@@ -1166,6 +1166,7 @@ export function ReportContent({
                       <th className="px-4 py-2 text-left font-medium">Offer</th>
                       <th className="px-4 py-2 text-left font-medium">Type</th>
                       <th className="px-4 py-2 text-left font-medium">Grade</th>
+                      <th className="px-4 py-2 text-left font-medium">Reason</th>
                       <th className="px-4 py-2 text-left font-medium">Original Ad</th>
                     </tr>
                   </thead>
@@ -1175,15 +1176,12 @@ export function ReportContent({
                       const reason = details?.reason as string | undefined;
                       return (
                       <tr key={o.id}>
-                        <td className="px-4 py-3 text-zinc-800">
+                        <td className="px-4 py-3 text-zinc-800 align-top">
                           <div className="font-medium">
                             {[o.vehicleMake, o.vehicleModel, o.vehicleTrim]
                               .filter(Boolean)
                               .join(" ") || "—"}
                           </div>
-                          {reason && (
-                            <p className="mt-1 text-sm text-zinc-800 leading-snug">{reason}</p>
-                          )}
                         </td>
                         <td className="px-4 py-3 capitalize text-zinc-600 align-top">
                           {o.offerType}
@@ -1200,6 +1198,9 @@ export function ReportContent({
                           >
                             {o.complianceGrade}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 align-top text-zinc-600">
+                          {reason ?? <span className="text-zinc-400">—</span>}
                         </td>
                         <td className="px-4 py-3 align-top">
                           {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
