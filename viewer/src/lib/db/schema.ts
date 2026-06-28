@@ -130,7 +130,44 @@ export const runGroupMembers = pgTable(
   ]
 );
 
+export const inventoryResults = pgTable(
+  "inventory_results",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    siteId: uuid("site_id").notNull(),
+    batchId: uuid("batch_id").notNull(),
+    weekKey: text("week_key").notNull(),
+    collectedAt: timestamp("collected_at", { withTimezone: true }).notNull().defaultNow(),
+    status: text("status").notNull(),
+    detectedPlatform: text("detected_platform"),
+    accessRoute: text("access_route"),
+    attempts: integer("attempts"),
+    sourceUrl: text("source_url"),
+    totals: jsonb("totals"),
+    makeSubtotals: jsonb("make_subtotals"),
+    models: jsonb("models"),
+    warnings: text("warnings").array(),
+    error: jsonb("error"),
+  }
+);
+
+export const newsItems = pgTable(
+  "news_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    weekKey: text("week_key").notNull(),
+    headline: text("headline").notNull(),
+    summary: text("summary").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    publishedAt: text("published_at").notNull(),
+    category: text("category").notNull(),
+    brand: text("brand"),
+    pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull().defaultNow(),
+  }
+);
+
 export type User = typeof users.$inferSelect;
 export type RunGroup = typeof runGroups.$inferSelect;
 export type ReportSnapshot = typeof reportSnapshots.$inferSelect;
 export type SnapshotOffer = typeof snapshotOffers.$inferSelect;
+export type InventoryResult = typeof inventoryResults.$inferSelect;

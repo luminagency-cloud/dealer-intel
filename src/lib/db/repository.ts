@@ -464,6 +464,18 @@ export async function getPrimarySiteIds(
   return new Set(rows.map((r) => r.siteId));
 }
 
+/** All site ids belonging to a run group — used to scope inventory fetches to
+ *  the full group, including dealers with no current offers. */
+export async function getRunGroupSiteIds(
+  runGroupId: string
+): Promise<string[]> {
+  const rows = await getDb()
+    .select({ siteId: runGroupMembers.siteId })
+    .from(runGroupMembers)
+    .where(eq(runGroupMembers.runGroupId, runGroupId));
+  return rows.map((r) => r.siteId);
+}
+
 // --- Inventory --------------------------------------------------------------
 
 /** Latest successful inventory result per site, for the given site ids.

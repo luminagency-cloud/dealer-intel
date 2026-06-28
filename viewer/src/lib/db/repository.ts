@@ -1,11 +1,14 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { getDb } from "./index";
 import {
+  inventoryResults,
+  newsItems,
   reportSnapshots,
   runGroupMembers,
   runGroups,
   snapshotOffers,
   userRunGroups,
+  type InventoryResult,
   type ReportSnapshot,
   type SnapshotOffer,
 } from "./schema";
@@ -83,6 +86,74 @@ export async function getPrimarySiteIds(runGroupId: string): Promise<Set<string>
       )
     );
   return new Set(rows.map((r) => r.siteId));
+}
+
+export async function listLatestInventoryForSites(
+  siteIds: string[]
+): Promise<InventoryResult[]> {
+  if (siteIds.length === 0) return [];
+  const rows = await getDb()
+    .select()
+    .from(inventoryResults)
+    .where(and(inArray(inventoryResults.siteId, siteIds), eq(inventoryResults.status, "ok")))
+    .orderBy(desc(inventoryResults.collectedAt));
+  const seen = new Set<string>();
+  const latest: InventoryResult[] = [];
+  for (const row of rows) {
+    if (!seen.has(row.siteId)) {
+      seen.add(row.siteId);
+      latest.push(row);
+    }
+  }
+  return latest;
+}
+
+export async function getStoredNewsForReport(
+  brand: string | null
+): Promise<import("../news").NewsData | null> {
+  const now = new Date();
+  const jan4 = new Date(now.getFullYear(), 0, 4);
+  const weekNum = Math.ceil(((now.getTime() - jan4.getTime()) / 86400000 + jan4.getDay() + 1) / 7);
+  const weekKey = `${now.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+  const db = getDb();
+  const brandSlug = brand?.toLowerCase() ?? null;
+
+  const rows = await db
+    .select()
+    .from(newsItems)
+    .where(
+      and(
+        eq(newsItems.weekKey, weekKey),
+        brandSlug
+          ? or(isNull(newsItems.brand), eq(newsItems.brand, brandSlug))
+          : isNull(newsItems.brand)
+      )
+    )
+    .orderBy(desc(newsItems.pulledAt));
+
+  if (rows.length === 0) return null;
+
+  const toItem = (r: typeof rows[0]) => ({
+    id: r.id,
+    headline: r.headline,
+    summary: r.summary,
+    source_url: r.sourceUrl,
+    published_at: r.publishedAt,
+    category: r.category as import("../news").NewsItem["category"],
+    brand: r.brand,
+  });
+
+  return {
+    audience: "dealer",
+    brand: brandSlug,
+    week: weekKey,
+    collected_at: rows[0].pulledAt.toISOString(),
+    fresh: true,
+    all_items: rows.map(toItem),
+    brand_items: rows.filter((r) => r.brand !== null).slice(0, 6).map(toItem),
+    industry_items: rows.filter((r) => r.brand === null).slice(0, 4).map(toItem),
+    brand_groups: [],
+  };
 }
 
 export async function listSnapshotsForGroup(

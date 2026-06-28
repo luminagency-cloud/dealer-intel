@@ -7,6 +7,8 @@ import {
   getUserRunGroups,
   listSnapshotOffers,
   listSnapshotsForGroup,
+  listLatestInventoryForSites,
+  getStoredNewsForReport,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 
@@ -41,6 +43,19 @@ export default async function ReportPage({
       : Promise.resolve([snapshot]),
   ]);
 
+  const snapshotSiteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
+  const inventoryData = await listLatestInventoryForSites(snapshotSiteIds);
+
+  const makeCounts = new Map<string, number>();
+  for (const o of offers) {
+    if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
+  }
+  const primaryBrand = makeCounts.size > 0
+    ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    : null;
+
+  const news = await getStoredNewsForReport(primaryBrand);
+
   return (
     <div>
       <div className="border-b border-zinc-200 bg-white">
@@ -55,6 +70,8 @@ export default async function ReportPage({
         offers={offers}
         primarySiteIds={primarySiteIds}
         groupSnapshots={groupSnapshots}
+        news={news}
+        inventoryData={inventoryData}
         adminControls={false}
       />
     </div>

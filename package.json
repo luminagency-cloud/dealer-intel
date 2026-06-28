@@ -1,6 +1,6 @@
 {
   "name": "dealer-intel",
-  "version": "1.5.48",
+  "version": "1.5.62",
   "private": true,
   "scripts": {
     "dev": "next dev",

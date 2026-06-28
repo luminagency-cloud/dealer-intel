@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getPrimarySiteIds,
+  getRunGroupSiteIds,
   getReportSnapshot,
   listSnapshotOffers,
   listSnapshotsForGroup,
@@ -31,9 +32,12 @@ export default async function AdminReportPage({
       : Promise.resolve([snapshot]),
   ]);
 
-  // Distinct site ids from snapshot offers → fetch latest inventory per site
-  const snapshotSiteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
-  const inventoryData = await listLatestInventoryForSites(snapshotSiteIds);
+  // Fetch inventory for all sites in the run group (not just those with offers),
+  // so newly-collected inventory is always reflected when the report is viewed.
+  const inventorySiteIds = snapshot.runGroupId
+    ? await getRunGroupSiteIds(snapshot.runGroupId)
+    : [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
+  const inventoryData = await listLatestInventoryForSites(inventorySiteIds);
 
   // Infer brand from the most common vehicleMake across offers.
   // Will be null until dealers have a brand field; news fetch gracefully

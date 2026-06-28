@@ -121,6 +121,8 @@ export type CollectAndStoreResult = {
   id: string;
   status: "ok" | "failed";
   totals?: InventoryTotals;
+  makeSubtotals?: MakeSubtotal[];
+  models?: ModelRow[];
   error?: { message: string; code: string; statusCode?: number; isRateLimited?: boolean };
 };
 
@@ -176,7 +178,7 @@ export async function collectAndStore(
       warnings: apiResult.warnings ?? [],
     })
     .returning({ id: inventoryResults.id });
-  return { id: row.id, status: "ok", totals: apiResult.totals };
+  return { id: row.id, status: "ok", totals: apiResult.totals, makeSubtotals: apiResult.makeSubtotals, models: apiResult.models };
 }
 
 // ---------------------------------------------------------------------------
