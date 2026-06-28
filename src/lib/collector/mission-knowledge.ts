@@ -47,7 +47,10 @@ export const MISSION_EXPLORATION: Record<MissionType, ExploreOptions> = {
   promotional_banners: { carousels: true, disclaimers: true },
   // Offer pages frequently organize content in tabs and accordions.
   finance_offers: { tabs: true, accordions: true, disclaimers: true },
-  service_specials: { tabs: true, accordions: true, disclaimers: true },
+  // Service coupon pages don't have offer-modal disclosure buttons — tabs and
+  // accordions organize coupons by category; disclaimers are boilerplate links
+  // (Privacy Policy etc.) that produce noise, not evidence.
+  service_specials: { tabs: true, accordions: true, disclaimers: false },
 };
 
 /** Missions without configured or discoverable URLs fall back to the

@@ -154,12 +154,15 @@ export async function captureDisclaimers(page: Page): Promise<ExtraShot[]> {
           // for those the offer text appears in the modal after the click.
           const preAnchor = await ancestorAdAnchor(page, selector, i);
           const urlBefore = page.url();
+          const pathBefore = new URL(urlBefore).pathname;
           await button.click({ timeout: 1_000 });
-          await page.waitForTimeout(700);
-          // If clicking navigated away (e.g. a footer "Legal Disclaimer" href
-          // that slipped through), go back and abort this selector entirely —
-          // we are on the wrong page.
-          if (page.url() !== urlBefore) {
+          await page.waitForTimeout(1_000);
+          // If clicking navigated to a different page (path changed), go back
+          // and abort this selector. Ignore query-string / hash changes — DDC
+          // pushes ?promotionId=... onto the URL when opening a modal without
+          // leaving the page, which would otherwise trigger a false positive.
+          const pathAfter = new URL(page.url()).pathname;
+          if (pathAfter !== pathBefore) {
             await page.goBack({ timeout: 10_000 }).catch(() => {});
             break;
           }

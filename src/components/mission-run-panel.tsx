@@ -46,7 +46,6 @@ export function MissionRunPanel({
   runId,
   items,
   results,
-  offerCountsBySiteMission,
   executing,
   canCollect,
   stalled,
@@ -64,8 +63,6 @@ export function MissionRunPanel({
   runId: string;
   items: PanelWorkItem[];
   results: Map<string, MissionResult>;
-  /** Offer count per "siteId:missionType" after analysis runs. Empty map before analysis. */
-  offerCountsBySiteMission: Map<string, number>;
   executing: boolean;
   /** Run is in a state where collection is allowed (pending or running). */
   canCollect: boolean;
@@ -326,7 +323,6 @@ export function MissionRunPanel({
                   <th className="px-4 py-2 font-medium">Mission</th>
                   <th className="px-4 py-2 font-medium">Status</th>
                   <th className="px-4 py-2 font-medium">Pages</th>
-                  <th className="px-4 py-2 font-medium">Offers</th>
                   <th className="px-4 py-2 font-medium">Detail</th>
                   <th className="px-4 py-2 font-medium">Actions</th>
                 </tr>
@@ -367,9 +363,6 @@ export function MissionRunPanel({
                       </td>
                       <td className="px-4 py-3 text-zinc-600">
                         {result ? result.pagesCaptured : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-zinc-600">
-                        {offerCountsBySiteMission.get(`${site.id}:${mission.missionType}`) ?? "—"}
                       </td>
                       <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-700">
                         {result?.error ?? result?.successfulUrl ?? "—"}

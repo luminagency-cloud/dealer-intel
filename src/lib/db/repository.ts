@@ -537,6 +537,16 @@ export async function updateUserPassword(
     .where(eq(users.id, id));
 }
 
+export async function updateUserEmail(
+  id: string,
+  email: string
+): Promise<void> {
+  await getDb()
+    .update(users)
+    .set({ email })
+    .where(eq(users.id, id));
+}
+
 export async function deleteUser(id: string): Promise<void> {
   await getDb().delete(users).where(eq(users.id, id));
 }

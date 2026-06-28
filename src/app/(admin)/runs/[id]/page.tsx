@@ -10,7 +10,6 @@ import {
 import {
   getCollectionRun,
   listComplianceGradesForRun,
-  listOfferCountsByMissionForRun,
   listOffersForRun,
   listResultsForRun,
   listSnapshotsForRun,
@@ -21,12 +20,9 @@ import { isRunExecuting } from "@/lib/run-executor";
 import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
-import { MissionRunPanel } from "@/components/mission-run-panel";
-import { AnalysisSection } from "@/components/analysis-section";
+import { RunLiveData } from "@/components/run-live-data";
 import { SnapshotSection } from "@/components/snapshot-section";
-import { AutoRefresh } from "@/components/auto-refresh";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
-import { RunWorkflowStrip } from "@/components/run-workflow-strip";
 import {
   deleteRun,
   executeAllMissions,
@@ -40,14 +36,9 @@ import {
   runAnalysisForSiteMission,
   updateRunStatus,
 } from "../actions";
-
-export const dynamic = "force-dynamic";
-
 import { fmtDateTime, fmtSnapshotLabel } from "@/lib/fmt-date";
 
-function formatDate(date: Date | null) {
-  return fmtDateTime(date);
-}
+export const dynamic = "force-dynamic";
 
 export default async function RunDetailPage({
   params,
@@ -64,7 +55,6 @@ export default async function RunDetailPage({
 
   const [
     runOffers,
-    offerCountRows,
     runGrades,
     runSnapshots,
     siteOptions,
@@ -73,7 +63,6 @@ export default async function RunDetailPage({
     [runGroup],
   ] = await Promise.all([
     listOffersForRun(run.id),
-    listOfferCountsByMissionForRun(run.id),
     listComplianceGradesForRun(run.id),
     listSnapshotsForRun(run.id),
     getDb()
@@ -89,7 +78,7 @@ export default async function RunDetailPage({
           .where(eq(runGroups.id, run.runGroupId))
       : Promise.resolve([undefined]),
   ]);
-  // For multi-group runs (no runGroupId), resolve which groups were combined.
+
   const resolvedGroups = run.runGroupId ? [] : await resolveRunGroups(run.id);
   const scopeLabel = runGroup
     ? runGroup.name
@@ -97,23 +86,12 @@ export default async function RunDetailPage({
       ? resolvedGroups.map((g) => g.name).join(" + ")
       : null;
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
-  const offerCountsBySiteMission = new Map<string, number>(
-    offerCountRows.map((r) => [`${r.siteId}:${r.missionType}`, r.count])
-  );
   const nextStatuses = RUN_TRANSITIONS[run.status].filter(
     (s) => !(run.status === "pending" && s === "running")
   );
-  const results = new Map(
-    runResults.map((r) => [`${r.siteId}:${r.missionId}`, r])
-  );
-  // "Executing" is the in-memory truth — is a collector actually running for
-  // this run right now. Pending/running ROWS with no live executor mean the run
-  // was interrupted (e.g. a server restart) and those rows are orphaned; that's
-  // "stalled", recoverable via Resume — not "executing" (which would freeze the
-  // whole UI behind disabled buttons with nothing to un-freeze it).
+
   const canCollect = run.status === "pending" || run.status === "running";
   const executing = isRunExecuting(run.id);
-  // Total HTML pages captured = total evidence rows the analysis pass will read.
   const evidencePageCount = runResults.reduce(
     (sum, r) => sum + (r.pagesCaptured ?? 0),
     0
@@ -124,16 +102,13 @@ export default async function RunDetailPage({
   const analyzing = isAnalysisRunning(run.id);
   const analysisProgressData = getAnalysisProgress(run.id);
   const partialAnalysisKeys = getPartialAnalysisKeys(run.id);
-  // Any captured pages means HTML snapshots exist — safe proxy without loading evidence.
   const canAnalyze =
     run.status !== "failed" &&
     runResults.some((r) => r.pagesCaptured > 0);
 
   return (
     <div>
-      <AutoRefresh active={executing || analyzing || partialAnalysisKeys.size > 0} />
-
-      {/* Compact title row — stays above the sticky workflow bar */}
+      {/* Title row */}
       <div className="mb-2 flex items-center justify-between py-2">
         <div className="flex items-center gap-2 text-sm">
           <Link href="/runs" className="text-zinc-700 hover:text-zinc-700">
@@ -176,76 +151,51 @@ export default async function RunDetailPage({
         </div>
       </div>
 
-      {/* Sticky workflow bar — locks at top immediately on scroll */}
-      <RunWorkflowStrip
-        runResults={runResults}
-        totalWorkItems={missionRows.length}
-        offerCount={runOffers.length}
+      {/* Live section: workflow strip + metadata bar + collection + analysis */}
+      <RunLiveData
+        runId={run.id}
+        initialExecuting={executing}
+        initialAnalyzing={analyzing}
+        initialStalled={stalled}
+        initialProgress={analysisProgressData}
+        initialPartialAnalysisKeys={[...partialAnalysisKeys]}
+        items={missionRows}
+        initialResults={runResults}
         snapshots={runSnapshots}
-        executing={executing}
-        stalled={stalled}
+        offers={runOffers}
+        grades={runGrades}
+        siteNames={siteNames}
+        siteOptions={siteOptions}
         canCollect={canCollect}
-        analyzing={analyzing}
         canAnalyze={canAnalyze}
         canPublish={run.status !== "failed"}
-        runAnalysisAction={runAnalysis.bind(null, run.id)}
-        publishSnapshotAction={publishSnapshot.bind(null, run.id)}
+        analysisStartedAt={run.analysisStartedAt}
+        analysisCompletedAt={run.analysisCompletedAt}
+        evidencePageCount={analysisProgressData?.total ?? evidencePageCount}
+        executeItemAction={executeWorkItem.bind(null, run.id)}
         executeAllAction={executeAllMissions.bind(null, run.id)}
+        retryAction={retryResult.bind(null, `/runs/${run.id}`)}
+        forceReCollectAction={forceReCollect.bind(null, run.id)}
+        reAnalyzeSiteMissionAction={runAnalysisForSiteMission.bind(null, run.id)}
         resumeAction={resumeRun.bind(null, run.id)}
+        runAnalysisAction={runAnalysis.bind(null, run.id)}
+        resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
+        publishSnapshotAction={publishSnapshot.bind(null, run.id)}
         defaultSnapshotLabel={fmtSnapshotLabel(
           new Date(),
           resolvedGroups.length > 0 ? resolvedGroups.length : 1,
           evidencePageCount
         )}
+        collectionStartedAt={run.startedAt}
+        collectionCompletedAt={run.completedAt}
+        runIdShort={run.id}
+        createdLabel={fmtDateTime(run.createdAt)}
+        startedLabel={run.startedAt ? fmtDateTime(run.startedAt) : null}
+        completedLabel={run.completedAt ? fmtDateTime(run.completedAt) : null}
+        error={error}
       />
 
-      {/* One-line metadata — sits below sticky bar, scrolls away */}
-      <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-700">
-        <span className="font-mono">{run.id}</span>
-        <span>Created {formatDate(run.createdAt)}</span>
-        {run.startedAt && <span>Started {formatDate(run.startedAt)}</span>}
-        {run.completedAt && <span>Completed {formatDate(run.completedAt)}</span>}
-      </div>
-
-      <div id="collection" className="mb-8">
-          <MissionRunPanel
-            runId={run.id}
-            items={missionRows}
-            results={results}
-            offerCountsBySiteMission={offerCountsBySiteMission}
-            executing={executing}
-            canCollect={canCollect}
-            stalled={stalled}
-            collectionStartedAt={run.startedAt}
-            collectionCompletedAt={run.completedAt}
-            executeItemAction={executeWorkItem.bind(null, run.id)}
-            executeAllAction={executeAllMissions.bind(null, run.id)}
-            retryAction={retryResult.bind(null, `/runs/${run.id}`)}
-            forceReCollectAction={forceReCollect.bind(null, run.id)}
-            reAnalyzeSiteMissionAction={runAnalysisForSiteMission.bind(null, run.id)}
-            partialAnalysisKeys={partialAnalysisKeys}
-            resumeAction={resumeRun.bind(null, run.id)}
-            error={error}
-          />
-        </div>
-
-      <div id="analysis" className="mb-8">
-        <AnalysisSection
-          offers={runOffers}
-          grades={runGrades}
-          siteNames={siteNames}
-          siteOptions={siteOptions}
-          analyzing={analyzing}
-          analysisStartedAt={run.analysisStartedAt}
-          analysisCompletedAt={run.analysisCompletedAt}
-          evidencePageCount={analysisProgressData?.total ?? evidencePageCount}
-          pagesProcessed={analysisProgressData?.processed ?? null}
-          runAnalysisAction={runAnalysis.bind(null, run.id)}
-          resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
-          canAnalyze={canAnalyze}
-        />
-      </div>
-
+      {/* Snapshot section — static, only changes after a publish action */}
       <div id="snapshot" className="mb-8">
         <SnapshotSection
           snapshots={runSnapshots}

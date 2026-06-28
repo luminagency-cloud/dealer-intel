@@ -314,13 +314,11 @@ export async function runAnalysisForSiteMission(
   missionType: string
 ) {
   await requireSession();
-  console.log(`[action] runAnalysisForSiteMission runId=${runId} siteId=${siteId} missionType=${missionType}`);
   const result = await startAnalysisForSiteMission(
     runId,
     siteId,
     missionType as import("@/lib/db").MissionType
   );
-  console.log(`[action] runAnalysisForSiteMission result=${result}`);
   revalidatePath(`/runs/${runId}`);
   if (result === "busy") {
     redirect(

@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* This app does not support dark mode — all surfaces are light. */
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -15,15 +16,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 html {
   font-size: 16px;
+  color-scheme: only light;
 }
 
 body {

@@ -777,8 +777,7 @@ export async function startAnalysisForSiteMission(
 
   const htmlRows = await loadAnalyzableEvidenceForSiteMission(runId, siteId, missionType);
   const disclaimerRows = await loadDisclaimerEvidenceForSiteMission(runId, siteId, missionType);
-  console.log(`[partial-analysis] runId=${runId} siteId=${siteId} missionType=${missionType} htmlRows=${htmlRows.length} disclaimerRows=${disclaimerRows.length}`);
-  if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
+if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
 
   activeAnalyses.add(key);
 
@@ -790,10 +789,13 @@ export async function startAnalysisForSiteMission(
         ...disclaimerRows.map((r) => r.evidence.id),
       ];
 
-      // Delete existing offers for this site+mission only — leave other missions intact.
-      await db
-        .delete(offers)
-        .where(and(eq(offers.siteId, siteId), eq(offers.missionType, missionType)));
+      // Delete existing offers sourced from this site+mission's evidence only,
+      // leaving offers from other missions for this site intact.
+      if (allEvidenceIds.length > 0) {
+        await db
+          .delete(offers)
+          .where(inArray(offers.sourceEvidenceId, allEvidenceIds));
+      }
       await db
         .delete(complianceGrades)
         .where(

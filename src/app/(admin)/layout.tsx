@@ -2,6 +2,8 @@ import Link from "next/link";
 import { signOut } from "@/auth";
 import { requireSession } from "@/lib/session";
 import { SettingsDropdown } from "@/components/settings-dropdown";
+import { and, eq, inArray, ne } from "drizzle-orm";
+import { getDb, collectionRuns, missionResults } from "@/lib/db";
 
 async function logout() {
   "use server";
@@ -15,6 +17,19 @@ export default async function AdminLayout({
 }) {
   const session = await requireSession();
 
+  const reviewItems = await getDb()
+    .select({ id: missionResults.id })
+    .from(missionResults)
+    .innerJoin(collectionRuns, eq(missionResults.collectionRunId, collectionRuns.id))
+    .where(
+      and(
+        inArray(missionResults.status, ["needs_review", "failure", "not_found"]),
+        ne(collectionRuns.status, "complete"),
+      )
+    )
+    .limit(1);
+  const hasReviewItems = reviewItems.length > 0;
+
   return (
     <div className="min-h-screen bg-zinc-50">
       <header className="border-b border-zinc-200 bg-white">
@@ -27,8 +42,11 @@ export default async function AdminLayout({
               <Link href="/runs" className="hover:text-zinc-900">
                 Runs
               </Link>
-              <Link href="/review" className="hover:text-zinc-900">
+              <Link href="/review" className="relative hover:text-zinc-900">
                 Review
+                {hasReviewItems && (
+                  <span className="absolute -right-2 -top-1 h-2 w-2 rounded-full bg-red-500" />
+                )}
               </Link>
               <Link href="/snapshots" className="hover:text-zinc-900">
                 Snapshots
@@ -43,9 +61,9 @@ export default async function AdminLayout({
             </nav>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-zinc-700">
+            <Link href="/account" className="text-sm text-zinc-700 hover:text-zinc-900">
               {session.user?.email}
-            </span>
+            </Link>
             <form action={logout}>
               <button
                 type="submit"

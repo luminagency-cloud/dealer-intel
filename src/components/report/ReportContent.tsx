@@ -115,7 +115,7 @@ function GridTable({
   dealers,
   rows,
   renderCell,
-  emptyLabel = "Not Advertised",
+  emptyLabel = "NA",
   disableRanking = false,
 }: GridTableProps) {
   if (rows.length === 0) {
@@ -217,7 +217,7 @@ function GridLegend({ hasRanking }: { hasRanking: boolean }) {
       <span className="flex items-center gap-1">
         <span className="inline-block h-3 w-3 rounded bg-red-600" /> Last
       </span>
-      <span className="text-zinc-700 italic">Not Advertised</span>
+      <span className="text-zinc-700 italic">NA</span>
     </div>
   );
 }
@@ -700,16 +700,16 @@ export function ReportContent({
                 const missingFields: string[] = [];
                 if (offer.monthlyPayment === null) missingFields.push("payment");
                 if (!offer.termMonths) missingFields.push("term");
-                if (!mileage) missingFields.push("mileage");
+                // mileage omitted from missing-fields — shown when present, silent when absent
                 if (offer.dueAtSigning == null) missingFields.push("DAS");
                 return (
                   <>
                     {offer.monthlyPayment !== null && (
-                      <div className="font-bold">
+                      <div className="font-bold text-zinc-900">
                         {fmtMoney(offer.monthlyPayment)}/mo
                       </div>
                     )}
-                    <div className="text-xs opacity-80">
+                    <div className="text-xs text-zinc-500">
                       {[
                         offer.termMonths ? `${offer.termMonths} mo` : null,
                         mileage ? fmtMileage(mileage) : null,
@@ -721,7 +721,7 @@ export function ReportContent({
                         .join(" · ")}
                     </div>
                     {missingFields.length > 0 && (
-                      <div className="mt-0.5 text-[9px] text-amber-600 opacity-75">
+                      <div className="mt-0.5 text-[9px] text-amber-700">
                         missing: {missingFields.join(", ")}
                       </div>
                     )}
@@ -730,7 +730,7 @@ export function ReportContent({
                         href={offer.evidenceUrl ?? `/api/evidence/${offer.sourceEvidenceId}/file`}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-1 block text-[9px] text-blue-500 hover:underline"
+                        className="mt-1 block text-xs text-blue-500 hover:underline"
                       >
                         View ad ↗
                       </a>
@@ -762,10 +762,10 @@ export function ReportContent({
               renderCell={(_cell, offer) => (
                 <>
                   {offer.apr !== null && (
-                    <div className="font-bold">{fmtApr(offer.apr)}</div>
+                    <div className="font-bold text-zinc-900">{fmtApr(offer.apr)}</div>
                   )}
                   {offer.termMonths && (
-                    <div className="text-xs opacity-80">{offer.termMonths} mo</div>
+                    <div className="text-xs text-zinc-500">{offer.termMonths} mo</div>
                   )}
                 </>
               )}
@@ -847,7 +847,7 @@ export function ReportContent({
                   </div>
                   {dOffers.length === 0 ? (
                     <p className="px-4 py-3 text-xs italic text-zinc-700">
-                      Not Advertised
+                      NA
                     </p>
                   ) : (
                     <ul className="divide-y divide-zinc-100">
