@@ -43,7 +43,7 @@ export default async function AdminLayout({
             </nav>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-zinc-500">
+            <span className="text-sm text-zinc-700">
               {session.user?.email}
             </span>
             <form action={logout}>

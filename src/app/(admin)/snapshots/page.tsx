@@ -27,7 +27,7 @@ export default async function SnapshotsPage() {
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Snapshots</h1>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="mt-1 text-sm text-zinc-700">
           Published report datasets. Toggle{" "}
           <span className="font-medium">Release</span> to make a snapshot
           visible to dealer users in the viewer app.
@@ -35,14 +35,14 @@ export default async function SnapshotsPage() {
       </div>
 
       {snapshots.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No snapshots yet. Run analysis on a run, then publish a snapshot from
           its page.
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
               <tr>
                 <th className="px-4 py-3">Snapshot</th>
                 <th className="px-4 py-3">Scope</th>
@@ -90,7 +90,7 @@ export default async function SnapshotsPage() {
                         className={
                           snap.clientVisible
                             ? "rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-200"
-                            : "rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-500 hover:bg-zinc-200"
+                            : "rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200"
                         }
                       >
                         {snap.clientVisible ? "Released" : "Draft"}

@@ -46,7 +46,7 @@ export default async function SnapshotDetailPage({
       <div className="mb-6">
         <Link
           href="/snapshots"
-          className="text-sm text-zinc-500 hover:underline"
+          className="text-sm text-zinc-700 hover:underline"
         >
           ← Snapshots
         </Link>
@@ -74,11 +74,11 @@ export default async function SnapshotDetailPage({
       <div className="mb-8 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
         <dl className="divide-y divide-zinc-100 text-sm">
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Snapshot ID</dt>
+            <dt className="text-zinc-700">Snapshot ID</dt>
             <dd className="font-mono text-zinc-900">{snapshot.id}</dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Source run</dt>
+            <dt className="text-zinc-700">Source run</dt>
             <dd>
               <Link
                 href={`/runs/${snapshot.collectionRunId}`}
@@ -89,17 +89,17 @@ export default async function SnapshotDetailPage({
             </dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Offers · Sites</dt>
+            <dt className="text-zinc-700">Offers · Sites</dt>
             <dd className="text-zinc-900">
               {snapshot.offerCount} · {snapshot.siteCount}
             </dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Approved</dt>
+            <dt className="text-zinc-700">Approved</dt>
             <dd className="text-zinc-900">{formatDate(snapshot.approvedAt)}</dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-500">Approved by</dt>
+            <dt className="text-zinc-700">Approved by</dt>
             <dd className="text-zinc-900">{snapshot.approvedBy}</dd>
           </div>
         </dl>
@@ -110,18 +110,18 @@ export default async function SnapshotDetailPage({
           <div>
             <h2 className="text-sm font-semibold text-zinc-900">
               Frozen Offers{" "}
-              <span className="font-normal text-zinc-500">
+              <span className="font-normal text-zinc-700">
                 — {offers.length}
               </span>
             </h2>
-            <p className="mt-0.5 text-xs text-zinc-500">
+            <p className="mt-0.5 text-xs text-zinc-700">
               A snapshot in time. Re-running analysis on the source run will not
               change these rows.
             </p>
           </div>
           {Object.keys(gradeCounts).length > 0 && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-zinc-500">Compliance:</span>
+              <span className="text-zinc-700">Compliance:</span>
               {Object.entries(gradeCounts).map(([grade, count]) => (
                 <span
                   key={grade}

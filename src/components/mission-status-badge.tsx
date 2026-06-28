@@ -10,7 +10,7 @@ const STYLES: Record<MissionResultStatus, string> = {
   needs_review: "bg-amber-100 text-amber-800",
   failure: "bg-red-100 text-red-800",
   not_found: "bg-orange-100 text-orange-800",
-  content_removed: "bg-zinc-100 text-zinc-500 line-through",
+  content_removed: "bg-zinc-100 text-zinc-700 line-through",
 };
 
 export function MissionStatusBadge({

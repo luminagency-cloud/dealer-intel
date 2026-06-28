@@ -10,13 +10,13 @@ function money(value: number | null): string {
 function gradeStyle(grade: string): string {
   const g = grade.toLowerCase();
   if (g === "a" || g === "a+" || g === "a-") return "bg-green-100 text-green-800";
-  if (g === "n/a") return "bg-zinc-100 text-zinc-500";
+  if (g === "n/a") return "bg-zinc-100 text-zinc-700";
   if (g === "f") return "bg-red-100 text-red-800";
   return "bg-amber-100 text-amber-800";
 }
 
 function confidenceStyle(confidence: number | null): string {
-  if (confidence === null) return "text-zinc-400";
+  if (confidence === null) return "text-zinc-700";
   if (confidence >= 0.6) return "text-green-700";
   if (confidence >= 0.4) return "text-amber-700";
   return "text-red-700";
@@ -104,12 +104,12 @@ export function AnalysisSection({
             >
               Analysis{" "}
               {offers.length > 0 && (
-                <span className="font-normal text-zinc-500">
+                <span className="font-normal text-zinc-700">
                   — {offers.length} offer{offers.length === 1 ? "" : "s"}
                   {siteFilter !== "all" && ` · ${filtered.length} shown`}
                 </span>
               )}
-              <span className="ml-2 text-sm font-normal text-zinc-400">
+              <span className="ml-2 text-sm font-normal text-zinc-700">
                 {collapsed ? "▸ expand" : "▾ collapse"}
               </span>
             </button>
@@ -145,7 +145,7 @@ export function AnalysisSection({
           </div>
           {analyzing ? (
             <div className="mt-1.5">
-              <p className="text-sm text-zinc-500">
+              <p className="text-sm text-zinc-700">
                 {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)} · </>}
                 {evidencePageCount > 0 && pagesProcessed !== null
                   ? `Analyzing item ${pagesProcessed} of ${evidencePageCount} · ${offers.length} offer${offers.length !== 1 ? "s" : ""} found`
@@ -165,7 +165,7 @@ export function AnalysisSection({
               )}
             </div>
           ) : (analysisStartedAt || analysisCompletedAt) ? (
-            <p className="mt-1 text-sm text-zinc-500">
+            <p className="mt-1 text-sm text-zinc-700">
               {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)}</>}
               {analysisCompletedAt && <> · Completed {fmtTime(analysisCompletedAt)}</>}
               {totalMin(analysisStartedAt, analysisCompletedAt) && (
@@ -206,19 +206,19 @@ export function AnalysisSection({
       {!collapsed && (
         <>
           {offers.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-zinc-500">
+            <p className="px-4 py-6 text-sm text-zinc-700">
               No offers extracted yet. Run analysis once the run has captured
               evidence.
             </p>
           ) : visible.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-zinc-500">
+            <p className="px-4 py-6 text-sm text-zinc-700">
               No offers for the selected site.
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                  <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
                     {siteFilter === "all" && (
                       <th className="px-4 py-2 font-medium">Site</th>
                     )}
@@ -308,7 +308,7 @@ export function AnalysisSection({
                               {grade}
                             </span>
                           ) : (
-                            <span className="text-xs text-zinc-400">—</span>
+                            <span className="text-xs text-zinc-700">—</span>
                           )}
                         </td>
                       </tr>

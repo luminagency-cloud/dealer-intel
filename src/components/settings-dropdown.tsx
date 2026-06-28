@@ -25,7 +25,7 @@ export function SettingsDropdown() {
       >
         Settings
         <svg
-          className="h-3.5 w-3.5 text-zinc-400"
+          className="h-3.5 w-3.5 text-zinc-700"
           viewBox="0 0 20 20"
           fill="currentColor"
         >

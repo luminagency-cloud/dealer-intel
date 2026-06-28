@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, max } from "drizzle-orm";
 import { getDb, inventoryResults, sites } from "@/lib/db";
 import { getISOWeekLabel } from "@/lib/cycle";
 
@@ -218,6 +218,34 @@ export async function getLatestInventoryBySite(
       siteName: site?.name ?? "(unknown)",
       siteUrl: site?.url ?? "",
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Home page freshness status
+// ---------------------------------------------------------------------------
+
+export type InventoryFreshnessStatus = {
+  ranThisWeek: boolean;
+  lastRunAt: Date | null;
+  siteCount: number;
+};
+
+/** Returns freshness info for the home page nag — whether inventory has been
+ *  collected this ISO week and when it last ran. */
+export async function getInventoryFreshnessStatus(): Promise<InventoryFreshnessStatus> {
+  const weekKey = getISOWeekLabel();
+  const db = getDb();
+
+  const [thisWeek] = await db
+    .select({ lastRunAt: max(inventoryResults.collectedAt), siteCount: count() })
+    .from(inventoryResults)
+    .where(eq(inventoryResults.weekKey, weekKey));
+
+  return {
+    ranThisWeek: (thisWeek?.siteCount ?? 0) > 0,
+    lastRunAt: thisWeek?.lastRunAt ? new Date(thisWeek.lastRunAt) : null,
+    siteCount: thisWeek?.siteCount ?? 0,
+  };
 }
 
 /** All results for a specific batch run. */

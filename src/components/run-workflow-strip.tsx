@@ -59,7 +59,7 @@ export function RunWorkflowStrip({
         >
           <StepDot done={collectDone} active={executing} n={1} />
           <span className="text-base font-semibold text-zinc-800">Collect</span>
-          <span className="text-sm text-zinc-400">
+          <span className="text-sm text-zinc-700">
             {executing
               ? `${settled}/${totalWorkItems} running`
               : stalled
@@ -90,7 +90,7 @@ export function RunWorkflowStrip({
           )}
         </a>
 
-        <span className="px-3 text-lg text-zinc-300">→</span>
+        <span className="px-3 text-lg text-zinc-600">→</span>
 
         {/* Step 2 — Analyze */}
         <a
@@ -99,7 +99,7 @@ export function RunWorkflowStrip({
         >
           <StepDot done={analyzeDone} active={analyzing} n={2} />
           <span className="text-base font-semibold text-zinc-800">Analyze</span>
-          <span className="text-sm text-zinc-400">
+          <span className="text-sm text-zinc-700">
             {analyzing
               ? "running…"
               : offerCount > 0
@@ -120,7 +120,7 @@ export function RunWorkflowStrip({
           )}
         </a>
 
-        <span className="px-3 text-lg text-zinc-300">→</span>
+        <span className="px-3 text-lg text-zinc-600">→</span>
 
         {/* Step 3 — Freeze */}
         <a
@@ -129,7 +129,7 @@ export function RunWorkflowStrip({
         >
           <StepDot done={hasSnapshot} active={false} n={3} />
           <span className="text-base font-semibold text-zinc-800">Freeze</span>
-          <span className="text-sm text-zinc-400">
+          <span className="text-sm text-zinc-700">
             {hasSnapshot
               ? `${snapshots.length} snapshot${snapshots.length > 1 ? "s" : ""}`
               : analyzing
@@ -180,7 +180,7 @@ function StepDot({
       </span>
     );
   return (
-    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-500">
+    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-700">
       {n}
     </span>
   );

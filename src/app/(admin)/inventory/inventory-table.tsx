@@ -172,13 +172,13 @@ export function InventoryTable({
               <button
                 type="button"
                 onClick={() => setScopeOpen((v) => !v)}
-                className="text-xs text-zinc-500 hover:text-zinc-700"
+                className="text-xs text-zinc-700 hover:text-zinc-700"
               >
                 {checkedGroups.size === 0 ? "none selected" : `${checkedGroups.size} group${checkedGroups.size !== 1 ? "s" : ""}`} ▾
               </button>
               {scopeOpen && (
                 <div className="absolute left-0 top-full z-10 mt-2 max-h-80 w-64 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
-                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-500">Select one or more groups to run.</p>
+                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-700">Select one or more groups to run.</p>
                   {groups.map((g) => (
                     <label key={g.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-900 hover:bg-zinc-50">
                       <input
@@ -188,7 +188,7 @@ export function InventoryTable({
                         className="h-4 w-4 rounded border-zinc-300"
                       />
                       {g.name}
-                      <span className="ml-auto text-xs text-zinc-400">{g.siteIds.length}</span>
+                      <span className="ml-auto text-xs text-zinc-700">{g.siteIds.length}</span>
                     </label>
                   ))}
                 </div>
@@ -202,13 +202,13 @@ export function InventoryTable({
               <button
                 type="button"
                 onClick={() => setScopeOpen((v) => !v)}
-                className="text-xs text-zinc-500 hover:text-zinc-700"
+                className="text-xs text-zinc-700 hover:text-zinc-700"
               >
                 {checkedSites.size === 0 ? "none selected" : `${checkedSites.size} dealer${checkedSites.size !== 1 ? "s" : ""}`} ▾
               </button>
               {scopeOpen && (
                 <div className="absolute left-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
-                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-500">Select individual dealers to run.</p>
+                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-700">Select individual dealers to run.</p>
                   {sites.map((s) => (
                     <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-900 hover:bg-zinc-50">
                       <input
@@ -251,7 +251,7 @@ export function InventoryTable({
                 <span className="ml-2 text-red-600">({batchFailed} failed)</span>
               )}
             </span>
-            <span className="text-xs text-zinc-400 tabular-nums">
+            <span className="text-xs text-zinc-700 tabular-nums">
               {batchStartedAt && (
                 <>
                   Started {batchStartedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -285,7 +285,7 @@ export function InventoryTable({
       {/* ── Dealer table ──────────────────────────────────────────────── */}
       <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+          <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
             <tr>
               <th className="px-4 py-3">Dealer</th>
               <th className="px-4 py-3">Make Filter</th>
@@ -350,7 +350,7 @@ const TIER_TEXT: Record<AgeTier, string> = {
   red:    "!text-white",
 };
 const TIER_SUBTEXT: Record<AgeTier, string> = {
-  none:   "!text-zinc-500",
+  none:   "!text-zinc-700",
   blue:   "!text-blue-100",
   green:  "!text-green-100",
   yellow: "!text-yellow-800",
@@ -421,7 +421,7 @@ function SiteRow({
   const statusDisplay = (() => {
     if (phase.kind === "queued")
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
           <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
           Queued
         </span>
@@ -437,7 +437,7 @@ function SiteRow({
       return <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">ok</span>;
     if (phase.kind === "failed")
       return <ErrorBadge error={phase.error} />;
-    if (!site.lastResult) return <span className="text-xs text-zinc-400">—</span>;
+    if (!site.lastResult) return <span className="text-xs text-zinc-700">—</span>;
     if (site.lastResult.status === "ok")
       return <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">ok</span>;
     if (site.lastResult.error)

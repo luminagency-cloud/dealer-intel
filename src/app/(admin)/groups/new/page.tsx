@@ -25,7 +25,7 @@ export default async function NewRunGroupPage({
         Add Run Group
       </h1>
       {siteOptions.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           Create some{" "}
           <Link href="/dealers/new" className="underline">
             dealers

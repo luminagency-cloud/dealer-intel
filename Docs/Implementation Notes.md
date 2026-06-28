@@ -4,7 +4,7 @@ Living record of what is built, where it lives, and decisions made along the
 way. Read alongside `Implementation Roadmap.md` (the plan) and
 `architecture-decision.md` (the principles).
 
-## Status: Phases 1–12 built (June 2026)
+## Status: All roadmap phases built + post-roadmap modules (June 2026)
 
 | Phase | State | Notes |
 |---|---|---|
@@ -16,10 +16,13 @@ way. Read alongside `Implementation Roadmap.md` (the plan) and
 | 6 Mission Framework | Done | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
 | 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
 | 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
-| 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. Multi-offer per page via payment-anchor windowing (v1.0.27). AI deferred to Phase 12 by design; confidence score routes weak cases there. |
+| 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. Multi-offer per page via payment-anchor windowing. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
 | 10 | Done | Snapshot Publishing — the wall between analysis and reporting. Publishing a run **freezes** its current offers + compliance grades into `report_snapshots` + `snapshot_offers` (denormalized, immutable). Re-running analysis or re-collecting never changes a published snapshot. Snapshots list at `/snapshots`; "Publish Snapshot" on the run page. |
-| 11 | Live (v2 polish in progress) | Reporting Engine — live in browser, pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. Trend deltas (per-metric change vs prior snapshot) deliberately deferred to a v2. v1.0.32 polish: 18px→16px base font (Tailwind rem sizing corrected), `containerClassName` prop on `ReportContent` removes double padding in admin context, cash section bullet suppressed when empty, n/a compliance grades excluded from roll-up display ("n/a" is stub sentinel, not a real grade). |
-| 12 | Built (gated; key pending) | AI-Assisted Analysis. Secondary, confidence-routed pass (`src/lib/analysis/ai-enrich.ts`): low-confidence rule-based offers are re-extracted by Claude via structured output; rule-based still handles the routine majority. Behind an `OfferEnricher` interface gated on `ANTHROPIC_API_KEY` (no-op without a key). tsc/lint clean; live model verification pending API key. |
+| 11 | Live | Reporting Engine — pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. Trend deltas vs prior snapshot deferred to v2. |
+| 12 | Built (gated on ANTHROPIC_API_KEY) | AI-Assisted Analysis. Secondary, confidence-routed pass (`src/lib/analysis/ai-enrich.ts`): low-confidence rule-based offers re-extracted by Claude via structured output; vision path reads model names from ad card images. Rule-based handles the routine majority. |
+| — News | Live (gated on NEWS_API_URL/KEY) | Weekly brand + industry news pulled from `news.dlrtools.com` and stored in `newsItems` table. Report news sections read from local DB. Home page shows freshness gate; operator must pull before reports are ready. |
+| — Inventory | Live (gated on INVENTORY_API_URL/KEY) | External API-backed inventory collection (`src/lib/inventory.ts`). Stores totals + model-level breakdowns in `inventoryResults` keyed by ISO week. `/inventory` page runs by group or ad-hoc, rows color-coded by age. Home page nags if not run this week. |
+| — Viewer | Live (deployed separately to Vercel) | Thin-client Next.js app in `viewer/` with its own auth (dealer user accounts), DB schema, and report routes (`/reports/[id]`, `/r/[id]` public). Reads same Neon DB. Separate deployment keeps Playwright/Node off Vercel. |
 
 ## Architecture: three-phase pipeline (decided June 2026)
 
@@ -286,9 +289,14 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   `ANALYSIS_AI_MAX_PAGE_CHARS` (default 8000). The hard disclaimer rule is
   carried into the prompt. Gated on ANTHROPIC_API_KEY. See
   [[compliance-ad-disclaimer-pairing]].
-- `src/app/(admin)/page.tsx` — admin homepage. Two-CTA landing page (Collect
-  Data → /runs, Run Reports → /reports) with live counts (dealers, runs,
-  snapshots) and a three-step pipeline diagram.
+- `src/app/(admin)/page.tsx` — admin homepage. Weekly ops dashboard: shows
+  the current ISO week's progress as a step-by-step checklist (Collect →
+  Analyze → Load news → Run inventory → Reports live), each step auto-advancing
+  based on live DB state. Nags if news or inventory haven't been run this week.
+  Per-group exception list surfaces any group without a live snapshot. Prior-week
+  status dot at the bottom. News and inventory steps are hidden when not
+  configured. Uses `src/lib/db/ops-board.ts` (`getCycleGroupStatus`,
+  `getWeekAggregate`) for aggregate state.
 - `src/app/(admin)/dealers/` — Dealer CRUD (renamed from `/sites`). Same
   entity, same schema; the UI rename better reflects real-world usage.
   `/dealers/new` and `/dealers/[id]/edit` cover full site-field editing
@@ -297,6 +305,33 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   the evidence table; 15-minute presigned GETs.
 - `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`
   (active missions on active sites, optionally scoped to a run group).
+- `src/lib/news.ts` — news module. `pullAndStoreNews()` fetches brand + industry
+  items from `NEWS_API_URL` (news.dlrtools.com) for the current ISO week and
+  stores them in `newsItems`. `getReportNewsData(brand?)` reads them back for
+  report rendering. `getLocalNewsPullStatus()` returns last-pulled timestamp +
+  item count for the home page freshness gate. Gated on NEWS_API_URL + NEWS_API_KEY.
+- `src/lib/inventory.ts` — inventory module. `collectInventoryForDealer()` POSTs
+  to `INVENTORY_API_URL/v1/inventory` with a make allow-list derived from
+  `sites.brand`. Results stored in `inventoryResults` keyed by `batchId` +
+  ISO-week `weekKey`. `getInventoryFreshnessStatus()` returns whether any results
+  exist for the current week (used by home page nag). `getLatestInventoryBySite()`
+  returns the most recent result per dealer for the `/inventory` listing.
+  Gated on INVENTORY_API_URL + INVENTORY_API_KEY. The `/inventory` page
+  (`src/app/(admin)/inventory/`) runs collections by group or ad-hoc with a
+  client-side queue; rows are color-coded by age (green < 1d, yellow < 4d,
+  orange, red).
+- `src/lib/cycle.ts` — ISO week utilities: `getISOWeekLabel()` (e.g. "2026-W26"),
+  `getPriorISOWeekLabel()`. Used by inventory, news, and the ops board to bucket
+  data by week without storing absolute dates. The `cycle` field on
+  `collection_runs` records which ISO week a run belongs to.
+- `viewer/` — separate Next.js app deployed to Vercel (no Playwright). Has its
+  own auth (`viewer/src/auth.ts`, dealer user accounts in `viewer/src/lib/db/schema.ts`)
+  and report routes: `/reports/[id]` (dealer-facing competitive report) and
+  `/r/[id]` (public permalink). Reads from the same Neon DB as the admin app.
+  `viewer/src/lib/news.ts` defines the `NewsItem`/`NewsData` types shared by
+  both apps. `viewer/src/lib/report.ts` + `viewer/src/lib/db/repository.ts`
+  handle snapshot reads. `viewer/src/proxy.ts` handles auth-gated R2 evidence
+  proxying so dealer users can see screenshots without direct R2 credentials.
 
 ## Operational model
 

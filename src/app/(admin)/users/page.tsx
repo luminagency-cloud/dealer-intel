@@ -113,21 +113,21 @@ export default async function UsersPage() {
       {/* User list */}
       <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
         {userList.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-zinc-500">No users yet.</p>
+          <p className="px-4 py-6 text-sm text-zinc-700">No users yet.</p>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-100 text-left">
-                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-700">
                   User
                 </th>
-                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-700">
                   Role
                 </th>
-                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-700">
                   Run Groups
                 </th>
-                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-700">
                   Actions
                 </th>
               </tr>
@@ -141,7 +141,7 @@ export default async function UsersPage() {
                       <div className="font-medium text-zinc-900">
                         {user.name || "—"}
                       </div>
-                      <div className="text-xs text-zinc-500">{user.email}</div>
+                      <div className="text-xs text-zinc-700">{user.email}</div>
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -156,7 +156,7 @@ export default async function UsersPage() {
                     </td>
                     <td className="px-4 py-3">
                       {user.role === "admin" ? (
-                        <span className="text-xs text-zinc-400">
+                        <span className="text-xs text-zinc-700">
                           All groups
                         </span>
                       ) : (

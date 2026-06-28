@@ -4,6 +4,7 @@ import { count } from "drizzle-orm";
 import { getISOWeekLabel, getPriorISOWeekLabel } from "@/lib/cycle";
 import { getCycleGroupStatus, getWeekAggregate, type GroupCycleStatus, type WeekAggregate } from "@/lib/db/ops-board";
 import { getLocalNewsPullStatus, isNewsConfigured } from "@/lib/news";
+import { getInventoryFreshnessStatus, isInventoryConfigured } from "@/lib/inventory";
 import { refreshNews } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ function StepDot({ state, n }: { state: "done" | "active" | "action" | "waiting"
       </div>
     );
   return (
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-100 bg-zinc-50 text-sm font-medium text-zinc-300">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-100 bg-zinc-50 text-sm font-medium text-zinc-600">
       {n}
     </div>
   );
@@ -62,14 +63,14 @@ function Step({
         {!isLast && <div className="h-full w-px bg-zinc-100" style={{ minHeight: 32 }} />}
       </div>
       <div className="pb-8">
-        <p className={`text-sm font-medium ${state === "waiting" ? "text-zinc-300" : "text-zinc-800"}`}>
+        <p className={`text-sm font-medium ${state === "waiting" ? "text-zinc-600" : "text-zinc-800"}`}>
           {label}
         </p>
         <p className={`mt-0.5 text-sm ${
           state === "done" ? "text-emerald-600"
           : state === "active" ? "text-blue-600"
           : state === "action" ? "text-amber-700 font-medium"
-          : "text-zinc-300"
+          : "text-zinc-600"
         }`}>
           {detail}
         </p>
@@ -223,7 +224,7 @@ function PrimaryCTA({
 export default async function HomePage() {
   if (!isDatabaseConfigured()) {
     return (
-      <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">
+      <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-white p-8 text-center text-sm text-zinc-700">
         Database not configured.
       </div>
     );
@@ -235,12 +236,13 @@ export default async function HomePage() {
   const [{ n: groupCount }] = await getDb().select({ n: count() }).from(runGroups);
   const total = groupCount ?? 0;
 
-  const [currentGroups, priorGroups, currentAgg, priorAgg, newsPullStatus] = await Promise.all([
+  const [currentGroups, priorGroups, currentAgg, priorAgg, newsPullStatus, inventoryStatus] = await Promise.all([
     getCycleGroupStatus(currentCycle),
     getCycleGroupStatus(priorCycle),
     getWeekAggregate(currentCycle, total),
     getWeekAggregate(priorCycle, total),
     isNewsConfigured() ? getLocalNewsPullStatus() : Promise.resolve(null),
+    isInventoryConfigured() ? getInventoryFreshnessStatus() : Promise.resolve(null),
   ]);
 
   // Derive step states
@@ -249,13 +251,15 @@ export default async function HomePage() {
   const analyzeDone = currentAgg.analysisDone && currentAgg.offerCount > 0;
   const analyzeActive = currentAgg.analysisRunning;
   const newsDone = newsPullStatus !== null || !isNewsConfigured();
+  const inventoryDone = !isInventoryConfigured() || (inventoryStatus?.ranThisWeek ?? false);
   const allFrozen = currentAgg.frozenGroupCount >= total && total > 0;
   const allLive = currentAgg.liveGroupCount >= total && total > 0;
 
   const collectState = collectActive ? "active" : collectDone ? "done" : "action";
   const analyzeState = !collectDone ? "waiting" : analyzeActive ? "active" : analyzeDone ? "done" : "action";
   const newsState = !analyzeDone ? "waiting" : newsDone ? "done" : "action";
-  const reportsState = !newsDone ? "waiting" : allLive ? "done" : allFrozen ? "action" : currentAgg.frozenGroupCount > 0 ? "action" : "waiting";
+  const inventoryState = !analyzeDone ? "waiting" : inventoryDone ? "done" : "action";
+  const reportsState = (!newsDone || !inventoryDone) ? "waiting" : allLive ? "done" : allFrozen ? "action" : currentAgg.frozenGroupCount > 0 ? "action" : "waiting";
 
   // Prior cycle summary
   const priorAllLive = priorAgg.liveGroupCount >= total && total > 0 && priorAgg.liveGroupCount > 0;
@@ -271,9 +275,9 @@ export default async function HomePage() {
           <h1 className="text-xl font-semibold text-zinc-900">
             {allLive ? "This week is done ✓" : "What needs doing"}
           </h1>
-          <p className="mt-0.5 text-sm text-zinc-400 font-mono">{currentCycle}</p>
+          <p className="mt-0.5 text-sm text-zinc-700 font-mono">{currentCycle}</p>
         </div>
-        <Link href="/runs" className="text-xs text-zinc-400 hover:text-zinc-700">
+        <Link href="/runs" className="text-xs text-zinc-700 hover:text-zinc-700">
           Advanced →
         </Link>
       </div>
@@ -293,13 +297,28 @@ export default async function HomePage() {
           }>
           {analyzeDone && isNewsConfigured() && (
             <form action={refreshNews} className="mt-1.5">
-              <button type="submit" className="text-xs text-zinc-400 hover:text-zinc-600 underline underline-offset-2">
+              <button type="submit" className="text-xs text-zinc-700 hover:text-zinc-600 underline underline-offset-2">
                 Refresh
               </button>
             </form>
           )}
         </Step>
-        <Step n={4} label="Reports live" state={reportsState} isLast
+        {isInventoryConfigured() && (
+          <Step n={4} label="Run inventory" state={inventoryState}
+            detail={
+              !analyzeDone ? "—"
+              : inventoryStatus?.ranThisWeek
+                ? `${inventoryStatus.siteCount} dealers · last run ${inventoryStatus.lastRunAt?.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                : "Not run this week"
+            }>
+            {analyzeDone && !inventoryDone && (
+              <Link href="/inventory" className="mt-1.5 text-xs text-zinc-700 hover:text-zinc-600 underline underline-offset-2">
+                Go to inventory →
+              </Link>
+            )}
+          </Step>
+        )}
+        <Step n={isInventoryConfigured() ? 5 : 4} label="Reports live" state={reportsState} isLast
           detail={
             !newsDone ? "—"
             : allLive ? `${currentAgg.liveGroupCount} of ${total} groups live`
@@ -318,7 +337,7 @@ export default async function HomePage() {
       {/* Prior week */}
       <div className="mt-8 flex items-center gap-3 border-t border-zinc-100 pt-5">
         <div className={`h-2 w-2 shrink-0 rounded-full ${priorAllLive ? "bg-emerald-400" : "bg-amber-400"}`} />
-        <span className="text-sm text-zinc-500">
+        <span className="text-sm text-zinc-700">
           {priorCycle}
           {priorAllLive
             ? " — complete"
@@ -327,7 +346,7 @@ export default async function HomePage() {
               : " — no runs"}
         </span>
         {!priorAllLive && priorIssues.length > 0 && (
-          <Link href="/snapshots" className="ml-auto text-xs text-zinc-400 hover:text-zinc-700">
+          <Link href="/snapshots" className="ml-auto text-xs text-zinc-700 hover:text-zinc-700">
             Fix →
           </Link>
         )}

@@ -83,12 +83,12 @@ export default async function InventoryPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold text-zinc-900">Inventory</h1>
-            <p className="mt-0.5 text-sm text-zinc-500">
+            <p className="mt-0.5 text-sm text-zinc-700">
               Collect live vehicle inventory counts via the inventory API.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-zinc-400 mr-1">Age:</span>
+            <span className="text-xs text-zinc-700 mr-1">Age:</span>
             <span className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium bg-green-500 text-white">&lt; 1 day</span>
             <span className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium bg-yellow-400 text-yellow-950">&lt; 4 days</span>
             <span className="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium bg-orange-500 text-white">4+ days</span>
@@ -106,7 +106,7 @@ export default async function InventoryPage() {
       )}
 
       {activeSites.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No active dealers found.
         </p>
       ) : (

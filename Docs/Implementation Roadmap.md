@@ -589,8 +589,6 @@ Green = news ran this ISO week. Amber = stale — run news before publishing rep
 
 Not a full website crawler.
 
-Not inventory management.
-
 Not chatbot automation.
 
 Not form automation.

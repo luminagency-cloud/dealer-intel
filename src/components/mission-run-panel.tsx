@@ -180,20 +180,20 @@ export function MissionRunPanel({
           >
             Collection{" "}
             {showProgress && (
-              <span className="font-normal text-zinc-500">
+              <span className="font-normal text-zinc-700">
                 — collecting {done}/{all.length}
               </span>
             )}
-            <span className="ml-2 text-sm font-normal text-zinc-400">
+            <span className="ml-2 text-sm font-normal text-zinc-700">
               {collapsed ? "▸ expand" : "▾ collapse"}
             </span>
           </button>
-          <p className="mt-1 text-sm text-zinc-500">
+          <p className="mt-1 text-sm text-zinc-700">
             Runs in the background; this page refreshes itself while work is
             in flight. Roughly a minute per page.
           </p>
           {(collectionStartedAt || collectionCompletedAt) && (
-            <p className="mt-1 text-sm text-zinc-500">
+            <p className="mt-1 text-sm text-zinc-700">
               {collectionStartedAt && <>Started {fmtTime(collectionStartedAt)}</>}
               {collectionCompletedAt && <> · Completed {fmtTime(collectionCompletedAt)}</>}
               {totalMin(collectionStartedAt, collectionCompletedAt) && (
@@ -294,7 +294,7 @@ export function MissionRunPanel({
           )}
 
           {items.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-zinc-500">
+            <p className="px-4 py-6 text-sm text-zinc-700">
               Nothing to collect in this run&apos;s scope.{" "}
               <Link href="/missions" className="underline">
                 Check missions
@@ -302,7 +302,7 @@ export function MissionRunPanel({
               and site status.
             </p>
           ) : visibleItems.length === 0 ? (
-            <p className="px-4 py-3 text-xs text-zinc-400">
+            <p className="px-4 py-3 text-xs text-zinc-700">
               {filter !== null && filter.size === 0
                 ? "All rows hidden — check a filter above to expand."
                 : "No results match the selected filters."}
@@ -310,7 +310,7 @@ export function MissionRunPanel({
           ) : (
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
                   {canBulkRecollect && (
                     <th className="pl-4 py-2 w-8">
                       <input
@@ -360,7 +360,7 @@ export function MissionRunPanel({
                         {result ? (
                           <MissionStatusBadge status={result.status} />
                         ) : (
-                          <span className="text-xs text-zinc-400">
+                          <span className="text-xs text-zinc-700">
                             not collected
                           </span>
                         )}
@@ -371,14 +371,14 @@ export function MissionRunPanel({
                       <td className="px-4 py-3 text-zinc-600">
                         {offerCountsBySiteMission.get(`${site.id}:${mission.missionType}`) ?? "—"}
                       </td>
-                      <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-500">
+                      <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-700">
                         {result?.error ?? result?.successfulUrl ?? "—"}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <Link
                             href={`/runs/${runId}/evidence/${site.id}`}
-                            className="text-xs text-zinc-500 underline hover:text-zinc-800"
+                            className="text-xs text-zinc-700 underline hover:text-zinc-800"
                           >
                             Evidence
                           </Link>
@@ -405,7 +405,7 @@ export function MissionRunPanel({
                             )
                           )}
                           {busy ? (
-                            <span className="text-xs text-zinc-400">—</span>
+                            <span className="text-xs text-zinc-700">—</span>
                           ) : retryable && canCollect && !executing ? (
                             <form action={retryAction.bind(null, result.id)}>
                               <button
@@ -446,7 +446,7 @@ export function MissionRunPanel({
                               </button>
                             </form>
                           ) : (
-                            <span className="text-xs text-zinc-400">—</span>
+                            <span className="text-xs text-zinc-700">—</span>
                           )}
                         </div>
                       </td>

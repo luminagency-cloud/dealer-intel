@@ -55,7 +55,7 @@ export function MissionForm({
             </option>
           ))}
         </select>
-        <span className="mt-1 block text-xs font-normal text-zinc-400">
+        <span className="mt-1 block text-xs font-normal text-zinc-700">
           Determines URL discovery paths and page exploration (carousels,
           tabs, accordions, disclaimers).
         </span>

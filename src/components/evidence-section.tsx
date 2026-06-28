@@ -37,7 +37,7 @@ export function EvidenceSection({
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-zinc-900">
           Evidence{" "}
-          <span className="font-normal text-zinc-400">
+          <span className="font-normal text-zinc-700">
             ({visible.length}{siteFilter !== "all" ? ` of ${evidence.length}` : ""})
           </span>
         </h2>
@@ -60,17 +60,17 @@ export function EvidenceSection({
       </div>
 
       {evidence.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-zinc-500">
+        <p className="px-4 py-6 text-sm text-zinc-700">
           No evidence captured for this run yet.
         </p>
       ) : visible.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-zinc-500">
+        <p className="px-4 py-6 text-sm text-zinc-700">
           No evidence for the selected site.
         </p>
       ) : (
         <table className="w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+            <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
               <th className="px-4 py-2 font-medium">Type</th>
               <th className="px-4 py-2 font-medium">Detail</th>
               {siteFilter === "all" && (
@@ -93,11 +93,11 @@ export function EvidenceSection({
                       {row.label}
                     </span>
                   ) : (
-                    <span className="text-zinc-400">—</span>
+                    <span className="text-zinc-700">—</span>
                   )}
                   {row.textContent && (
                     <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-zinc-400 hover:text-zinc-600">
+                      <summary className="cursor-pointer text-xs text-zinc-700 hover:text-zinc-600">
                         Disclaimer text
                       </summary>
                       <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600">

@@ -45,7 +45,7 @@ export function SiteForm({
       </label>
       <label className="mt-4 block text-sm font-medium text-zinc-700">
         Platform{" "}
-        <span className="font-normal text-zinc-400">(optional)</span>
+        <span className="font-normal text-zinc-700">(optional)</span>
         <input
           type="text"
           name="platform"
@@ -57,7 +57,7 @@ export function SiteForm({
       <div className="mt-4 grid grid-cols-[1fr_8rem] gap-3">
         <label className="block text-sm font-medium text-zinc-700">
           Brand{" "}
-          <span className="font-normal text-zinc-400">(optional)</span>
+          <span className="font-normal text-zinc-700">(optional)</span>
           <input
             type="text"
             name="brand"
@@ -68,7 +68,7 @@ export function SiteForm({
         </label>
         <label className="block text-sm font-medium text-zinc-700">
           State{" "}
-          <span className="font-normal text-zinc-400">(optional)</span>
+          <span className="font-normal text-zinc-700">(optional)</span>
           <input
             type="text"
             name="state"
@@ -81,7 +81,7 @@ export function SiteForm({
       </div>
       <label className="mt-4 block text-sm font-medium text-zinc-700">
         Inventory path{" "}
-        <span className="font-normal text-zinc-400">(optional)</span>
+        <span className="font-normal text-zinc-700">(optional)</span>
         <input
           type="text"
           name="inventoryPath"
@@ -92,7 +92,7 @@ export function SiteForm({
       </label>
       <label className="mt-4 block text-sm font-medium text-zinc-700">
         Additional states{" "}
-        <span className="font-normal text-zinc-400">
+        <span className="font-normal text-zinc-700">
           (optional — for multi-jurisdiction compliance)
         </span>
         <input

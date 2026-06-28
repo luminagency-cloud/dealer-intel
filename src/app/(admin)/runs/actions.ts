@@ -314,11 +314,13 @@ export async function runAnalysisForSiteMission(
   missionType: string
 ) {
   await requireSession();
+  console.log(`[action] runAnalysisForSiteMission runId=${runId} siteId=${siteId} missionType=${missionType}`);
   const result = await startAnalysisForSiteMission(
     runId,
     siteId,
     missionType as import("@/lib/db").MissionType
   );
+  console.log(`[action] runAnalysisForSiteMission result=${result}`);
   revalidatePath(`/runs/${runId}`);
   if (result === "busy") {
     redirect(
@@ -330,7 +332,7 @@ export async function runAnalysisForSiteMission(
       `/runs/${runId}?error=${encodeURIComponent("No evidence to analyze for this dealer + mission")}#collection`
     );
   }
-  redirect(`/runs/${runId}#collection`);
+  redirect(`/runs/${runId}#analysis`);
 }
 
 /** Phase 10: freeze the run's current analysis output into a report snapshot,

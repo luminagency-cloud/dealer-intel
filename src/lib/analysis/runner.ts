@@ -572,7 +572,6 @@ async function processAnalysis(
       const screenshotsBySite = new Map<string, Evidence[]>();
       for (const screenshotRow of screenshotIndex.values()) {
         if (!imageSiteSet.has(screenshotRow.siteId)) continue;
-        if (screenshotRow.missionType === "service_specials") continue;
         const arr = screenshotsBySite.get(screenshotRow.siteId) ?? [];
         arr.push(screenshotRow);
         screenshotsBySite.set(screenshotRow.siteId, arr);
@@ -593,23 +592,11 @@ async function processAnalysis(
         for (const screenshotRow of shots) {
           const buf = await getEvidenceBody(screenshotRow);
           if (buf) {
-            // Stub offer with confidence=0 so the existing AI pass fires.
-            // The enricher sees confidence < threshold + vehicleModel === null
-            // and reads the offer directly from the screenshot image.
-            const stub: import("./extract").ExtractedOffer = {
-              offerType: "promotional",
-              vehicleMake: null, vehicleModel: null, vehicleTrim: null,
-              monthlyPayment: null, apr: null, cashIncentive: null,
-              termMonths: null, dueAtSigning: null, disclaimerText: null,
-              rawText: null, confidence: 0, matches: {},
-            };
-            const enrichment = await enricher.enrich({
-              pageText: "",
-              brand: site.brand,
-              current: stub,
-              screenshotBuffer: buf,
-            });
-            if (enrichment && enrichment.confidence >= 0.3) {
+            // Use bulk extraction: one call returns ALL offers visible in the image.
+            const extracted = await enricher.extractAllFromImage(buf, site.brand);
+            console.log(`[analysis] image pass site=${site.name} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
+            for (const enrichment of extracted) {
+              if (enrichment.confidence < 0.3) continue;
               const sig = [
                 siteId,
                 enrichment.offerType,
@@ -790,6 +777,7 @@ export async function startAnalysisForSiteMission(
 
   const htmlRows = await loadAnalyzableEvidenceForSiteMission(runId, siteId, missionType);
   const disclaimerRows = await loadDisclaimerEvidenceForSiteMission(runId, siteId, missionType);
+  console.log(`[partial-analysis] runId=${runId} siteId=${siteId} missionType=${missionType} htmlRows=${htmlRows.length} disclaimerRows=${disclaimerRows.length}`);
   if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
 
   activeAnalyses.add(key);
@@ -802,11 +790,10 @@ export async function startAnalysisForSiteMission(
         ...disclaimerRows.map((r) => r.evidence.id),
       ];
 
-      // Delete existing offers for this site — both from this run and from all
-      // prior runs. Prior-run offers are voided so a new analysis is the truth.
+      // Delete existing offers for this site+mission only — leave other missions intact.
       await db
         .delete(offers)
-        .where(eq(offers.siteId, siteId));
+        .where(and(eq(offers.siteId, siteId), eq(offers.missionType, missionType)));
       await db
         .delete(complianceGrades)
         .where(
@@ -823,6 +810,7 @@ export async function startAnalysisForSiteMission(
       const screenshotIndex = await loadScreenshotIndex(runId);
       const screenshotCache = new Map<string, Buffer | null>();
       const seen = new Set<string>();
+      let offersInserted = 0;
 
       for (const { evidence: row, site } of htmlRows) {
         const html = await getEvidenceText(row);
@@ -853,6 +841,7 @@ export async function startAnalysisForSiteMission(
           const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
           const vehicleModel = matched?.model ?? effective.vehicleModel;
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          offersInserted++;
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
             ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
@@ -884,11 +873,46 @@ export async function startAnalysisForSiteMission(
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          offersInserted++;
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
             ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
             : { grade: "n/a", details: { notApplicable: true, offerType: effective.offerType } };
           await db.insert(complianceGrades).values({ evidenceId: row.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+        }
+      }
+
+      // Image pass: if HTML and disclaimer extraction found nothing, this site is
+      // likely image-only (e.g. DDC/Dealer.com). Send screenshots to AI vision.
+      if (offersInserted === 0 && Boolean(process.env.ANTHROPIC_API_KEY)) {
+        const siteInfo = htmlRows[0]?.site ?? disclaimerRows[0]?.site;
+        if (siteInfo) {
+          const marketStates = [siteInfo.state, ...(siteInfo.otherStates ?? [])].filter((s): s is string => Boolean(s));
+          const screenshotKey = `${siteId}:${missionType}:`;
+          const shots = [...screenshotIndex.entries()]
+            .filter(([k]) => k.startsWith(screenshotKey))
+            .map(([, v]) => v);
+          for (const screenshotRow of shots) {
+            if (!screenshotCache.has(screenshotRow.id)) {
+              screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
+            }
+            const buf = screenshotCache.get(screenshotRow.id) ?? null;
+            if (!buf) continue;
+            const extracted = await enricher.extractAllFromImage(buf, siteInfo.brand);
+            console.log(`[partial-analysis] image pass site=${siteInfo.name} mission=${missionType} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
+            for (const enrichment of extracted) {
+              if (enrichment.confidence < 0.3) continue;
+              const sig = [siteId, enrichment.offerType, enrichment.vehicleModel ?? "", enrichment.monthlyPayment ?? "", enrichment.apr ?? "", enrichment.termMonths ?? "", enrichment.cashIncentive ?? "", enrichment.dueAtSigning ?? ""].join("|");
+              if (seen.has(sig)) continue;
+              seen.add(sig);
+              await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: screenshotRow.id, offerType: enrichment.offerType, vehicleMake: enrichment.vehicleMake, vehicleModel: enrichment.vehicleModel, vehicleTrim: enrichment.vehicleTrim, monthlyPayment: enrichment.monthlyPayment, apr: enrichment.apr, cashIncentive: enrichment.cashIncentive, termMonths: enrichment.termMonths, dueAtSigning: enrichment.dueAtSigning, rawText: null, normalizedJson: { aiAssisted: true, source: "image_extraction" }, disclaimerText: enrichment.disclaimerText, confidence: enrichment.confidence });
+              const COMPLIANCE_TYPES: typeof enrichment.offerType[] = ["lease", "finance", "cash"];
+              const result = COMPLIANCE_TYPES.includes(enrichment.offerType)
+                ? await grader.grade({ evidenceId: screenshotRow.id, offerType: enrichment.offerType, disclaimerText: enrichment.disclaimerText, adText: null, dealerName: siteInfo.name, marketStates, screenshotBuffer: buf })
+                : { grade: "n/a", details: { notApplicable: true, offerType: enrichment.offerType } };
+              await db.insert(complianceGrades).values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+            }
+          }
         }
       }
     } finally {

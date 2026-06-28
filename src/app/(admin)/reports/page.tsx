@@ -31,7 +31,7 @@ export default async function ReportsPage() {
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">Reports</h1>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="mt-1 text-sm text-zinc-700">
           Competitive offer reports, each built from one published snapshot.
           Pure reads of frozen data — publish a snapshot from an analyzed run to
           create one.
@@ -39,14 +39,14 @@ export default async function ReportsPage() {
       </div>
 
       {snapshots.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No reports yet. Publish a snapshot from a run, then open it here as a
           report.
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
               <tr>
                 <th className="px-4 py-3">Report</th>
                 <th className="px-4 py-3">Scope</th>
@@ -79,7 +79,7 @@ export default async function ReportsPage() {
                       <form action={rebuildReport.bind(null, snap.id)}>
                         <button
                           type="submit"
-                          className="text-sm text-zinc-400 hover:text-zinc-700"
+                          className="text-sm text-zinc-700 hover:text-zinc-700"
                         >
                           Rebuild
                         </button>

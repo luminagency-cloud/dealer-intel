@@ -49,13 +49,13 @@ export function RunGroupForm({
         <legend className="text-sm font-medium text-zinc-700">
           Member Sites
         </legend>
-        <p className="mt-0.5 text-xs text-zinc-500">
+        <p className="mt-0.5 text-xs text-zinc-700">
           Check the sites this group collects. Mark the first-order dealer(s)
           the group is built around as Primary — reporting will anchor
           comparisons on them.
         </p>
         <div className="mt-2 divide-y divide-zinc-100 rounded-md border border-zinc-200">
-          <div className="grid grid-cols-[1fr_auto] gap-4 bg-zinc-50 px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+          <div className="grid grid-cols-[1fr_auto] gap-4 bg-zinc-50 px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-zinc-700">
             <span>Site</span>
             <span>Primary</span>
           </div>
@@ -74,7 +74,7 @@ export function RunGroupForm({
                 />
                 <span>
                   {site.name}{" "}
-                  <span className="text-xs text-zinc-400">{site.url}</span>
+                  <span className="text-xs text-zinc-700">{site.url}</span>
                 </span>
               </label>
               <label className="flex justify-center">

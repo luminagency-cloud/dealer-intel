@@ -111,13 +111,13 @@ export default async function ReviewPage() {
       </div>
 
       {rows.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           Nothing needs review — all collections on open runs succeeded.
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
               <tr>
                 <th className="px-4 py-3 text-center">Del</th>
                 <th className="px-4 py-3">Site</th>
@@ -150,7 +150,7 @@ export default async function ReviewPage() {
                   <td className="px-4 py-3">
                     <MissionStatusBadge status={result.status} />
                   </td>
-                  <td className="max-w-sm truncate px-4 py-3 text-xs text-zinc-500">
+                  <td className="max-w-sm truncate px-4 py-3 text-xs text-zinc-700">
                     {result.error ??
                       (result.status === "needs_review"
                         ? `Captured ${result.pagesCaptured} page(s); some configured pages failed`
@@ -204,7 +204,7 @@ export default async function ReviewPage() {
           </table>
         </div>
       )}
-      <p className="mt-4 text-xs text-zinc-400">
+      <p className="mt-4 text-xs text-zinc-700">
         Retry re-collects the mission immediately. Fix URL opens the mission
         to update its target pages. Content Removed resolves the item when
         the page is genuinely gone.

@@ -33,13 +33,13 @@ export default async function DealersPage() {
       </div>
 
       {allSites.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No dealers yet. Add the first dealer or competitor website.
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
               <tr>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">URL</th>

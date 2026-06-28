@@ -52,11 +52,15 @@ export interface OfferEnricher {
   /** Returns a corrected offer, or null if the pass is disabled or failed
    *  (caller keeps the rule-based offer). */
   enrich(input: EnrichInput): Promise<OfferEnrichment | null>;
+  /** Extracts ALL offers from a pure-image screenshot. Returns [] when the
+   *  image contains no offers or the pass is disabled. */
+  extractAllFromImage(screenshotBuffer: Buffer, brand: string | null): Promise<OfferEnrichment[]>;
 }
 
 /** Default when no API key is configured: AI is off, rule-based stands. */
 export class NoopOfferEnricher implements OfferEnricher {
   async enrich(): Promise<OfferEnrichment | null> { return null; }
+  async extractAllFromImage(): Promise<OfferEnrichment[]> { return []; }
 }
 
 const EnrichmentSchema = z.object({
@@ -84,6 +88,35 @@ Rules:
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
 - DISCLAIMER (hard rule): the disclaimer is the fine print tied to THIS specific ad (it sits with the offer, e.g. "MSRP $X. Lease for $Y/mo, $Z due at signing..."). It is NEVER the site-wide footer legalese (Terms of Use, Privacy, ©, "do not sell"). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in this corrected offer.`;
+
+const BULK_IMAGE_SYSTEM_PROMPT = `You extract ALL automotive dealer ADVERTISED OFFERS visible in a screenshot image. The page produced no DOM text, so the image is the only source.
+
+Rules:
+- Extract EVERY distinct offer visible in the image — there may be 1 to 10+ offers on a single page graphic.
+- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive), "service" (service-department special), or "promotional" (no priced terms).
+- Vehicle make/model/trim: read from the image. Use null when not stated — never guess.
+- Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
+- DISCLAIMER (hard rule): the fine print tied to THIS specific ad. NEVER site-wide footer legalese (Terms of Use, Privacy, ©). Use null if no ad-specific disclaimer is present.
+- confidence: your 0..1 confidence in each extracted offer.
+- If the image contains no offers (e.g. it is a banner or navigation), return an empty array.`;
+
+const BulkExtractionSchema = z.object({
+  offers: z.array(
+    z.object({
+      offerType: z.enum(offerTypeEnum.enumValues as [OfferType, ...OfferType[]]),
+      vehicleMake: z.string().nullable(),
+      vehicleModel: z.string().nullable(),
+      vehicleTrim: z.string().nullable(),
+      monthlyPayment: z.number().nullable(),
+      apr: z.number().nullable(),
+      cashIncentive: z.number().nullable(),
+      termMonths: z.number().int().nullable(),
+      dueAtSigning: z.number().nullable(),
+      disclaimerText: z.string().nullable(),
+      confidence: z.number(),
+    })
+  ),
+});
 
 /** Calls Claude with structured output to re-extract a low-confidence offer. */
 export class ClaudeOfferEnricher implements OfferEnricher {
@@ -161,6 +194,43 @@ export class ClaudeOfferEnricher implements OfferEnricher {
     } catch (err) {
       console.error("AI offer enrichment failed:", err);
       return null;
+    }
+  }
+
+  async extractAllFromImage(screenshotBuffer: Buffer, brand: string | null): Promise<OfferEnrichment[]> {
+    let imageBase64: string | null = null;
+    try {
+      const resized = await sharp(screenshotBuffer)
+        .resize({ width: 1200, height: 7900, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      imageBase64 = resized.toString("base64");
+    } catch {
+      return [];
+    }
+    try {
+      const response = await this.client.messages.parse({
+        model: this.model,
+        max_tokens: 4096,
+        system: BULK_IMAGE_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image" as const,
+                source: { type: "base64" as const, media_type: "image/jpeg" as const, data: imageBase64 },
+              },
+              { type: "text" as const, text: `Dealer brand: ${brand ?? "unknown"}. Extract all offers visible in this image.` },
+            ],
+          },
+        ],
+        output_config: { format: zodOutputFormat(BulkExtractionSchema) },
+      });
+      return response.parsed_output?.offers ?? [];
+    } catch (err) {
+      console.error("AI bulk image extraction failed:", err);
+      return [];
     }
   }
 

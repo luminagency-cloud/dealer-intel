@@ -46,21 +46,21 @@ export default async function MissionsPage() {
           Add Mission
         </Link>
       </div>
-      <p className="mb-4 text-sm text-zinc-500">
+      <p className="mb-4 text-sm text-zinc-700">
         Missions define what to collect — they apply across every dealer in a
         run&apos;s scope. Per-dealer URLs are configured on each site&apos;s
         edit page.
       </p>
 
       {rows.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No missions yet. A mission defines what to collect, e.g. “collect
           the service specials.”
         </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
               <tr>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Behavior</th>

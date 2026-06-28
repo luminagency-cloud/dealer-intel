@@ -97,7 +97,7 @@ export default async function RunsPage({
       )}
 
       {runs.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No runs yet. Create the first collection run.
         </p>
       ) : (
@@ -112,7 +112,7 @@ export default async function RunsPage({
           </div>
           <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+              <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
                 <tr>
                   <th className="px-4 py-3">Run</th>
                   <th className="px-4 py-3">Cycle</th>
@@ -136,7 +136,7 @@ export default async function RunsPage({
                         {run.id.slice(0, 8)}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                    <td className="px-4 py-3 font-mono text-xs text-zinc-700">
                       {run.cycle ?? "—"}
                     </td>
                     <td className="max-w-56 truncate px-4 py-3 text-zinc-600">
@@ -174,7 +174,7 @@ export default async function RunsPage({
           </div>
         </form>
       )}
-      <p className="mt-4 text-xs text-zinc-400">
+      <p className="mt-4 text-xs text-zinc-700">
         Statuses: {Object.values(RUN_STATUS_LABELS).join(" · ")}. Scope: all
         groups, one or more specific groups, or a custom dealer selection.
       </p>

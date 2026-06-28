@@ -59,16 +59,16 @@ export function SnapshotSection({
         <h2 className="text-xl font-semibold text-zinc-900">
           Snapshots{" "}
           {isMultiGroup && runGroups ? (
-            <span className="font-normal text-zinc-500">
+            <span className="font-normal text-zinc-700">
               — {runGroups.length} groups
             </span>
           ) : snapshots.length > 0 ? (
-            <span className="font-normal text-zinc-500">
+            <span className="font-normal text-zinc-700">
               — {snapshots.length}
             </span>
           ) : null}
         </h2>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="mt-1 text-sm text-zinc-700">
           {isMultiGroup
             ? "Combined run — check the groups to publish, then hit Publish Selected. Reports never cross group boundaries."
             : "Publish this run's offers as an immutable snapshot for reporting. Reports read snapshots only, never the live run."}
@@ -89,7 +89,7 @@ export function SnapshotSection({
             />
           </div>
           <table className="w-full text-sm">
-            <thead className="border-b border-zinc-100 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+            <thead className="border-b border-zinc-100 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
               <tr>
                 <th className="w-10 px-4 py-2 text-left">
                   <input
@@ -133,15 +133,15 @@ export function SnapshotSection({
                       {existing ? (
                         <Link
                           href={`/snapshots/${existing.id}`}
-                          className="text-zinc-500 hover:underline"
+                          className="text-zinc-700 hover:underline"
                         >
                           ✓ {existing.offerCount} offers
                         </Link>
                       ) : (
-                        <span className="text-zinc-300">not published</span>
+                        <span className="text-zinc-600">not published</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right text-zinc-500">
+                    <td className="px-4 py-3 text-right text-zinc-700">
                       {existing ? formatDate(existing.approvedAt) : "—"}
                     </td>
                   </tr>
@@ -195,7 +195,7 @@ export function SnapshotSection({
       {/* Existing snapshots list (shown below the per-group rows for multi-group) */}
       {!isMultiGroup && (
         snapshots.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-zinc-500">
+          <p className="px-4 py-6 text-sm text-zinc-700">
             No snapshots published from this run yet.
           </p>
         ) : (
@@ -211,9 +211,9 @@ export function SnapshotSection({
                 >
                   {snap.runGroupName || snap.label || `Snapshot ${snap.id.slice(0, 8)}`}
                 </Link>
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-zinc-700">
                   {snap.label && snap.runGroupName && (
-                    <span className="mr-2 text-zinc-400">{snap.label}</span>
+                    <span className="mr-2 text-zinc-700">{snap.label}</span>
                   )}
                   {snap.offerCount} offers · {snap.siteCount} sites ·{" "}
                   {formatDate(snap.approvedAt)}

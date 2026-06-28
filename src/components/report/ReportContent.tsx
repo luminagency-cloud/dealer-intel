@@ -74,7 +74,7 @@ function SectionHeading({
         )}
         {title}
       </h2>
-      {sub && <p className="mt-0.5 text-sm text-zinc-500">{sub}</p>}
+      {sub && <p className="mt-0.5 text-sm text-zinc-700">{sub}</p>}
     </div>
   );
 }
@@ -90,7 +90,7 @@ function Narrative({ text }: { text: string }) {
 
 // "Not Advertised" cell style
 const NA_CLASS =
-  "text-zinc-400 italic text-xs text-center";
+  "text-zinc-700 italic text-xs text-center";
 
 function rankClass(rank: number | null, total: number): string {
   return rankBgClass(rank, total);
@@ -120,7 +120,7 @@ function GridTable({
 }: GridTableProps) {
   if (rows.length === 0) {
     return (
-      <p className="py-4 text-sm text-zinc-500">No offers captured.</p>
+      <p className="py-4 text-sm text-zinc-700">No offers captured.</p>
     );
   }
 
@@ -217,7 +217,7 @@ function GridLegend({ hasRanking }: { hasRanking: boolean }) {
       <span className="flex items-center gap-1">
         <span className="inline-block h-3 w-3 rounded bg-red-600" /> Last
       </span>
-      <span className="text-zinc-400 italic">Not Advertised</span>
+      <span className="text-zinc-700 italic">Not Advertised</span>
     </div>
   );
 }
@@ -275,7 +275,7 @@ function NewsCard({ item }: { item: NewsItem }) {
 function ReturnToSummary() {
   return (
     <div className="mt-4 text-right">
-      <a href="#summary" className="text-xs font-medium text-zinc-400 hover:text-[#1b3a6b] hover:underline">
+      <a href="#summary" className="text-xs font-medium text-zinc-700 hover:text-[#1b3a6b] hover:underline">
         ↑ Return to summary
       </a>
     </div>
@@ -301,7 +301,7 @@ function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; 
           ))}
         </div>
       ) : (
-        <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center text-sm text-zinc-400">
+        <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center text-sm text-zinc-700">
           Brand &amp; industry news will appear here once the news service is connected.
         </div>
       )}
@@ -621,7 +621,7 @@ export function ReportContent({
       {/* Executive brief                                                     */}
       {/* ------------------------------------------------------------------ */}
       <div id="summary" className="mb-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-zinc-500">
+        <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-zinc-700">
           Report Summary
         </h2>
         <ul className="space-y-2 text-sm text-zinc-700">
@@ -785,7 +785,7 @@ export function ReportContent({
           sub="Ranked by advertised discount amount (larger = better)."
         />
         {cashOffers.length === 0 ? (
-          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 shadow-sm">
+          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700 shadow-sm">
             No cash or discount offers captured this period.
           </div>
         ) : (
@@ -820,7 +820,7 @@ export function ReportContent({
           sub="Advertised service offers per dealer."
         />
         {serviceOffers.length === 0 ? (
-          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 shadow-sm">
+          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700 shadow-sm">
             No service specials captured this period.
           </div>
         ) : (
@@ -846,7 +846,7 @@ export function ReportContent({
                     {d.isPrimary && <span className="ml-1 text-yellow-300">★</span>}
                   </div>
                   {dOffers.length === 0 ? (
-                    <p className="px-4 py-3 text-xs italic text-zinc-400">
+                    <p className="px-4 py-3 text-xs italic text-zinc-700">
                       Not Advertised
                     </p>
                   ) : (
@@ -928,8 +928,8 @@ export function ReportContent({
             ].map((t) => (
               <div key={t.label} className="rounded-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm text-center">
                 <div className={`text-3xl font-extrabold ${t.color}`}>{t.value}</div>
-                <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500">{t.label}</div>
-                {t.sub && <div className="text-[10px] text-zinc-400">{t.sub}</div>}
+                <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-700">{t.label}</div>
+                {t.sub && <div className="text-[10px] text-zinc-700">{t.sub}</div>}
               </div>
             ))}
           </div>
@@ -937,14 +937,14 @@ export function ReportContent({
           {/* Total Inventory Ranking */}
           <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
             <div className="border-b border-zinc-100 px-4 py-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Total Inventory Ranking</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Total Inventory Ranking</h3>
             </div>
             <div className="divide-y divide-zinc-50 px-4 py-1">
               {invSorted.map((d, i) => {
                 const pct = invTotalMarket > 0 ? (d.totalUnits / invSorted[0].totalUnits) * 100 : 0;
                 return (
                   <div key={d.siteName} className={`flex items-center gap-3 py-1.5 ${d.isPrimary ? "font-semibold" : ""}`}>
-                    <span className="w-5 text-right text-xs text-zinc-400">{d.isPrimary ? "★" : i + 1}</span>
+                    <span className="w-5 text-right text-xs text-zinc-700">{d.isPrimary ? "★" : i + 1}</span>
                     <span className="w-36 shrink-0 text-xs text-zinc-700">{d.siteName}{d.isPrimary ? " ★" : ""}</span>
                     <div className="flex-1">
                       <div
@@ -975,14 +975,14 @@ export function ReportContent({
           {invAnchor && invAnchor.makes.length > 0 && (
             <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
               <div className="border-b border-zinc-100 px-4 py-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{invAnchor.siteName} — Brand Breakdown</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">{invAnchor.siteName} — Brand Breakdown</h3>
               </div>
               <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
                 {[...invAnchor.makes].sort((a, b) => b.inStock - a.inStock).map((m) => (
                   <div key={m.make} className="rounded border border-zinc-100 bg-zinc-50 px-3 py-2 text-center">
-                    <div className="text-[10px] font-medium text-zinc-500">{m.make}</div>
+                    <div className="text-[10px] font-medium text-zinc-700">{m.make}</div>
                     <div className="text-xl font-bold text-[#1b3a6b]">{m.inStock}</div>
-                    <div className="text-[10px] text-zinc-400">{invAnchorUnits > 0 ? Math.round((m.inStock / invAnchorUnits) * 100) : 0}% of stock</div>
+                    <div className="text-[10px] text-zinc-700">{invAnchorUnits > 0 ? Math.round((m.inStock / invAnchorUnits) * 100) : 0}% of stock</div>
                   </div>
                 ))}
               </div>
@@ -993,8 +993,8 @@ export function ReportContent({
           {Object.keys(allModelsByMake).length > 0 && (
             <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
               <div className="border-b border-zinc-100 px-4 py-2 flex items-baseline gap-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Model-by-Dealer Breakdown</h3>
-                <span className="text-[10px] text-zinc-400">Shading = inventory density · darkest = row leader</span>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Model-by-Dealer Breakdown</h3>
+                <span className="text-[10px] text-zinc-700">Shading = inventory density · darkest = row leader</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs" style={{ tableLayout: "fixed" }}>
@@ -1004,7 +1004,7 @@ export function ReportContent({
                     <col style={{ width: "70px" }} />
                   </colgroup>
                   <thead>
-                    <tr className="border-b border-zinc-100 bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-500">
+                    <tr className="border-b border-zinc-100 bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-700">
                       <th className="px-3 py-1.5 text-left font-medium">Model</th>
                       {dealerInventory.map((d) => (
                         <th key={d.siteName} className={`px-2 py-1.5 text-center font-medium ${d.isPrimary ? "bg-[#1b3a6b] text-white" : ""}`}>
@@ -1018,7 +1018,7 @@ export function ReportContent({
                     {allMakes.filter((make) => allModelsByMake[make]?.length > 0).map((make) => (
                       <React.Fragment key={`make-${make}`}>
                         <tr className="bg-zinc-100">
-                          <td colSpan={dealerInventory.length + 2} className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                          <td colSpan={dealerInventory.length + 2} className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-700">
                             {make}
                           </td>
                         </tr>
@@ -1037,7 +1037,7 @@ export function ReportContent({
                                 return (
                                   <td
                                     key={d.siteName}
-                                    className={`px-2 py-1.5 text-center font-medium ${n === 0 ? "text-zinc-300" : isLeader ? "text-white" : isPrimary ? "text-white" : "text-zinc-700"}`}
+                                    className={`px-2 py-1.5 text-center font-medium ${n === 0 ? "text-zinc-600" : isLeader ? "text-white" : isPrimary ? "text-white" : "text-zinc-700"}`}
                                     style={{
                                       backgroundColor: n === 0 ? "transparent" : isLeader
                                         ? "#1b3a6b"
@@ -1100,7 +1100,7 @@ export function ReportContent({
                 </div>
               )}
               <div className="rounded-lg border-l-4 border-zinc-300 bg-zinc-50 px-3 py-2.5">
-                <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Context</div>
+                <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-700">Context</div>
                 <p className="text-xs text-zinc-700">
                   {invSorted[0].siteName} leads the market with {invSorted[0].totalUnits} units
                   {invSorted[0].isPrimary ? " — anchor holds the top position." : ` — ${Math.round((invSorted[0].totalUnits / invTotalMarket) * 100)}% of total market supply.`}
@@ -1124,7 +1124,7 @@ export function ReportContent({
           />
           <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
             <div className="px-6 pt-5 pb-4 border-b border-zinc-100">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-700">
                 This week&apos;s ad grades
               </p>
               <div className="flex flex-wrap gap-6">
@@ -1141,7 +1141,7 @@ export function ReportContent({
                     >
                       {grade.toUpperCase()}
                     </div>
-                    <div className="mt-1 text-sm font-medium text-zinc-500">
+                    <div className="mt-1 text-sm font-medium text-zinc-700">
                       {count} ad{count !== 1 ? "s" : ""}
                     </div>
                   </div>
@@ -1162,7 +1162,7 @@ export function ReportContent({
               return (
                 <table className="w-full border-t border-zinc-100 text-sm">
                   <thead>
-                    <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                    <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
                       <th className="px-4 py-2 text-left font-medium">Offer</th>
                       <th className="px-4 py-2 text-left font-medium">Type</th>
                       <th className="px-4 py-2 text-left font-medium">Grade</th>
@@ -1200,7 +1200,7 @@ export function ReportContent({
                           </span>
                         </td>
                         <td className="px-4 py-3 align-top text-zinc-600">
-                          {reason ?? <span className="text-zinc-400">—</span>}
+                          {reason ?? <span className="text-zinc-700">—</span>}
                         </td>
                         <td className="px-4 py-3 align-top">
                           {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
@@ -1213,7 +1213,7 @@ export function ReportContent({
                               View
                             </a>
                           ) : (
-                            <span className="text-sm text-zinc-400">—</span>
+                            <span className="text-sm text-zinc-700">—</span>
                           )}
                         </td>
                       </tr>
@@ -1237,7 +1237,7 @@ export function ReportContent({
           <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
                   <th className="px-4 py-2 text-left font-medium">Published</th>
                   <th className="px-4 py-2 text-left font-medium">Report</th>
                   <th className="px-4 py-2 text-right font-medium">Offers</th>
@@ -1277,7 +1277,7 @@ export function ReportContent({
       {/* ------------------------------------------------------------------ */}
       {/* Methodology footer                                                   */}
       {/* ------------------------------------------------------------------ */}
-      <footer className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 px-6 py-5 text-xs text-zinc-500">
+      <footer className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 px-6 py-5 text-xs text-zinc-700">
         <p className="font-semibold text-zinc-700">Methodology &amp; Data Provenance</p>
         <p className="mt-2">
           Specials data captured from each dealer&apos;s published promotions pages at
@@ -1293,7 +1293,7 @@ export function ReportContent({
           payments, APRs, and terms are subject to change, qualification, and dealer
           availability. Not all buyers will qualify.
         </p>
-        <p className="mt-3 text-zinc-400">
+        <p className="mt-3 text-zinc-700">
           Dealer Intel · Competitive Specials Comparison ·{" "}
           {snapshot.runGroupName ?? "All sites"} · Published {captureDate}
         </p>

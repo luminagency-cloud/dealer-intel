@@ -136,10 +136,10 @@ export default async function RunDetailPage({
       {/* Compact title row — stays above the sticky workflow bar */}
       <div className="mb-2 flex items-center justify-between py-2">
         <div className="flex items-center gap-2 text-sm">
-          <Link href="/runs" className="text-zinc-400 hover:text-zinc-700">
+          <Link href="/runs" className="text-zinc-700 hover:text-zinc-700">
             ← Runs
           </Link>
-          <span className="text-zinc-300">/</span>
+          <span className="text-zinc-600">/</span>
           <span className="font-semibold text-zinc-900">
             Run {run.id.slice(0, 8)}
           </span>
@@ -200,7 +200,7 @@ export default async function RunDetailPage({
       />
 
       {/* One-line metadata — sits below sticky bar, scrolls away */}
-      <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-400">
+      <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-700">
         <span className="font-mono">{run.id}</span>
         <span>Created {formatDate(run.createdAt)}</span>
         {run.startedAt && <span>Started {formatDate(run.startedAt)}</span>}

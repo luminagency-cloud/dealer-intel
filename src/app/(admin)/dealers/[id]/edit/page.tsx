@@ -48,7 +48,7 @@ export default async function EditDealerPage({
           <h2 className="text-sm font-semibold text-zinc-900">
             Collection URLs per Mission
           </h2>
-          <p className="mt-0.5 text-xs text-zinc-500">
+          <p className="mt-0.5 text-xs text-zinc-700">
             Where on this dealer&apos;s site each mission collects. Homepage
             missions fall back to the site URL when blank — only set one to point
             at a different page. Other missions discover and remember a URL when
@@ -67,7 +67,7 @@ export default async function EditDealerPage({
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium text-zinc-900">
                     {mission.name}{" "}
-                    <span className="text-xs font-normal text-zinc-400">
+                    <span className="text-xs font-normal text-zinc-700">
                       ({MISSION_TYPE_LABELS[mission.missionType]}
                       {!mission.active && ", mission disabled"})
                     </span>
@@ -103,7 +103,7 @@ export default async function EditDealerPage({
                   />
                 </div>
                 <div className="mt-2 flex items-center justify-between">
-                  <span className="text-xs text-zinc-400">
+                  <span className="text-xs text-zinc-700">
                     {config?.lastSuccessAt
                       ? `Last success: ${new Date(config.lastSuccessAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
                       : "Never collected"}

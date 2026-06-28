@@ -39,7 +39,7 @@ export default async function SiteEvidencePage({
 
   return (
     <div>
-      <div className="mb-6 flex items-center gap-2 text-sm text-zinc-500">
+      <div className="mb-6 flex items-center gap-2 text-sm text-zinc-700">
         <Link href="/runs" className="hover:underline">
           Runs
         </Link>
@@ -53,20 +53,20 @@ export default async function SiteEvidencePage({
 
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-zinc-900">{site.name}</h1>
-        <p className="mt-1 text-sm text-zinc-500">
+        <p className="mt-1 text-sm text-zinc-700">
           Evidence — {evidence.length} item{evidence.length !== 1 ? "s" : ""}
         </p>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
         {evidence.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-zinc-500">
+          <p className="px-4 py-6 text-sm text-zinc-700">
             No evidence captured for this site in this run.
           </p>
         ) : (
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+              <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
                 <th className="px-4 py-2 font-medium">Type</th>
                 <th className="px-4 py-2 font-medium">Detail</th>
                 <th className="px-4 py-2 font-medium">Mission</th>
@@ -86,11 +86,11 @@ export default async function SiteEvidencePage({
                         {row.label}
                       </span>
                     ) : (
-                      <span className="text-zinc-400">—</span>
+                      <span className="text-zinc-700">—</span>
                     )}
                     {row.textContent && (
                       <details className="mt-1">
-                        <summary className="cursor-pointer text-xs text-zinc-400 hover:text-zinc-600">
+                        <summary className="cursor-pointer text-xs text-zinc-700 hover:text-zinc-600">
                           Disclaimer text
                         </summary>
                         <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600">

@@ -3,7 +3,7 @@ import { FRESHNESS_LABELS, freshnessOf } from "@/lib/freshness";
 const STYLES: Record<string, string> = {
   fresh: "bg-green-100 text-green-800",
   stale: "bg-amber-100 text-amber-800",
-  never: "bg-zinc-100 text-zinc-500",
+  never: "bg-zinc-100 text-zinc-700",
 };
 
 /** Fresh / Stale / Never indicator for a site's last successful collection. */

@@ -43,7 +43,7 @@ export default async function RunGroupsPage() {
       </div>
 
       {groups.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-500">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
           No run groups yet. A run group is a first-order dealer plus the
           related dealers you want collected together — create one to run a
           subset of your sites.
@@ -52,7 +52,7 @@ export default async function RunGroupsPage() {
         <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500">
+              <tr className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-700">
                 <th className="px-4 py-2.5 font-medium">Name</th>
                 <th className="px-4 py-2.5 font-medium">Primary</th>
                 <th className="px-4 py-2.5 font-medium">Members</th>
