@@ -52,6 +52,7 @@ export function AnalysisSection({
   evidencePageCount,
   pagesProcessed,
   runAnalysisAction,
+  resumeAnalysisAction,
   canAnalyze,
 }: {
   offers: Offer[];
@@ -66,6 +67,7 @@ export function AnalysisSection({
   /** Pages processed so far during an active analysis run. */
   pagesProcessed: number | null;
   runAnalysisAction: () => Promise<void>;
+  resumeAnalysisAction?: () => Promise<void>;
   canAnalyze: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -173,19 +175,31 @@ export function AnalysisSection({
           ) : null}
         </div>
         {canAnalyze && (
-          <form action={runAnalysisAction}>
-            <button
-              type="submit"
-              disabled={analyzing}
-              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {analyzing
-                ? "Analyzing…"
-                : offers.length > 0
-                  ? "Re-run Analysis"
-                  : "Run Analysis"}
-            </button>
-          </form>
+          <div className="flex items-center gap-2">
+            {resumeAnalysisAction && !analyzing && analysisStartedAt && !analysisCompletedAt && offers.length > 0 && (
+              <form action={resumeAnalysisAction}>
+                <button
+                  type="submit"
+                  className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500"
+                >
+                  Resume Analysis
+                </button>
+              </form>
+            )}
+            <form action={runAnalysisAction}>
+              <button
+                type="submit"
+                disabled={analyzing}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {analyzing
+                  ? "Analyzing…"
+                  : offers.length > 0
+                    ? "Re-run Analysis"
+                    : "Run Analysis"}
+              </button>
+            </form>
+          </div>
         )}
       </div>
 

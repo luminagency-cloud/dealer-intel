@@ -74,6 +74,7 @@ export type CollectInventoryInput = {
   platform?: string;
   dealerId?: string;
   name?: string;
+  inventoryPath?: string;
 };
 
 export async function collectInventoryForDealer(
@@ -128,7 +129,7 @@ export type CollectAndStoreResult = {
 
 /** Collect inventory for a site and store the result. */
 export async function collectAndStore(
-  site: { id: string; url: string; brand: string | null; platform: string | null; name: string },
+  site: { id: string; url: string; brand: string | null; platform: string | null; name: string; inventoryPath?: string | null },
   batchId: string
 ): Promise<CollectAndStoreResult> {
   const weekKey = getISOWeekLabel();
@@ -140,6 +141,7 @@ export async function collectAndStore(
     platform: site.platform ?? undefined,
     dealerId: site.id,
     name: site.name,
+    inventoryPath: site.inventoryPath ?? undefined,
   });
 
   const db = getDb();

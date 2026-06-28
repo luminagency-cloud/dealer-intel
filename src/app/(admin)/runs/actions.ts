@@ -142,6 +142,13 @@ export async function createRun(formData?: FormData) {
       );
   }
   revalidatePath("/runs");
+
+  if (process.env.AUTO_START_RUN === "true") {
+    void startRunExecution(run.id).catch((err) => {
+      console.error(`AUTO_START_RUN: failed to start run ${run.id}:`, err);
+    });
+  }
+
   redirect(`/runs/${run.id}`);
 }
 
@@ -274,6 +281,23 @@ export async function runAnalysis(runId: string) {
     throw new Error("Run not found");
   }
   const queued = await startAnalysis(runId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(
+    queued === null
+      ? `/runs/${runId}?error=${encodeURIComponent("Analysis is already running")}`
+      : queued === 0
+        ? `/runs/${runId}?error=${encodeURIComponent("No evidence to analyze yet — run collection first")}`
+        : `/runs/${runId}`
+  );
+}
+
+export async function resumeAnalysis(runId: string) {
+  await requireSession();
+  const run = await getCollectionRun(runId);
+  if (!run) {
+    throw new Error("Run not found");
+  }
+  const queued = await startAnalysis(runId, { resume: true });
   revalidatePath(`/runs/${runId}`);
   redirect(
     queued === null

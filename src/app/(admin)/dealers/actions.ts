@@ -37,6 +37,11 @@ const siteSchema = z.object({
         .filter((s) => s.length === 2)
     )
     .pipe(z.array(z.string()).max(10, "At most 10 additional states")),
+  inventoryPath: z
+    .string()
+    .trim()
+    .transform((v) => (v === "" ? null : v))
+    .nullable(),
 });
 
 function parseSiteForm(formData: FormData) {
@@ -47,6 +52,7 @@ function parseSiteForm(formData: FormData) {
     brand: formData.get("brand") ?? "",
     state: formData.get("state") ?? "",
     otherStates: formData.get("otherStates") ?? "",
+    inventoryPath: formData.get("inventoryPath") ?? "",
   });
 }
 

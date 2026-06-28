@@ -1,6 +1,6 @@
 {
   "name": "dealer-intel",
-  "version": "1.5.62",
+  "version": "1.6.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -26,7 +26,7 @@
     "playwright": "^1.61.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "sharp": "^0.35.1",
+    "sharp": "^0.35.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -43,7 +43,6 @@
     "typescript": "^5"
   },
   "allowScripts": {
-    "sharp@0.34.5": true,
     "sharp@0.35.1": true
   }
 }

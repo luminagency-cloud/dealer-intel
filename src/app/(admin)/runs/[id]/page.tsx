@@ -36,6 +36,7 @@ import {
   resumeRun,
   retryResult,
   runAnalysis,
+  resumeAnalysis,
   runAnalysisForSiteMission,
   updateRunStatus,
 } from "../actions";
@@ -240,6 +241,7 @@ export default async function RunDetailPage({
           evidencePageCount={analysisProgressData?.total ?? evidencePageCount}
           pagesProcessed={analysisProgressData?.processed ?? null}
           runAnalysisAction={runAnalysis.bind(null, run.id)}
+          resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
           canAnalyze={canAnalyze}
         />
       </div>

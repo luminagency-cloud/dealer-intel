@@ -41,6 +41,8 @@ export const sites = pgTable("sites", {
   state: text("state"),
   /** Additional states this dealer runs ads in (for multi-jurisdiction compliance). */
   otherStates: text("other_states").array(),
+  /** URL path override sent to the inventory API (e.g. "/new-inventory"). */
+  inventoryPath: text("inventory_path"),
   active: boolean("active").notNull().default(true),
   /** Last time any mission collected successfully for this site (Phase 8
    *  freshness). Set by the run executor; drives the fresh/stale indicator. */

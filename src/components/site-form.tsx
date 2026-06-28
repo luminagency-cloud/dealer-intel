@@ -80,6 +80,17 @@ export function SiteForm({
         </label>
       </div>
       <label className="mt-4 block text-sm font-medium text-zinc-700">
+        Inventory path{" "}
+        <span className="font-normal text-zinc-400">(optional)</span>
+        <input
+          type="text"
+          name="inventoryPath"
+          defaultValue={site?.inventoryPath ?? ""}
+          placeholder="/new-inventory"
+          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+        />
+      </label>
+      <label className="mt-4 block text-sm font-medium text-zinc-700">
         Additional states{" "}
         <span className="font-normal text-zinc-400">
           (optional — for multi-jurisdiction compliance)

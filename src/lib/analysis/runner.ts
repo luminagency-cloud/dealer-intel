@@ -212,15 +212,52 @@ function matchCapturedDisclaimer(
 
 async function processAnalysis(
   runId: string,
-  rows: EvidenceWithSite[]
+  rows: EvidenceWithSite[],
+  resume = false
 ): Promise<void> {
-  console.log(`[analysis] run=${runId} html_snapshot rows=${rows.length}`);
+  console.log(`[analysis] run=${runId} html_snapshot rows=${rows.length} resume=${resume}`);
   const db = getDb();
   try {
-    await db.delete(offers).where(eq(offers.collectionRunId, runId));
-    await db
-      .delete(complianceGrades)
-      .where(eq(complianceGrades.collectionRunId, runId));
+    if (resume) {
+      // Find sites that already have offers — skip them.
+      const doneRows = await db
+        .select({ siteId: offers.siteId })
+        .from(offers)
+        .where(eq(offers.collectionRunId, runId))
+        .groupBy(offers.siteId);
+      const doneSiteIds = new Set(doneRows.map((r) => r.siteId));
+      if (doneSiteIds.size > 0) {
+        console.log(`[analysis] resume: skipping ${doneSiteIds.size} already-analyzed sites`);
+        rows = rows.filter((r) => !doneSiteIds.has(r.evidence.siteId));
+      }
+      // Delete offers/grades only for the sites we're about to (re)process.
+      const siteIdsToProcess = [...new Set(rows.map((r) => r.evidence.siteId))];
+      if (siteIdsToProcess.length > 0) {
+        await db.delete(offers).where(
+          and(eq(offers.collectionRunId, runId), inArray(offers.siteId, siteIdsToProcess))
+        );
+        // complianceGrades has no siteId — delete via evidenceId subquery.
+        const evidenceIds = await db
+          .select({ id: evidence.id })
+          .from(evidence)
+          .where(
+            and(
+              eq(evidence.collectionRunId, runId),
+              inArray(evidence.siteId, siteIdsToProcess)
+            )
+          );
+        if (evidenceIds.length > 0) {
+          await db.delete(complianceGrades).where(
+            inArray(complianceGrades.evidenceId, evidenceIds.map((r) => r.id))
+          );
+        }
+      }
+    } else {
+      await db.delete(offers).where(eq(offers.collectionRunId, runId));
+      await db
+        .delete(complianceGrades)
+        .where(eq(complianceGrades.collectionRunId, runId));
+    }
 
     // Void prior-run offers for every site this run covers. Scoped by siteId
     // so runs covering different dealer sets don't step on each other.
@@ -711,11 +748,11 @@ async function loadDisclaimerEvidenceForSiteMission(
     }));
 }
 
-export async function startAnalysis(runId: string): Promise<number | null> {
+export async function startAnalysis(runId: string, { resume = false }: { resume?: boolean } = {}): Promise<number | null> {
   if (activeAnalyses.has(runId)) return null;
   try {
     const rows = await loadAnalyzableEvidence(runId);
-    console.log(`[analysis] startAnalysis run=${runId} found ${rows.length} html_snapshot rows`);
+    console.log(`[analysis] startAnalysis run=${runId} found ${rows.length} html_snapshot rows resume=${resume}`);
     if (rows.length === 0) {
       console.warn(`[analysis] no html_snapshot evidence for run=${runId} — returning 0`);
       return 0;
@@ -725,7 +762,7 @@ export async function startAnalysis(runId: string): Promise<number | null> {
       .update(collectionRuns)
       .set({ analysisStartedAt: new Date() })
       .where(eq(collectionRuns.id, runId));
-    void processAnalysis(runId, rows).catch((err) => {
+    void processAnalysis(runId, rows, resume).catch((err) => {
       console.error(`analysis for run ${runId} crashed:`, err);
       activeAnalyses.delete(runId);
     });

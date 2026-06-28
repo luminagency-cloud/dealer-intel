@@ -320,6 +320,13 @@ async function finalizeRunIfDone(runId: string): Promise<void> {
     .update(collectionRuns)
     .set({ status, completedAt: new Date() })
     .where(eq(collectionRuns.id, runId));
+
+  if (status !== "failed" && process.env.AUTO_ANALYZE_AFTER_SCRAPE === "true") {
+    const { startAnalysis } = await import("@/lib/analysis");
+    void startAnalysis(runId).catch((err) => {
+      console.error(`AUTO_ANALYZE_AFTER_SCRAPE: analysis failed for run ${runId}:`, err);
+    });
+  }
 }
 
 /** Seeds result rows for the run's scope (or the given work-item subset) and
