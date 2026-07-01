@@ -2,17 +2,10 @@
 
 import { useState } from "react";
 import { OFFER_TYPE_LABELS, type ComplianceGrade, type Offer, type Site } from "@/lib/db";
+import { ComplianceGradeBadge } from "@/components/compliance-grade-badge";
 
 function money(value: number | null): string {
   return value === null ? "—" : `$${value.toLocaleString()}`;
-}
-
-function gradeStyle(grade: string): string {
-  const g = grade.toLowerCase();
-  if (g === "a" || g === "a+" || g === "a-") return "bg-green-100 text-green-800";
-  if (g === "n/a") return "bg-zinc-100 text-zinc-700";
-  if (g === "f") return "bg-red-100 text-red-800";
-  return "bg-amber-100 text-amber-800";
 }
 
 function confidenceStyle(confidence: number | null): string {
@@ -76,7 +69,7 @@ export function AnalysisSection({
   // new rows appear at the bottom as they arrive.
   const [sorted, setSorted] = useState(!analyzing);
 
-  const gradeByEvidence = new Map(grades.map((g) => [g.evidenceId, g.grade]));
+  const gradeByEvidence = new Map(grades.map((g) => [g.evidenceId, g]));
 
   const filtered =
     siteFilter === "all"
@@ -249,7 +242,7 @@ export function AnalysisSection({
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
                   {visible.map((offer) => {
-                    const grade = offer.sourceEvidenceId
+                    const compliance = offer.sourceEvidenceId
                       ? gradeByEvidence.get(offer.sourceEvidenceId)
                       : undefined;
                     const vehicle = [
@@ -330,12 +323,11 @@ export function AnalysisSection({
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {grade ? (
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${gradeStyle(grade)}`}
-                            >
-                              {grade}
-                            </span>
+                          {compliance ? (
+                            <ComplianceGradeBadge
+                              grade={compliance.grade}
+                              details={compliance.detailsJson}
+                            />
                           ) : (
                             <span className="text-xs text-zinc-700">—</span>
                           )}

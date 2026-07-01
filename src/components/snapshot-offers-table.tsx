@@ -3,16 +3,10 @@ import {
   OFFER_TYPE_LABELS,
   type SnapshotOffer,
 } from "@/lib/db";
+import { ComplianceGradeBadge } from "@/components/compliance-grade-badge";
 
 function money(value: number | null): string {
   return value === null ? "—" : `$${value.toLocaleString()}`;
-}
-
-function gradeStyle(grade: string): string {
-  const g = grade.toLowerCase();
-  if (g === "pass") return "bg-green-100 text-green-800";
-  if (g === "fail") return "bg-red-100 text-red-800";
-  return "bg-amber-100 text-amber-800";
 }
 
 function confidenceStyle(confidence: number | null): string {
@@ -104,11 +98,10 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
                 </td>
                 <td className="px-4 py-3">
                   {offer.complianceGrade ? (
-                    <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${gradeStyle(offer.complianceGrade)}`}
-                    >
-                      {offer.complianceGrade}
-                    </span>
+                    <ComplianceGradeBadge
+                      grade={offer.complianceGrade}
+                      details={offer.complianceDetailsJson}
+                    />
                   ) : (
                     <span className="text-xs text-zinc-700">—</span>
                   )}

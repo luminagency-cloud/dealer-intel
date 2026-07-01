@@ -1,370 +1,161 @@
 # Implementation Notes
 
-Current record of what the system is, where it lives, and decisions future work
-must preserve. Read alongside `architecture-decision.md` for principles and
-`Implementation Roadmap.md` for open work.
+_Last updated: July 1, 2026_
 
-## Status: Current platform state (July 2026)
+This is the compact map of how the system works. The open work list lives in
+`Docs/Implementation Roadmap.md`.
 
-| Capability | State | Notes |
-|---|---|---|
-| Foundation | Live | Next.js 16 + TS, Neon Postgres (Drizzle), Cloudflare R2, NextAuth single-operator login |
-| Core data model | Live | Sites, missions, runs, evidence, offers, snapshots, groups, mission results, news, inventory, and viewer account tables |
-| Run management | Live | Lifecycle pending -> running -> review / complete / published / failed |
-| Evidence infrastructure | Live | R2 keys in Postgres, presigned GETs via `/api/evidence/[id]/file`, viewer + manual upload on run page |
-| Collector engine | Live | Playwright/Chromium; overlay dismissal, page scroller, full-page screenshot + HTML |
-| Mission framework | Live | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
-| Review workflow | Live | `mission_results` per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
-| Collection model | Live | Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, `sites.last_collected_at` freshness + UI, auto-publish on quality threshold |
-| Evidence analysis | Live | Rule-based extraction over stored evidence, compliance pass behind a `ComplianceGrader` interface, background/re-runnable per run, multi-offer per page via payment-anchor windowing |
-| Snapshot publishing | Live | Publishing a run **freezes** current offers + compliance grades into immutable `report_snapshots` + `snapshot_offers`; re-analysis and re-collection never alter a published snapshot |
-| Reporting | Live | Snapshot-backed competitive report at `/reports/[id]`, R2 evidence links, primary dealer highlighting, lowest-payment flags, compliance roll-up, group history, CSV export |
-| AI-assisted analysis | Built, gated on `ANTHROPIC_API_KEY` | Secondary confidence-routed pass in `src/lib/analysis/ai-enrich.ts`; low-confidence and null-model offers can be re-extracted by Claude with optional vision input |
-| News | Live, gated on `NEWS_API_URL/KEY` | Weekly brand + industry news pulled from `news.dlrtools.com` and stored in `newsItems`; report news sections read from local DB |
-| Inventory | Live, gated on `INVENTORY_API_URL/KEY` | External API-backed inventory collection in `src/lib/inventory.ts`; stores totals + model-level breakdowns by ISO week |
-| Viewer | Live, deployed separately to Vercel | Thin-client app in `viewer/` with dealer auth and public permalink routes; reads the same Neon DB and proxies R2 evidence |
+## The Shape Of The System
 
-## Architecture: collect -> analyze -> report
+Dealer Intel is a collect -> analyze -> report pipeline.
 
-The platform is a **collect → analyze → report** pipeline with a hard wall
-between each phase:
+Collection creates raw evidence. Analysis reads evidence and creates structured
+offers/compliance grades. Reporting reads published snapshots.
 
-- **Collection** — visit sites, grab everything promotional, store raw evidence
-  in R2. Comprehensive and reliable. A missed collection breaks everything
-  downstream. No interpretation happens here.
-- **Analysis** — independent passes over stored evidence: classification,
-  normalization, compliance (external API call). Passes are re-runnable and
-  many-to-many: one piece of evidence can be consumed by multiple passes
-  (specials report + compliance check) without re-collecting.
-- **Reporting** — pure reads from published analysis snapshots. No site access,
-  no computation.
+The important boundary: reports never read live run data and never visit dealer
+sites.
 
-Collection is **group-scoped** (primary dealer + competitors) and
-**time-gated** (~weekly). A site with a fresh collection is ready for analysis.
-Failed sites are handled separately; they don't block the group.
+## Collection
 
-## The mission layer
+Collection is dealer/site-scoped.
 
-Missions are **collection targeting configs**, not business goals. A mission
-answers: where do we look on a site, and how do we explore those pages?
-Business goals (specials comparison, compliance audit) are expressed at the
-analysis and reporting layers, not here.
+A run selects:
 
-Structure:
+- sites: all, group, or ad-hoc checkbox selection,
+- missions: all active missions or selected missions.
 
-- `missions` — the global layer (~4 rows): name + mission_type (collection
-  strategy) + active. CRUD at `/missions`. mission_type maps to discovery
-  paths and exploration flags in `src/lib/collector/mission-knowledge.ts`.
-- `site_missions` — per-dealer URL config + collector memory (last_known_url,
-  alternate_urls, last_success_at, per-pair active). Edited on the **site's
-  edit page**, written to by the collector when it learns a URL.
-- A run executes **work items**: scoped sites x selected missions
-  (`listWorkItemsForRun`). mission_results are unique per
-  (run, site, mission).
-- Run creation picks scope (all / group / ad-hoc dealer checkboxes) AND
-  missions (checkboxes, default all; subset stored in
-  collection_run_missions).
+For each site, the run executor groups selected missions together and calls
+`collectSite`.
 
-Note: `homepage_offers` and `promotional_banners` remain distinct mission
-types but no longer double-fetch. The per-site capture cache keys on
-URL + exploration signature, so two missions that resolve to the same page
-with the same explorers (the homepage, carousels + disclaimers) share one
-fetch and each still get their own per-mission evidence + result. A full enum
-merge was deliberately not done — the cache makes it unnecessary.
+`collectSite` opens one browser session for that site, runs the selected
+missions inside it, and shares a capture cache by URL + exploration signature.
+If a mission captures zero pages, it gets one fresh-session retry.
 
-## Deletes
+Key files:
 
-Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
-`src/lib/deep-delete.ts`:
-- Delete run → its evidence rows + R2 objects, results, offers, snapshots.
-- Delete site → its configs, memberships, results, evidence rows + R2.
-- Delete mission → per-site configs and results (captured evidence stays;
-  it is keyed by run/site).
-- Delete group → memberships only; runs that referenced it become ungrouped.
+- `src/lib/run-executor.ts`
+- `src/lib/collector/mission-runner.ts`
+- `src/lib/collector/engine.ts`
+- `src/lib/collector/mission-knowledge.ts`
+- `src/lib/collector/explorers.ts`
+- `src/lib/collector/overlays.ts`
 
-## Key modules
+## Missions
 
-- `src/lib/collector/engine.ts` — generic browser session: navigation,
-  overlay suppression, scrolling, capture. No business meaning (AD-003).
-- `src/lib/collector/overlays.ts` / `explorers.ts` — best-effort cookie/
-  modal/chat handling; carousel/tab/accordion/disclaimer exploration.
-  Disclaimer shots are stored as `disclaimer_screenshot` evidence (AD-005).
-  EVIDENCE LABELING (v0.7.1): each shot carries a human-readable `label` so
-  identically-typed captures are distinguishable in the viewer. Page shots get
-  `pageTitle — host/path`; carousel/tab shots get "Carousel slide N"/"Tab N";
-  disclaimer shots get the **ad anchor** — the offer line (vehicle + price)
-  read from the disclaimer modal that opens on click (`modalAdAnchor`), or the
-  ancestor card text for inline offers (`ancestorAdAnchor`). Dealer promos are
-  usually image-based (vehicle/price baked into the image), so the modal —
-  which renders the offer + disclaimer as DOM text — is the reliable source.
-  e.g. "Disclaimer — Lease a 2026 RAM 1500 Hemi V8 big horn $379 /mo Expires
-  06/30/2026". This anchor is also the intended join key tying a disclaimer
-  screenshot back to its offer for the compliance pass (which pairs ad image +
-  disclaimer text in one external call). Labels populate on the NEXT collection
-  of a site; legacy evidence rows keep a null label and fall back to the type
-  name in the viewer.
-  DISCLAIMER TEXT (v0.7.2): `readDisclaimerModal` also returns the modal's FULL
-  text (offer + fine print), stored on `evidence.text_content`. This is the real
-  disclosure the compliance pass needs, captured directly — no OCR — and it
-  isn't lost the way modal-only disclaimers are when the static HTML snapshot is
-  taken after the modal closes. Surfaced as an expandable "Disclaimer text" row
-  in the evidence viewer. See [[compliance-ad-disclaimer-pairing]].
-- `src/lib/collector/mission-knowledge.ts` — the only place mission types
-  influence collection: platform default paths, nav-discovery keywords,
-  exploration flags.
-- `src/lib/collector/mission-runner.ts` — URL resolution + capture for one
-  mission (configured URLs → platform defaults → nav discovery; writes
-  learning back to site_missions). `runMissionInSession` runs inside a
-  caller-provided session + shared capture cache; `collectSite` is the
-  single-visit-per-site orchestrator: all of a site's missions in one browser
-  session, then one fresh-session retry of any mission that captured zero
-  pages (the "second swing" for a crashed/blocked/memory-starved browser).
-  `runMission` remains as a one-session wrapper for the ad-hoc collect path.
-  URL FALLBACK: `configuredUrls` falls a homepage mission (homepage_offers /
-  promotional_banners) back to `sites.url` when its URL is blank — these never
-  hit discovery. Only finance/service missions discover (platform paths → nav
-  keywords) when blank. The site edit page makes this explicit: the homepage
-  mission URL field is an OPTIONAL override (placeholder "Blank → uses site
-  URL"), not a required field.
-- `src/lib/deep-delete.ts` — R2-aware cascade deletes (see Deletes above).
-- `src/lib/run-executor.ts` — background execution. Server actions enqueue
-  and return; a non-awaited queue groups the run's work items by site and
-  processes one site at a time via `collectSite` (single visit per site),
-  writing progress to mission_results. On any site success it stamps
-  `sites.last_collected_at`. Auto-finalizes the run once the full scope is
-  settled: `failed` if no site captured anything, `published` if ≥
-  `AUTO_PUBLISH_MIN_SITE_SUCCESS` (default 0.8, env-overridable) of in-scope
-  sites succeeded, else `review`. Set the env var above 1 to disable
-  auto-publish so every run lands in review — used for a full fan-out where the
-  operator wants to triage all per-mission failures (the `/review` queue hides
-  published runs, so an auto-published run's wrong-URL failures would otherwise
-  be invisible). The manual Publish / Mark Failed controls on the run page
-  always override. Guarded against double-starts via a module-level set on globalThis
-  (survives dev HMR; not a server restart — an interrupted run's
-  pending/running rows sit until retried).
-  RETRY QUEUE (v0.7.7): `retryMissionResult` no longer collects synchronously
-  (the old path dropped a second retry while one was running). It sets the row
-  back to `pending` (queued) and calls `ensureDrainer(runId)`, which starts a
-  per-run drainer (`drainRun`) that re-queries pending rows each pass and
-  processes them via the shared `processSites` helper — so clicking Retry on
-  6–10 sites queues them all and they drain in one pass. One drainer per run
-  (the `activeRuns` guard); a `rescuePending` re-check in both `processQueue` and
-  `drainRun` finallys closes the click-at-shutdown race. The `/review` page shows
-  a "Re-collecting N queued items…" banner with auto-refresh while any
-  pending/running rows exist on open runs; retried items leave the queue (they go
-  pending) and reappear only if they fail again.
-  STALLED-RUN RECOVERY (v0.7.8): the run page now bases "executing" on
-  `isRunExecuting` (the in-memory truth) ONLY — not on the presence of
-  pending/running rows. Rows left pending/running by an interrupted executor
-  (server restart mid-run) are "stalled", not "executing", so they no longer
-  freeze the whole UI behind disabled buttons. The run page detects this and the
-  mission panel shows a **Resume** button (`resumeRun` → `requeueStalledRun`,
-  which re-queues only the orphaned rows and drains them — never re-seeds the
-  whole scope like Start Run would). Panel button fixes: queued/running rows show
-  no action button (just "—"); Retry is enabled even mid-run (it queues);
-  `mission_result.pending` is now labeled "Queued". The old stale-row-driven
-  `executing` made interrupted runs permanently un-actionable — that deadlock is
-  the bug this fixes.
-- `src/lib/freshness.ts` — 7-day freshness window over
-  `sites.last_collected_at` (fresh / stale / never); rendered by
-  `components/freshness-badge.tsx` on the sites list.
-- `src/lib/analysis/` — evidence analysis (no site visits, reads
-  stored evidence):
-  - `extract.ts` — deterministic rule-based extraction over HTML-snapshot
-    text. Classifies offer type (lease/finance/cash/service/promotional) +
-    vehicle (known-make list, brand prior from the site), normalizes monthly
-    payment / APR / term / due-at-signing / cash, plus a service-special
-    price/discount path; emits a 0..1 confidence.
-    MULTI-OFFER SEGMENTATION (v1.0.27): `paymentAnchorPositions` finds every
-    `$X/mo` match in the page text; `extractOffers` cuts a bounded window
-    (350 chars before, 650 after each anchor) and runs the full extraction
-    pipeline on each window independently. Deduped by
-    (offerType, model, payment, apr, term, dueAtSigning, cash). APR-only and
-    cash-only pages (no payment anchor) fall through to a single full-page
-    pass. Service specials are always full-page (one URL = one service item).
-    PATTERN FIXES (v1.0.27): monthly payment now matches `$X monthly` in
-    addition to `/mo`, `per month`, `a month`; APR now matches `X% financing`
-    and `X% Annual Percentage Rate` in addition to the APR-keyword forms.
-    HARDENING (v0.7.3, after the Toyota of Dartmouth cross-platform shakeout):
-    vehicle model is matched against a curated `KNOWN_MODELS` list (a null
-    model beats junk like "Dealer"/"Safety Sense" pulled from page chrome) and
-    searched in the offer-anchor context (the copy around the price) before the
-    whole page, so the make isn't grabbed from a "Toyota Dealership" nav link.
-    Cash incentive is clamped to a plausible band (`CASH_MIN`..`CASH_MAX`,
-    250..25k) to reject service-coupon noise and MSRP/price misreads.
-    `findKnownModel` is exported for the runner's disclaimer-based correction.
-    DISCLAIMER RULE (operator, hard): a disclaimer is tied to a SPECIFIC ad and
-    sits with it (just below, or text within the ad image). It is never the
-    site-wide footer legalese (Terms of Use / Privacy / © / "do not sell").
-    `extractDisclaimerNear` enforces this — it only searches the text right
-    after the offer anchor, requires offer-specific fine-print wording, and
-    cuts at any site-wide/footer marker; no ad anchor ⇒ null. Carry this rule
-    into AI extraction.
-  - `compliance.ts` — `ComplianceGrader` interface + `StubComplianceGrader`
-    (deterministic: a priced offer needs a disclaimer) + `getComplianceGrader`
-    factory. The real external service replaces the stub here; the platform
-    only sends/stores (AD: compliance logic is external).
-  - `runner.ts` — background, re-runnable analysis per run. Loads the run's
-    html_snapshot evidence (joined to site brand), extracts offers → `offers`
-    rows (with `source_evidence_id`), grades each ad → `compliance_grades`
-    (upsert, one per evidence). Idempotent: clears the run's prior offers +
-    grades first. Guarded by a globalThis active set like the collector;
-    `isAnalysisRunning(runId)` drives the run page's live refresh.
-    HARDENING (v0.7.3): dedups offers per site by signature (same offer recurs
-    across a site's pages — one offer per evidence × many pages). Backfills an
-    offer's disclaimer from the captured disclaimer-modal text
-    (`evidence.text_content`) when the HTML pass found none — paired by the
-    monthly payment ONLY (`matchCapturedDisclaimer`), a high-precision token;
-    cash/model needles were dropped (a "$15" coupon hits "$15,000", a bare model
-    hits a multi-vehicle modal). The payment-matched disclaimer describes
-    exactly that offer, so its model corrects the page-level vehicle guess
-    (e.g. a $475 Tundra lease mislabeled "Corolla" → Tundra). See
-    [[compliance-ad-disclaimer-pairing]].
-    DDC PLATFORM FIX (v1.0.32): DDC/Dealer.com platforms render offer prices
-    as images — the HTML snapshot has no DOM price text, so the HTML pass
-    extracts zero offers. Fix: a second extraction pass runs directly on
-    `disclaimer_screenshot` evidence rows whose `text_content` is non-null
-    (`loadDisclaimerEvidence`). The captured modal text (e.g. "Lease for $419
-    /month. $419 due at signing. Lease are 36 months, 5k miles per year.") is
-    plain text; `extractOffers` and the payment-anchor windowing work on it
-    without modification. The shared `seen` Set (same dedup signature used in
-    the HTML loop) prevents cross-source duplicates: a site with both DOM price
-    text AND a modal won't insert the same offer twice. LABEL MODEL RECOVERY:
-    when the disclaimer body text lacks a vehicle model name (common on DDC),
-    `findKnownModel` is applied to `evidence.label` (the ad-anchor text, e.g.
-    "2025 Nissan Rogue · $379/mo") and the recovered model is merged into
-    `effective` BEFORE computing the dedup signature — so a label-recovered
-    "Rogue" matches an HTML-extracted "Rogue" and prevents duplicates on
-    non-DDC sites. Screenshot for compliance comes from the disclaimer
-    screenshot row itself (the ad image), fetched via the shared
-    `screenshotCache`. `parseMileage` extended to handle "5k miles/year"
-    notation (common in DDC modal text). See [[compliance-ad-disclaimer-pairing]].
-  Triggered by the **Run Analysis** button on the run page
-  (`components/analysis-section.tsx`), which shows the extracted offers
-  (type, vehicle, terms, confidence) and compliance grades.
-- `src/lib/snapshot.ts` — snapshot publishing (the analysis↔reporting
-  wall). `createSnapshotFromRun(runId, approvedBy, label?)` reads the run's live
-  offers (joined to site identity, source-evidence mission type, and the
-  per-evidence compliance grade) and **freezes** them into a new
-  `report_snapshots` row + denormalized `snapshot_offers` copies. Immutable:
-  the analysis runner only ever touches `offers`/`compliance_grades`, so a
-  published snapshot is unaffected by re-analysis or re-collection. Returns null
-  when the run has no offers yet (analysis must run first). Group scope is
-  frozen too (`run_group_id` + `run_group_name`) so reporting can anchor on the
-  primary dealer even after a group rename/delete. Reporting reads ONLY
-  `report_snapshots` + `snapshot_offers`. Snapshots list/detail at
-  `/snapshots` (`components/snapshot-offers-table.tsx`); published from the run
-  page's `components/snapshot-section.tsx` ("Publish Snapshot", which advances a
-  review-state run to published). Deleting a snapshot removes only its frozen
-  rows (it owns no R2 objects — it links back to the run's evidence); deleting
-  the run cascades its snapshots.
-- `src/app/(admin)/reports/` — Reporting Engine. Pure reads of frozen
-  snapshot data (no collection/analysis/site access, no AI). `/reports` lists
-  published snapshots as reports; `/reports/[id]` is the competitive report for
-  one snapshot — offers grouped by vehicle with the primary dealer(s)
-  highlighted (primaries read live from `run_group_members`, a reporting input
-  per AD-002) and the lowest monthly payment per vehicle flagged, a compliance
-  roll-up, and the group's snapshot history for over-time comparison.
-  `/reports/[id]/export` streams the frozen offers as CSV. Every offer row links
-  to its R2 evidence via `/api/evidence/[sourceEvidenceId]/file`. Repository
-  helpers: `listSnapshotsForGroup`, `getPrimarySiteIds`. Backlog idea: per-metric
-  trend deltas vs the prior snapshot (payment up/down by site+vehicle).
-- `src/lib/analysis/ai-enrich.ts` — AI-assisted analysis. An
-  `OfferEnricher` interface (mirrors `ComplianceGrader`): `NoopOfferEnricher`
-  (default) + `ClaudeOfferEnricher` (Anthropic SDK, structured output via
-  `messages.parse` + a zod schema) + `getOfferEnricher()` gated on
-  `ANTHROPIC_API_KEY`. The runner routes offers to AI in two cases (either):
-  (1) rule-based confidence below `aiConfidenceThreshold()` (env
-  `ANALYSIS_AI_CONFIDENCE_THRESHOLD`, default 0.5); (2) `vehicleModel === null`
-  regardless of confidence — high-confidence offers on image-only platforms
-  (DDC) can have all price fields correct but the model name only in the ad
-  graphic. AI is SECONDARY; rule-based handles the routine majority (AD).
-  VISION (v1.0.33): when `screenshotBuffer` is provided in `EnrichInput` and
-  under 4 MB, it is included as an image content block in the API call so
-  Claude can read model names baked into ad card graphics. The system prompt
-  instructs Claude to look for the vehicle in the image when one is provided.
-  AI corrections override the rule fields. AI-corrected offers carry
-  `normalized_json.aiAssisted=true` and show an "AI" badge in the analysis
-  view. Env knobs: `ANALYSIS_AI_MODEL` (default `claude-opus-4-8`),
-  `ANALYSIS_AI_MAX_PAGE_CHARS` (default 8000). The hard disclaimer rule is
-  carried into the prompt. Gated on ANTHROPIC_API_KEY. See
-  [[compliance-ad-disclaimer-pairing]].
-- `src/app/(admin)/page.tsx` — admin homepage. Weekly ops dashboard: shows
-  the current ISO week's progress as a step-by-step checklist (Collect →
-  Analyze → Load news → Run inventory → Reports live), each step auto-advancing
-  based on live DB state. Nags if news or inventory haven't been run this week.
-  Per-group exception list surfaces any group without a live snapshot. Prior-week
-  status dot at the bottom. News and inventory steps are hidden when not
-  configured. Uses `src/lib/db/ops-board.ts` (`getCycleGroupStatus`,
-  `getWeekAggregate`) for aggregate state.
-- `src/app/(admin)/dealers/` — Dealer CRUD (renamed from `/sites`). Same
-  entity, same schema; the UI rename better reflects real-world usage.
-  `/dealers/new` and `/dealers/[id]/edit` cover full site-field editing
-  including site_mission URL configs.
-- `src/lib/evidence.ts` — R2 upload/retrieval; object keys (not URLs) in
-  the evidence table; 15-minute presigned GETs.
-- `src/lib/db/repository.ts` — shared queries, incl. `listExecutableMissions`
-  (active missions on active sites, optionally scoped to a run group).
-- `src/lib/news.ts` — news module. `pullAndStoreNews()` fetches brand + industry
-  items from `NEWS_API_URL` (news.dlrtools.com) for the current ISO week and
-  stores them in `newsItems`. `getReportNewsData(brand?)` reads them back for
-  report rendering. `getLocalNewsPullStatus()` returns last-pulled timestamp +
-  item count for the home page freshness gate. Gated on NEWS_API_URL + NEWS_API_KEY.
-- `src/lib/inventory.ts` — inventory module. `collectInventoryForDealer()` POSTs
-  to `INVENTORY_API_URL/v1/inventory` with a make allow-list derived from
-  `sites.brand`. Results stored in `inventoryResults` keyed by `batchId` +
-  ISO-week `weekKey`. `getInventoryFreshnessStatus()` returns whether any results
-  exist for the current week (used by home page nag). `getLatestInventoryBySite()`
-  returns the most recent result per dealer for the `/inventory` listing.
-  Gated on INVENTORY_API_URL + INVENTORY_API_KEY. The `/inventory` page
-  (`src/app/(admin)/inventory/`) runs collections by group or ad-hoc with a
-  client-side queue; rows are color-coded by age (green < 1d, yellow < 4d,
-  orange, red).
-- `src/lib/cycle.ts` — ISO week utilities: `getISOWeekLabel()` (e.g. "2026-W26"),
-  `getPriorISOWeekLabel()`. Used by inventory, news, and the ops board to bucket
-  data by week without storing absolute dates. The `cycle` field on
-  `collection_runs` records which ISO week a run belongs to.
-- `viewer/` — separate Next.js app deployed to Vercel (no Playwright). Has its
-  own auth (`viewer/src/auth.ts`, dealer user accounts in `viewer/src/lib/db/schema.ts`)
-  and report routes: `/reports/[id]` (dealer-facing competitive report) and
-  `/r/[id]` (public permalink). Reads from the same Neon DB as the admin app.
-  `viewer/src/lib/news.ts` defines the `NewsItem`/`NewsData` types shared by
-  both apps. `viewer/src/lib/report.ts` + `viewer/src/lib/db/repository.ts`
-  handle snapshot reads. `viewer/src/proxy.ts` handles auth-gated R2 evidence
-  proxying so dealer users can see screenshots without direct R2 credentials.
+Missions are collection targets, not business goals.
 
-## Operational model
+They answer:
 
-- **Run scope**: a run targets all sites, a predefined run group, or an
-  ad-hoc dealer selection ("Pick dealers…" checkboxes on New Run — a
-  temporary, unsaved group stored in collection_run_sites; one checkbox =
-  single-dealer run).
-- **Run groups** (`/groups`): named site subsets — a first-order dealer
-  (flagged `is_primary`) plus its competitor set. A run created with a group
-  only executes that group's missions. Reporting anchors comparisons on
-  primaries.
-- **Dealer data** loads from `dealer-competitors-flat.csv` via
-  `node scripts/import-dealers.mjs`. The file is block-structured: each
-  isDlr=TRUE row starts a group named after that dealer; following FALSE rows
-  are its competitors (dealers repeat across blocks; sites dedupe by name).
-  Idempotent — re-run freely. CSV is source of truth for service/finance
-  mission URLs; homepage missions keep their learned URLs.
-- **Weekly flow** (target <15 min operator time): create run per
-  group → Start Run (one click; pending→running is automatic, no separate
-  "Move to Running" step) → watch live progress (page auto-refreshes). A
-  clean run (≥80% of sites captured) auto-publishes; otherwise it lands in
-  `review` for triage (Retry / Fix URL / Content Removed) and a manual
-  Publish. Exception-based: the operator only touches runs that fall short.
+- where should we look on this dealer site?
+- how should we explore that page?
 
-## Constraints & gotchas
+The global mission row defines the mission type. The per-dealer
+`site_missions` row stores learned/configured URLs.
 
-- Playwright requires a persistent Node server (no serverless). Chromium is
-  installed via `npx playwright install chromium`.
-- Server-action body limit raised to 20mb (next.config.ts) for evidence
-  uploads.
-- Background work runs in-process: one execution per run at a time;
-  concurrent runs are possible but each is sequential internally. A server
-  restart mid-run abandons in-flight missions (rows stay pending/running);
-  Retry from the run page or review queue re-queues them.
-- ~61 sites / ~187 missions imported. A full ungrouped run is hours of
-  collection; group runs (~15-18 missions) are the intended unit.
+Homepage offers and promotional banners can remain separate mission types
+without double-fetching because the capture cache dedupes shared pages.
+
+## Evidence
+
+Evidence is the canonical raw record.
+
+Stored evidence includes:
+
+- full-page screenshots,
+- HTML snapshots,
+- failure screenshots,
+- disclaimer screenshots,
+- captured disclaimer text on `evidence.text_content`.
+
+Evidence files live in R2. Database rows store object keys and metadata.
+
+Key files:
+
+- `src/lib/evidence.ts`
+- `src/components/evidence-section.tsx`
+- `src/app/(admin)/runs/[id]/evidence/[siteId]/page.tsx`
+
+## Analysis
+
+Analysis is re-runnable and does not visit dealer sites.
+
+The runner reads stored evidence, extracts offers, grades compliance, and writes
+results back to analysis tables.
+
+Rule-based extraction handles the normal path. Claude is a secondary pass for
+hard cases when `ANTHROPIC_API_KEY` is configured.
+
+AdScore compliance is implemented through `AdScoreComplianceGrader` and is used
+when all `ADGRADER_*` variables are configured. Otherwise the system falls back
+to the deterministic stub grader.
+
+Key files:
+
+- `src/lib/analysis/runner.ts`
+- `src/lib/analysis/extract.ts`
+- `src/lib/analysis/compliance.ts`
+- `src/lib/analysis/ai-enrich.ts`
+- `src/components/analysis-section.tsx`
+
+## Reporting
+
+Publishing creates an immutable snapshot from the current run analysis.
+
+Reports read only:
+
+- `report_snapshots`,
+- `snapshot_offers`,
+- linked evidence files.
+
+Re-running collection or analysis does not mutate an already-published
+snapshot.
+
+Key files:
+
+- `src/lib/snapshot.ts`
+- `src/app/(admin)/reports/`
+- `src/components/report/ReportContent.tsx`
+- `viewer/`
+
+## Operations
+
+The weekly operator flow is:
+
+1. Create or reuse a group-scoped run.
+2. Start collection.
+3. Review failures only.
+4. Run analysis.
+5. Load news and inventory if needed.
+6. Publish snapshot.
+7. Share report through the viewer.
+
+The admin app needs a persistent Node process because Playwright and background
+run execution live in-process. Do not target serverless for the admin app.
+
+The viewer app is separate and can run on Vercel because it only reads
+published report data.
+
+## Data And Config
+
+Database schema changes go through Drizzle:
+
+1. edit `src/lib/db/schema.ts`,
+2. run `npm run db:generate`,
+3. run `npm run db:migrate`.
+
+Do not hand-write migrations.
+
+Configuration currently needs cleanup:
+
+- project rules say secrets belong in `.env`,
+- this workspace currently has `.env.local`,
+- `drizzle.config.ts` currently loads `.env.local` first and `.env` second.
+
+That mismatch is tracked in `Docs/Implementation Roadmap.md`.
+
+## Keep In Mind
+
+- Collection should be broad and evidence-first.
+- Business interpretation belongs in analysis/reporting, not collection.
+- Reports should stay deterministic and snapshot-backed.
+- A full ungrouped run is slow; group runs are the normal operating unit.
