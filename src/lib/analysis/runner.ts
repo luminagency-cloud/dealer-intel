@@ -340,6 +340,7 @@ async function processAnalysis(
           offer.apr ?? "",
           offer.termMonths ?? "",
           offer.cashIncentive ?? "",
+          offer.salePrice ?? "",
           offer.dueAtSigning ?? "",
           offer.matches?.serviceOffer ?? "",
           offer.offerType === "service" ? (offer.rawText ?? "") : "",
@@ -381,6 +382,7 @@ async function processAnalysis(
           monthlyPayment: effective.monthlyPayment,
           apr: effective.apr,
           cashIncentive: effective.cashIncentive,
+          salePrice: effective.salePrice,
           termMonths: effective.termMonths,
           dueAtSigning: effective.dueAtSigning,
           rawText: effective.rawText,
@@ -472,6 +474,7 @@ async function processAnalysis(
           effective.apr ?? "",
           effective.termMonths ?? "",
           effective.cashIncentive ?? "",
+          effective.salePrice ?? "",
           effective.dueAtSigning ?? "",
           offer.matches?.serviceOffer ?? "",
           effective.offerType === "service" ? (effective.rawText ?? "") : "",
@@ -506,6 +509,7 @@ async function processAnalysis(
           monthlyPayment: effective.monthlyPayment,
           apr: effective.apr,
           cashIncentive: effective.cashIncentive,
+          salePrice: effective.salePrice,
           termMonths: effective.termMonths,
           dueAtSigning: effective.dueAtSigning,
           rawText: effective.rawText,
@@ -605,6 +609,7 @@ async function processAnalysis(
                 enrichment.apr ?? "",
                 enrichment.termMonths ?? "",
                 enrichment.cashIncentive ?? "",
+                enrichment.salePrice ?? "",
                 enrichment.dueAtSigning ?? "",
               ].join("|");
               if (!seen.has(sig)) {
@@ -620,6 +625,7 @@ async function processAnalysis(
                   monthlyPayment: enrichment.monthlyPayment,
                   apr: enrichment.apr,
                   cashIncentive: enrichment.cashIncentive,
+                  salePrice: enrichment.salePrice,
                   termMonths: enrichment.termMonths,
                   dueAtSigning: enrichment.dueAtSigning,
                   rawText: null,
@@ -830,7 +836,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
         }
         for (const offer of extracted) {
-          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
+          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
           if (seen.has(sig)) continue;
           seen.add(sig);
           let effective = offer;
@@ -842,7 +848,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
           const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
           const vehicleModel = matched?.model ?? effective.vehicleModel;
-          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
           offersInserted++;
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
@@ -865,7 +871,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             const labelModel = findKnownModel(row.label);
             if (labelModel) effective = { ...effective, vehicleModel: labelModel };
           }
-          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", effective.offerType === "service" ? (effective.rawText ?? "") : ""].join("|");
+          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.salePrice ?? "", effective.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", effective.offerType === "service" ? (effective.rawText ?? "") : ""].join("|");
           if (seen.has(sig)) continue;
           seen.add(sig);
           let aiAssisted = false;
@@ -874,7 +880,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
-          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
           offersInserted++;
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)

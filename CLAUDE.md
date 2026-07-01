@@ -1,15 +1,14 @@
 @AGENTS.md
-We are working through the roadmap at Docs\Implementation Roadmap.md
 
 Docs in the ./Docs folder must be understood to move forward. Start with
-Docs\Implementation Notes.md — it records what is built, where the key
-modules live, and the operational model.
+Docs\Implementation Notes.md — it records the current architecture, key module
+ownership, and operational model. Docs\Implementation Roadmap.md is
+forward-looking only; do not treat completed build history as the product model.
 
-## Current state (June 2026)
+## Current state (July 2026)
 
-All 12 roadmap phases are built. Three post-roadmap modules have been added:
-News, Inventory, and Viewer. See Docs/Implementation Notes.md for the full
-module map.
+The core platform is live. News, Inventory, and Viewer are part of the current
+product surface. See Docs/Implementation Notes.md for the full module map.
 
 **Architecture: Collect → Analyze → Report pipeline.**
 Collection is the canonical source; analysis passes run over stored evidence;
@@ -38,7 +37,7 @@ on steps 3 and 4 if not done.
 - DDC/Dealer.com platforms: offer prices are image-only — extraction runs on
   disclaimer modal text_content as a second pass. Vehicle model recovered from
   evidence.label when absent from modal body.
-- Phase 12 AI analysis gated on ANTHROPIC_API_KEY; routes low-confidence
+- AI-assisted analysis is gated on ANTHROPIC_API_KEY; routes low-confidence
   offers and null-model offers to Claude (vision path reads model from ad image).
   Model: ANALYSIS_AI_MODEL (default claude-opus-4-8).
 - Compliance grader gated on ADGRADER_* env vars (StubComplianceGrader until set).
@@ -47,5 +46,6 @@ on steps 3 and 4 if not done.
 - dealer_inspire/dealer_alchemist disclaimer modal selectors don't match our
   explorers — no modal text captured (affects disclaimer pairing only, not HTML
   offer extraction).
-- ANTHROPIC_API_KEY not yet set in prod — Phase 12 is built but unverified live.
+- ANTHROPIC_API_KEY not yet set in prod — AI-assisted analysis is built but
+  unverified live.
 - AdScore compliance credentials pending.

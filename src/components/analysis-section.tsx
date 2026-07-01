@@ -217,6 +217,19 @@ export function AnalysisSection({
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
+                <colgroup>
+                  {siteFilter === "all" && <col style={{ width: "14%" }} />}
+                  <col style={{ width: "80px" }} />
+                  <col />
+                  <col style={{ width: "100px" }} />
+                  <col style={{ width: "70px" }} />
+                  <col style={{ width: "72px" }} />
+                  <col style={{ width: "80px" }} />
+                  <col style={{ width: "80px" }} />
+                  <col style={{ width: "90px" }} />
+                  <col style={{ width: "110px" }} />
+                  <col style={{ width: "70px" }} />
+                </colgroup>
                 <thead>
                   <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
                     {siteFilter === "all" && (
@@ -231,6 +244,7 @@ export function AnalysisSection({
                     <th className="px-4 py-2 font-medium">Cash</th>
                     <th className="px-4 py-2 font-medium">Conf.</th>
                     <th className="px-4 py-2 font-medium">Compliance</th>
+                    <th className="px-4 py-2 font-medium">Ad</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100">
@@ -245,27 +259,42 @@ export function AnalysisSection({
                     ]
                       .filter(Boolean)
                       .join(" ");
+                    const isPromotional = offer.offerType === "promotional";
+                    const nJson = offer.normalizedJson as { aiAssisted?: boolean; source?: string } | null;
+                    const isImagePromo = isPromotional && nJson?.source === "image_extraction";
                     return (
-                      <tr key={offer.id}>
+                      <tr key={offer.id} className={isPromotional ? "bg-amber-50" : ""}>
                         {siteFilter === "all" && (
                           <td className="px-4 py-3 text-zinc-900">
                             {siteNames[offer.siteId] ?? "—"}
                           </td>
                         )}
                         <td className="px-4 py-3 text-zinc-700">
-                          {OFFER_TYPE_LABELS[offer.offerType]}
+                          <span>{OFFER_TYPE_LABELS[offer.offerType]}</span>
+                          {isImagePromo && (
+                            <span
+                              className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700"
+                              title="AI scanned this ad image and found no pricing terms"
+                            >
+                              no price
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-zinc-700">
                           {offer.offerType === "service"
                             ? (offer.rawText || "—")
-                            : (vehicle || "—")}
+                            : isImagePromo
+                              ? <span className="italic text-zinc-400">see ad image →</span>
+                              : (vehicle || "—")}
                         </td>
                         <td className="px-4 py-3 text-zinc-700">
                           {offer.offerType === "service"
                             ? ((offer.normalizedJson as { matches?: { serviceOffer?: string } } | null)?.matches?.serviceOffer ?? "—")
-                            : offer.monthlyPayment === null
-                              ? "—"
-                              : `${money(offer.monthlyPayment)}/mo`}
+                            : offer.monthlyPayment !== null
+                              ? `${money(offer.monthlyPayment)}/mo`
+                              : offer.salePrice !== null
+                                ? money(offer.salePrice)
+                                : "—"}
                         </td>
                         <td className="px-4 py-3 text-zinc-700">
                           {offer.apr === null ? "—" : `${offer.apr}%`}
@@ -309,6 +338,20 @@ export function AnalysisSection({
                             </span>
                           ) : (
                             <span className="text-xs text-zinc-700">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {offer.sourceEvidenceId ? (
+                            <a
+                              href={`/api/evidence/${offer.sourceEvidenceId}/file`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-zinc-900 underline hover:text-zinc-600"
+                            >
+                              View ad
+                            </a>
+                          ) : (
+                            <span className="text-xs text-zinc-400">—</span>
                           )}
                         </td>
                       </tr>

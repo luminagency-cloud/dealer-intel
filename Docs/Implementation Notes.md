@@ -1,30 +1,30 @@
 # Implementation Notes
 
-Living record of what is built, where it lives, and decisions made along the
-way. Read alongside `Implementation Roadmap.md` (the plan) and
-`architecture-decision.md` (the principles).
+Current record of what the system is, where it lives, and decisions future work
+must preserve. Read alongside `architecture-decision.md` for principles and
+`Implementation Roadmap.md` for open work.
 
-## Status: All roadmap phases built + post-roadmap modules (June 2026)
+## Status: Current platform state (July 2026)
 
-| Phase | State | Notes |
+| Capability | State | Notes |
 |---|---|---|
-| 1 Foundation | Done | Next.js 16 + TS, Neon Postgres (Drizzle), Cloudflare R2, NextAuth single-operator login |
-| 2 Core Data Model | Done | All 7 entities + run_groups/run_group_members/mission_results beyond plan. site_relationships has no UI by design (collection is competition-blind; reporting consumes it in Phase 12) |
-| 3 Run Management | Done | Lifecycle pending → running → review → published / failed |
-| 4 Evidence Infrastructure | Done | R2 keys in Postgres, presigned GETs via `/api/evidence/[id]/file`, viewer + manual upload on run page |
-| 5 Collector Engine | Done | Playwright/Chromium; overlay dismissal, page scroller, full-page screenshot + HTML |
-| 6 Mission Framework | Done | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
-| 7 Review Workflow | Done | mission_results per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
-| 8 | Done | Collection Consolidation & Site Learning. Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, sites.last_collected_at freshness + UI, auto-publish on quality threshold. |
-| 9 | Done | Evidence Analysis. Rule-based extraction over stored HTML snapshots (classification + normalization → offers), compliance pass behind a `ComplianceGrader` interface (stub now, real endpoint drops in later). Background, re-runnable per run. Multi-offer per page via payment-anchor windowing. AI deferred to Phase 12 by design; confidence score routes weak cases there. |
-| 10 | Done | Snapshot Publishing — the wall between analysis and reporting. Publishing a run **freezes** its current offers + compliance grades into `report_snapshots` + `snapshot_offers` (denormalized, immutable). Re-running analysis or re-collecting never changes a published snapshot. Snapshots list at `/snapshots`; "Publish Snapshot" on the run page. |
-| 11 | Live | Reporting Engine — pure reads from published snapshots, links to R2 images. Competitive report per snapshot at `/reports/[id]`: offers grouped by vehicle (primary dealer highlighted, lowest payment flagged), compliance roll-up, group snapshot history, CSV export. Trend deltas vs prior snapshot deferred to v2. |
-| 12 | Built (gated on ANTHROPIC_API_KEY) | AI-Assisted Analysis. Secondary, confidence-routed pass (`src/lib/analysis/ai-enrich.ts`): low-confidence rule-based offers re-extracted by Claude via structured output; vision path reads model names from ad card images. Rule-based handles the routine majority. |
-| — News | Live (gated on NEWS_API_URL/KEY) | Weekly brand + industry news pulled from `news.dlrtools.com` and stored in `newsItems` table. Report news sections read from local DB. Home page shows freshness gate; operator must pull before reports are ready. |
-| — Inventory | Live (gated on INVENTORY_API_URL/KEY) | External API-backed inventory collection (`src/lib/inventory.ts`). Stores totals + model-level breakdowns in `inventoryResults` keyed by ISO week. `/inventory` page runs by group or ad-hoc, rows color-coded by age. Home page nags if not run this week. |
-| — Viewer | Live (deployed separately to Vercel) | Thin-client Next.js app in `viewer/` with its own auth (dealer user accounts), DB schema, and report routes (`/reports/[id]`, `/r/[id]` public). Reads same Neon DB. Separate deployment keeps Playwright/Node off Vercel. |
+| Foundation | Live | Next.js 16 + TS, Neon Postgres (Drizzle), Cloudflare R2, NextAuth single-operator login |
+| Core data model | Live | Sites, missions, runs, evidence, offers, snapshots, groups, mission results, news, inventory, and viewer account tables |
+| Run management | Live | Lifecycle pending -> running -> review / complete / published / failed |
+| Evidence infrastructure | Live | R2 keys in Postgres, presigned GETs via `/api/evidence/[id]/file`, viewer + manual upload on run page |
+| Collector engine | Live | Playwright/Chromium; overlay dismissal, page scroller, full-page screenshot + HTML |
+| Mission framework | Live | Multi-URL missions, URL discovery with learning, carousel/tab/accordion/disclaimer explorers |
+| Review workflow | Live | `mission_results` per run+mission, background execution, review queue (`/review`) with Retry / Fix URL / Content Removed |
+| Collection model | Live | Single-visit-per-site, shared capture cache (URL+explore dedup), fresh-session retry of zero-capture missions, `sites.last_collected_at` freshness + UI, auto-publish on quality threshold |
+| Evidence analysis | Live | Rule-based extraction over stored evidence, compliance pass behind a `ComplianceGrader` interface, background/re-runnable per run, multi-offer per page via payment-anchor windowing |
+| Snapshot publishing | Live | Publishing a run **freezes** current offers + compliance grades into immutable `report_snapshots` + `snapshot_offers`; re-analysis and re-collection never alter a published snapshot |
+| Reporting | Live | Snapshot-backed competitive report at `/reports/[id]`, R2 evidence links, primary dealer highlighting, lowest-payment flags, compliance roll-up, group history, CSV export |
+| AI-assisted analysis | Built, gated on `ANTHROPIC_API_KEY` | Secondary confidence-routed pass in `src/lib/analysis/ai-enrich.ts`; low-confidence and null-model offers can be re-extracted by Claude with optional vision input |
+| News | Live, gated on `NEWS_API_URL/KEY` | Weekly brand + industry news pulled from `news.dlrtools.com` and stored in `newsItems`; report news sections read from local DB |
+| Inventory | Live, gated on `INVENTORY_API_URL/KEY` | External API-backed inventory collection in `src/lib/inventory.ts`; stores totals + model-level breakdowns by ISO week |
+| Viewer | Live, deployed separately to Vercel | Thin-client app in `viewer/` with dealer auth and public permalink routes; reads the same Neon DB and proxies R2 evidence |
 
-## Architecture: three-phase pipeline (decided June 2026)
+## Architecture: collect -> analyze -> report
 
 The platform is a **collect → analyze → report** pipeline with a hard wall
 between each phase:
@@ -43,7 +43,7 @@ Collection is **group-scoped** (primary dealer + competitors) and
 **time-gated** (~weekly). A site with a fresh collection is ready for analysis.
 Failed sites are handled separately; they don't block the group.
 
-## The mission layer (reworked June 2026)
+## The mission layer
 
 Missions are **collection targeting configs**, not business goals. A mission
 answers: where do we look on a site, and how do we explore those pages?
@@ -66,7 +66,7 @@ Structure:
   collection_run_missions).
 
 Note: `homepage_offers` and `promotional_banners` remain distinct mission
-types but no longer double-fetch. Phase 8's per-site capture cache keys on
+types but no longer double-fetch. The per-site capture cache keys on
 URL + exploration signature, so two missions that resolve to the same page
 with the same explorers (the homepage, carousels + disclaimers) share one
 fetch and each still get their own per-mission evidence + result. A full enum
@@ -115,7 +115,7 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
 - `src/lib/collector/mission-runner.ts` — URL resolution + capture for one
   mission (configured URLs → platform defaults → nav discovery; writes
   learning back to site_missions). `runMissionInSession` runs inside a
-  caller-provided session + shared capture cache; `collectSite` is the Phase 8
+  caller-provided session + shared capture cache; `collectSite` is the
   single-visit-per-site orchestrator: all of a site's missions in one browser
   session, then one fresh-session retry of any mission that captured zero
   pages (the "second swing" for a crashed/blocked/memory-starved browser).
@@ -168,7 +168,7 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
 - `src/lib/freshness.ts` — 7-day freshness window over
   `sites.last_collected_at` (fresh / stale / never); rendered by
   `components/freshness-badge.tsx` on the sites list.
-- `src/lib/analysis/` — Phase 9 evidence analysis (no site visits, reads
+- `src/lib/analysis/` — evidence analysis (no site visits, reads
   stored evidence):
   - `extract.ts` — deterministic rule-based extraction over HTML-snapshot
     text. Classifies offer type (lease/finance/cash/service/promotional) +
@@ -199,7 +199,7 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
     `extractDisclaimerNear` enforces this — it only searches the text right
     after the offer anchor, requires offer-specific fine-print wording, and
     cuts at any site-wide/footer marker; no ad anchor ⇒ null. Carry this rule
-    into Phase 12 AI extraction.
+    into AI extraction.
   - `compliance.ts` — `ComplianceGrader` interface + `StubComplianceGrader`
     (deterministic: a priced offer needs a disclaimer) + `getComplianceGrader`
     factory. The real external service replaces the stub here; the platform
@@ -242,7 +242,7 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   Triggered by the **Run Analysis** button on the run page
   (`components/analysis-section.tsx`), which shows the extracted offers
   (type, vehicle, terms, confidence) and compliance grades.
-- `src/lib/snapshot.ts` — Phase 10 snapshot publishing (the analysis↔reporting
+- `src/lib/snapshot.ts` — snapshot publishing (the analysis↔reporting
   wall). `createSnapshotFromRun(runId, approvedBy, label?)` reads the run's live
   offers (joined to site identity, source-evidence mission type, and the
   per-evidence compliance grade) and **freezes** them into a new
@@ -251,14 +251,14 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   published snapshot is unaffected by re-analysis or re-collection. Returns null
   when the run has no offers yet (analysis must run first). Group scope is
   frozen too (`run_group_id` + `run_group_name`) so reporting can anchor on the
-  primary dealer even after a group rename/delete. Reporting (Phase 11) reads
-  ONLY `report_snapshots` + `snapshot_offers`. Snapshots list/detail at
+  primary dealer even after a group rename/delete. Reporting reads ONLY
+  `report_snapshots` + `snapshot_offers`. Snapshots list/detail at
   `/snapshots` (`components/snapshot-offers-table.tsx`); published from the run
   page's `components/snapshot-section.tsx` ("Publish Snapshot", which advances a
   review-state run to published). Deleting a snapshot removes only its frozen
   rows (it owns no R2 objects — it links back to the run's evidence); deleting
   the run cascades its snapshots.
-- `src/app/(admin)/reports/` — Phase 11 Reporting Engine. Pure reads of frozen
+- `src/app/(admin)/reports/` — Reporting Engine. Pure reads of frozen
   snapshot data (no collection/analysis/site access, no AI). `/reports` lists
   published snapshots as reports; `/reports/[id]` is the competitive report for
   one snapshot — offers grouped by vehicle with the primary dealer(s)
@@ -267,9 +267,9 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   roll-up, and the group's snapshot history for over-time comparison.
   `/reports/[id]/export` streams the frozen offers as CSV. Every offer row links
   to its R2 evidence via `/api/evidence/[sourceEvidenceId]/file`. Repository
-  helpers: `listSnapshotsForGroup`, `getPrimarySiteIds`. v2 idea: per-metric
+  helpers: `listSnapshotsForGroup`, `getPrimarySiteIds`. Backlog idea: per-metric
   trend deltas vs the prior snapshot (payment up/down by site+vehicle).
-- `src/lib/analysis/ai-enrich.ts` — Phase 12 AI-assisted analysis. An
+- `src/lib/analysis/ai-enrich.ts` — AI-assisted analysis. An
   `OfferEnricher` interface (mirrors `ComplianceGrader`): `NoopOfferEnricher`
   (default) + `ClaudeOfferEnricher` (Anthropic SDK, structured output via
   `messages.parse` + a zod schema) + `getOfferEnricher()` gated on
@@ -341,15 +341,15 @@ Full CRUD everywhere; destructive deletes confirm first and clean up R2 via
   single-dealer run).
 - **Run groups** (`/groups`): named site subsets — a first-order dealer
   (flagged `is_primary`) plus its competitor set. A run created with a group
-  only executes that group's missions. Groups came from the user's workflow,
-  not the roadmap; reporting should anchor comparisons on primaries.
+  only executes that group's missions. Reporting anchors comparisons on
+  primaries.
 - **Dealer data** loads from `dealer-competitors-flat.csv` via
   `node scripts/import-dealers.mjs`. The file is block-structured: each
   isDlr=TRUE row starts a group named after that dealer; following FALSE rows
   are its competitors (dealers repeat across blocks; sites dedupe by name).
   Idempotent — re-run freely. CSV is source of truth for service/finance
   mission URLs; homepage missions keep their learned URLs.
-- **Weekly flow** (roadmap target <15 min operator time): create run per
+- **Weekly flow** (target <15 min operator time): create run per
   group → Start Run (one click; pending→running is automatic, no separate
   "Move to Running" step) → watch live progress (page auto-refreshes). A
   clean run (≥80% of sites captured) auto-publishes; otherwise it lands in

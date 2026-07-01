@@ -20,6 +20,7 @@ export interface ExtractedOffer {
   monthlyPayment: number | null;
   apr: number | null;
   cashIncentive: number | null;
+  salePrice: number | null;
   termMonths: number | null;
   dueAtSigning: number | null;
   disclaimerText: string | null;
@@ -173,12 +174,33 @@ function extractCashIncentive(text: string) {
       text,
       /\$\s?([\d,]{2,7})\s*(?:cash back|customer cash|bonus cash|cash allowance|rebate|in (?:total )?savings)/i
     ) ??
-    firstMatch(text, /save\s+(?:up to\s+)?\$\s?([\d,]{2,7})/i);
+    firstMatch(text, /save\s+(?:up to\s+)?\$\s?([\d,]{2,7})/i) ??
+    firstMatch(text, /\$\s?([\d,]{2,7})\s*(?:off\b)/i) ??
+    firstMatch(text, /([\d,]{2,7})\s*dollars?\s+off\b/i);
   if (!m) return null;
   const value = parseAmount(m[1]);
   // Reject service-coupon noise and MSRP/price misreads — a real vehicle cash
   // incentive sits in a plausible band (see CASH_MIN/CASH_MAX).
   if (value < CASH_MIN || value > CASH_MAX) return null;
+  return { value, match: m[0].trim() };
+}
+
+// Plausible cash sale price band — avoids zip codes, trim levels, and
+// service coupon amounts being misread as a vehicle price.
+const SALE_PRICE_MIN = 5_000;
+const SALE_PRICE_MAX = 200_000;
+
+function extractSalePrice(text: string) {
+  // "$28,999", "priced at $28,999", "sale price $28,999", "now $28,999"
+  const m =
+    firstMatch(
+      text,
+      /(?:sale\s+price|priced\s+at|now|internet\s+price|our\s+price)[:\s]*\$\s?([\d,]{4,7})/i
+    ) ??
+    firstMatch(text, /\$\s?([\d,]{4,7})\s*(?:sale\s+price|internet\s+price)/i);
+  if (!m) return null;
+  const value = parseAmount(m[1]);
+  if (value < SALE_PRICE_MIN || value > SALE_PRICE_MAX) return null;
   return { value, match: m[0].trim() };
 }
 
@@ -416,6 +438,7 @@ function classify(
     monthlyPayment: number | null;
     apr: number | null;
     cashIncentive: number | null;
+    salePrice: number | null;
     termMonths: number | null;
     dueAtSigning: number | null;
   },
@@ -430,7 +453,7 @@ function classify(
   if (fields.monthlyPayment !== null && fields.termMonths !== null) {
     return "finance";
   }
-  if (fields.cashIncentive !== null) return "cash";
+  if (fields.cashIncentive !== null || fields.salePrice !== null) return "cash";
   return "promotional";
 }
 
@@ -456,6 +479,7 @@ function extractOfferFromText(
   const term = extractTerm(text);
   const due = extractDueAtSigning(text);
   const cash = extractCashIncentive(text);
+  const salePrice = extractSalePrice(text);
 
   const isService = hints.missionType === "service_specials";
   // Service offer text is captured as a human-readable string (e.g. "$25 off",
@@ -466,8 +490,9 @@ function extractOfferFromText(
   const fields = {
     monthlyPayment: payment?.value ?? null,
     apr: apr?.value ?? null,
-    // Service never populates cashIncentive — the offer lives in matches.serviceOffer.
+    // Service never populates cashIncentive/salePrice — the offer lives in matches.serviceOffer.
     cashIncentive: isService ? null : (cash?.value ?? null),
+    salePrice: isService ? null : (salePrice?.value ?? null),
     termMonths: term?.value ?? null,
     dueAtSigning: due?.value ?? null,
   };
@@ -482,7 +507,7 @@ function extractOfferFromText(
   // near the coupon value (used by extractDisclaimerNear).
   const anchor = isService
     ? serviceOfferText
-    : (payment?.match ?? cash?.match ?? apr?.match ?? null);
+    : (payment?.match ?? salePrice?.match ?? cash?.match ?? apr?.match ?? null);
   const anchorIndex = anchor ? text.indexOf(anchor) : -1;
   const anchorContext =
     anchorIndex >= 0
@@ -501,6 +526,7 @@ function extractOfferFromText(
   if (term) matches.termMonths = term.match;
   if (due) matches.dueAtSigning = due.match;
   if (!isService && cash) matches.cashIncentive = cash.match;
+  if (!isService && salePrice) matches.salePrice = salePrice.match;
   if (serviceOfferText) matches.serviceOffer = serviceOfferText;
 
   // Service: label = "what's it for" (Oil Change, Brake Service…);
@@ -537,6 +563,7 @@ function extractOfferFromText(
     monthlyPayment: fields.monthlyPayment,
     apr: fields.apr,
     cashIncentive: fields.cashIncentive,
+    salePrice: fields.salePrice,
     termMonths: fields.termMonths,
     dueAtSigning: fields.dueAtSigning,
     disclaimerText: disclaimer,
@@ -607,6 +634,7 @@ function offerSig(o: ExtractedOffer): string {
     o.termMonths ?? "",
     o.dueAtSigning ?? "",
     o.cashIncentive ?? "",
+    o.salePrice ?? "",
     o.matches.serviceOffer ?? "",
     o.offerType === "service" ? (o.rawText ?? "") : "",
   ].join("|");

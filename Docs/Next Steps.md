@@ -1,111 +1,72 @@
-# Next Steps — Dealer Intel Platform
+# Next Steps
 
-_Last updated: June 2026_
+_Last updated: July 2026_
 
----
+This file is the short operational to-do list. Use
+`Implementation Roadmap.md` for the broader forward roadmap and
+`Implementation Notes.md` for current architecture.
 
-## Immediate: Verify what's built
+## Highest Priority
 
-### Phase 11 — Reporting (browser check needed)
-- [ ] Open `http://localhost:3000/r/8911c65d-c921-4250-8035-ca2b85dddd27` and confirm the Elmwood Suite report renders correctly (color-ranked grids, KPI tiles, summary brief, section links)
-- [ ] Confirm the admin view at `/reports/<id>` also renders (same ReportContent component, adminControls=true adds snapshot history panel)
-- [ ] Confirm "Copy Link" button works
-- [ ] Run `npx tsc --noEmit && npm run lint && npm run build` clean
+### Compliance: Stub -> Real
 
-### Phase 12 — AI Analysis (needs API key)
-- [ ] Re-run analysis on a run that has low-confidence offers
-- [ ] Confirm AI-enriched offers get the "AI" badge in the report
+- Connect the real AdScore endpoint through the existing `ComplianceGrader`
+  interface.
+- Verify credentials and request/response shape with real data.
+- Confirm customer-facing report compliance sections show real grades,
+  evidence links, and useful empty/error states.
 
----
+### Production AI Verification
 
-## Short-term: Stub → Real
+- Set `ANTHROPIC_API_KEY` in production when available.
+- Re-run analysis on low-confidence offers and image-heavy DDC evidence.
+- Confirm AI-assisted corrections get the "AI" badge and preserve
+  ad-specific disclaimer pairing.
 
-### Compliance section
-- Currently shows grade counts + a per-offer table with stub data
-- Build out the real ComplianceGrader endpoint connection (external API)
-- Customer-facing section in the report; already has a placeholder in ReportContent
+### Disclaimer Modal Coverage
 
----
+- Add Dealer Inspire and Dealer Alchemist modal selectors to the explorer.
+- Verify against real dealer pages.
+- Confirm captured `evidence.text_content` is the ad-specific disclosure, not
+  footer/legal boilerplate.
 
-## Deferred (acknowledged, not forgotten)
+## Product Backlog
 
 | Item | Notes |
 |---|---|
-| Inventory section | Separate data source; Phase 2 item. May import or link. |
-| MTD Sales | Proprietary data source; may come in as a PDF import or external link |
-| ~~Brand News~~ | Done — live via autos.media news service (news.dlrtools.com). See Docs/NewsGather/autos-media-news-spec.md |
-| Phase 11 v2 trend deltas | Per-metric change vs. prior snapshot in the report |
-| Disclaimer modal capture for dealer_inspire / dealer_alchemist | Selectors don't match their modal pattern yet |
-| Run page live-progress efficiency | `AutoRefresh` fires `router.refresh()` every 4s, re-running 8 DB queries to update two status badges. Fix: add `GET /api/runs/[id]/progress` (returns only work-item statuses as JSON) + a client component that polls it. Much cheaper; could safely drop to 1-2s interval. Not worth touching pre-v1. |
+| Run progress endpoint | Replace broad run-page refresh polling with `GET /api/runs/[id]/progress` and a narrow client poller. |
+| Report trend deltas | Compare the current published snapshot with the prior group snapshot. |
+| Inventory in reports | Decide whether inventory belongs directly in reports or remains linked from the ops surface. |
+| Month-to-date sales | Define the source, ingestion model, and report treatment once the data source is known. |
 
----
+## Deployment Notes
 
-## Deployment
+The viewer is the cloud-facing report surface. Collection and analysis continue
+to run on the persistent admin Node process because Playwright/Chromium and
+in-memory run execution are not serverless-friendly.
 
-### Goal
-Get a live URL so a dealer client can view a report — no auth, just `/r/[id]`.
+Cloud/shared services:
 
-### Decision
-- Deploy the /viewer to Vercel
-- Collections continue to run **locally** — Playwright never fires on the cloud server
-- Neon (DB) and R2 (evidence files) are already cloud — the deployed app just reads them
-- Dealer hits `/r/<snapshot-id>`, sees the report, no login required
+- Neon Postgres stores app data and published snapshots.
+- Cloudflare R2 stores evidence files.
+- The viewer app reads published report data and proxies evidence access.
 
-### Steps (when ready)
-1. Create Railway account / project
-2. Connect GitHub repo
-3. Set environment variables (see checklist below)
-4. Deploy — Railway auto-detects Next.js and runs `npm run start`
-5. Confirm `/r/<snapshot-id>` loads on the Railway domain
+Useful deployment checks:
 
-### Environment variables needed on Railway
-```
-DATABASE_URL=
-AUTH_SECRET=
-NEXTAUTH_URL=          # set to the Railway domain
-R2_ACCOUNT_ID=
-R2_ACCESS_KEY_ID=
-R2_SECRET_ACCESS_KEY=
-R2_BUCKET_NAME=
-R2_PUBLIC_URL=
-ANTHROPIC_API_KEY=     # optional; omit and AI enrichment is a no-op
-```
+1. Confirm the viewer can load a known report permalink.
+2. Confirm authenticated dealer report routes work.
+3. Confirm R2 evidence images load through the viewer proxy.
+4. Run `npx tsc --noEmit`, `npm run lint`, and `npm run build` before release.
 
----
+## News Report Rule
 
-## Architecture discussion (new thread)
+Report news reads from locally stored news items pulled from the external news
+service.
 
-**Topic:** Separating the collection/admin layer from the reporting layer through a shared database — and whether there's a better backend direction to explore.
-
-**Current state:** Single Next.js monolith. Neon + R2 are already remote/cloud and act as the shared bus between local collection and cloud reporting. The snapshot wall (Phase 10) already enforces the separation at the data level.
-
-**Open question:** Is there a better architectural direction for the backend? The user has a specific idea to explore — start a new conversation thread on this topic.
-
-Key facts to bring into that conversation:
-- Collect → Analyze → Report is already enforced as a data pipeline
-- Analysis is re-runnable and many-to-many (one evidence → multiple passes)
-- Reporting reads ONLY from `report_snapshots` + `snapshot_offers` (immutable)
-- Playwright/Chromium is the only heavyweight dependency; it only runs during collection
-- The app needs a persistent Node process (no serverless)
-- DB: Neon Postgres (remote). Storage: Cloudflare R2 (remote). Auth: NextAuth.
-
-
-Special note on news collector reports
-## pulled in from external API
-see Docs\NewsGather\autos-media-news-spec.md for details
-
-### Report rendering rule
-Assume
-* news section *
-  ** brand section **
-  ** Industry section **
-* *
-- If `fetchNewsForBrand` returns null or empty arrays → brand news section does not render 
-- If `fetchNewsForIndustry` returns null or empty arrays → industry news section does not render 
-- if both return null or empty, entire news section does not render
-- If `fresh === false` → optionally show a subtle "News last updated [date]" note
-- Display: brand_items first, then industry_items
-- Max display in report: 4 items total (you trim from the API's returned max)
-- Each card: category pill + headline (linked to source_url) + summary. No rewriting.
-
----
+- If brand news is empty, hide the brand news subsection.
+- If industry news is empty, hide the industry news subsection.
+- If both are empty, hide the entire news section.
+- If news is stale, optionally show a subtle "News last updated [date]" note.
+- Display brand items first, then industry items.
+- Show up to 4 items total.
+- Each card shows category, linked headline, and summary without rewriting.

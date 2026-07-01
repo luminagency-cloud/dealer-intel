@@ -28,6 +28,7 @@ export interface OfferEnrichment {
   monthlyPayment: number | null;
   apr: number | null;
   cashIncentive: number | null;
+  salePrice: number | null;
   termMonths: number | null;
   dueAtSigning: number | null;
   disclaimerText: string | null;
@@ -73,6 +74,7 @@ const EnrichmentSchema = z.object({
   monthlyPayment: z.number().nullable(),
   apr: z.number().nullable(),
   cashIncentive: z.number().nullable(),
+  salePrice: z.number().nullable(),
   termMonths: z.number().int().nullable(),
   dueAtSigning: z.number().nullable(),
   disclaimerText: z.string().nullable(),
@@ -83,9 +85,10 @@ const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER f
 
 Rules:
 - Identify the ONE offer the rule-based guess is anchored on (matched by its monthly payment / price), not every offer on the page. Multi-offer pages are why this is hard — keep the vehicle, payment, term, APR, cash, and due-at-signing consistent with that single ad.
-- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive), "service" (service-department special), or "promotional" (no priced terms).
+- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
 - Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. When a screenshot is provided, look for the model name in the ad graphic — image-only platforms (e.g. DDC/Dealer.com) bake the vehicle name into the image rather than the DOM text.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
+- cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 cash back", "$500 off"). salePrice: the raw advertised sale or cash price of the vehicle (e.g. "Sale Price $28,999"). Use null when not present.
 - DISCLAIMER (hard rule): the disclaimer is the fine print tied to THIS specific ad (it sits with the offer, e.g. "MSRP $X. Lease for $Y/mo, $Z due at signing..."). It is NEVER the site-wide footer legalese (Terms of Use, Privacy, ©, "do not sell"). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in this corrected offer.`;
 
@@ -93,9 +96,10 @@ const BULK_IMAGE_SYSTEM_PROMPT = `You extract ALL automotive dealer ADVERTISED O
 
 Rules:
 - Extract EVERY distinct offer visible in the image — there may be 1 to 10+ offers on a single page graphic.
-- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive), "service" (service-department special), or "promotional" (no priced terms).
+- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
 - Vehicle make/model/trim: read from the image. Use null when not stated — never guess.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
+- cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 off"). salePrice: the raw advertised sale price (e.g. "Sale Price $28,999"). Use null when not present.
 - DISCLAIMER (hard rule): the fine print tied to THIS specific ad. NEVER site-wide footer legalese (Terms of Use, Privacy, ©). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in each extracted offer.
 - If the image contains no offers (e.g. it is a banner or navigation), return an empty array.`;
@@ -110,6 +114,7 @@ const BulkExtractionSchema = z.object({
       monthlyPayment: z.number().nullable(),
       apr: z.number().nullable(),
       cashIncentive: z.number().nullable(),
+      salePrice: z.number().nullable(),
       termMonths: z.number().int().nullable(),
       dueAtSigning: z.number().nullable(),
       disclaimerText: z.string().nullable(),
@@ -139,6 +144,7 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       monthlyPayment: input.current.monthlyPayment,
       apr: input.current.apr,
       cashIncentive: input.current.cashIncentive,
+      salePrice: input.current.salePrice,
       termMonths: input.current.termMonths,
       dueAtSigning: input.current.dueAtSigning,
       anchorText: input.current.rawText,
@@ -155,8 +161,8 @@ export class ClaudeOfferEnricher implements OfferEnricher {
     if (input.screenshotBuffer && input.screenshotBuffer.length > 0) {
       try {
         const resized = await sharp(input.screenshotBuffer)
-          .resize({ width: 1200, height: 7900, fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: 80 })
+          .resize({ width: 900, height: 7900, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 60 })
           .toBuffer();
         imageBase64 = resized.toString("base64");
       } catch {

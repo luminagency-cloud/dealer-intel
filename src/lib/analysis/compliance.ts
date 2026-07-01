@@ -67,15 +67,14 @@ export class StubComplianceGrader implements ComplianceGrader {
 // AdScore grader — real external compliance API
 // ---------------------------------------------------------------------------
 
-/** Resize a raw PNG/JPEG to 1200×7900 max (JPEG 80%).
- *  Claude's API rejects images over 8000px in either dimension; full-page
- *  Playwright screenshots can be 15 000px+ tall. */
+/** Resize a raw PNG/JPEG to 1200×1600 max (JPEG 75%) for AdScore.
+ *  A compliance grader only needs the ad card — not a full-page capture. */
 async function prepareImage(
   buf: Buffer
 ): Promise<{ data: string; mimeType: "image/jpeg" }> {
   const resized = await sharp(buf)
-    .resize({ width: 1200, height: 7900, fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: 80 })
+    .resize({ width: 1200, height: 1600, fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 75 })
     .toBuffer();
   return { data: resized.toString("base64"), mimeType: "image/jpeg" };
 }
@@ -106,7 +105,7 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
   private ensureBatch(): Promise<string> {
     if (!this.batchPromise) {
       this.batchPromise = (async () => {
-        const resp = await fetch(
+        const resp = await fetchWithRetry(
           `${this.baseUrl}/api/external/v1/requestBatchId`,
           {
             method: "POST",
@@ -151,7 +150,7 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
       baseBody.imageMimeType = imageMimeType;
     }
 
-    return fetch(`${this.baseUrl}/api/external/v1/gradeAd`, {
+    return fetchWithRetry(`${this.baseUrl}/api/external/v1/gradeAd`, {
       method: "POST",
       headers: this.authHeaders(),
       body: JSON.stringify(baseBody),
@@ -159,6 +158,15 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
   }
 
   async grade(input: ComplianceRequest): Promise<ComplianceGradeResult> {
+    try {
+      return await this._grade(input);
+    } catch (err) {
+      console.error(`[compliance] grade() threw for evidence ${input.evidenceId} — falling back to stub:`, err);
+      return this.stub.grade(input);
+    }
+  }
+
+  private async _grade(input: ComplianceRequest): Promise<ComplianceGradeResult> {
     // Fall back to stub when there's no image or no market state — AdScore
     // requires both. Log so the gap is visible in server output.
     if (!input.screenshotBuffer) {
@@ -231,6 +239,34 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
         gradeId: json.result.id,
       },
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isTransientNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED" || code === "EPIPE") return true;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error) return isTransientNetworkError(cause);
+  return false;
+}
+
+async function fetchWithRetry(
+  ...args: Parameters<typeof fetch>
+): Promise<Response> {
+  try {
+    return await fetch(...args);
+  } catch (err) {
+    if (isTransientNetworkError(err)) {
+      console.warn("[compliance] transient network error, retrying once:", (err as Error).message);
+      await new Promise((r) => setTimeout(r, 1500));
+      return fetch(...args);
+    }
+    throw err;
   }
 }
 

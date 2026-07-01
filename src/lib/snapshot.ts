@@ -126,6 +126,7 @@ export async function createSnapshotFromRun(
       monthlyPayment: r.offer.monthlyPayment,
       apr: r.offer.apr,
       cashIncentive: r.offer.cashIncentive,
+      salePrice: r.offer.salePrice,
       termMonths: r.offer.termMonths,
       dueAtSigning: r.offer.dueAtSigning,
       rawText: r.offer.rawText,
