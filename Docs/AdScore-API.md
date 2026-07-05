@@ -82,7 +82,15 @@ Successful response:
         "batchName": "Elmwood lease specials"
       },
       "violations": [],
-      "bonuses": []
+      "bonuses": [],
+      "ocrArtifact": {
+        "provider": "read-only OCR provider AdGrader used",
+        "model": "read-only OCR model AdGrader used",
+        "imageText": "text extracted from the submitted image",
+        "rawText": "caller-supplied supplemental ad text, if any",
+        "suppliedDisclaimerText": "caller-supplied disclaimer text, if any",
+        "pages": "OCR page text/layout diagnostics"
+      }
     }
   },
   "warning": null
@@ -91,6 +99,11 @@ Successful response:
 #Notes:
 client_id is intentionally not echoed back in the response
 warning may be present when grading succeeded but durable image storage failed
+findings.ocrArtifact is optional, read-only diagnostic data showing what OCR
+text AdGrader used to grade the ad. Provider/model selection is server-owned —
+gradeAd no longer accepts caller-controlled observationOptions; do not send
+provider or model in the request. Existing clients can ignore ocrArtifact;
+clients with strict response validation should allow this extra field.
 Validation Rules
 /requestBatchId:
 request body must be a JSON object
