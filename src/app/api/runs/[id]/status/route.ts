@@ -26,6 +26,8 @@ export async function GET(
         missionId: missionResults.missionId,
         status: missionResults.status,
         pagesCaptured: missionResults.pagesCaptured,
+        successfulUrl: missionResults.successfulUrl,
+        error: missionResults.error,
       })
       .from(missionResults)
       .where(eq(missionResults.collectionRunId, id)),

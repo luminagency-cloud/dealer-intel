@@ -422,6 +422,9 @@ export const offers = pgTable("offers", {
   salePrice: real("sale_price"),
   termMonths: integer("term_months"),
   dueAtSigning: real("due_at_signing"),
+  /** Lease mileage allowance, miles/year (e.g. 10000). Null for non-lease
+   *  offers or when the page didn't state one. */
+  mileageAllowance: integer("mileage_allowance"),
   rawText: text("raw_text"),
   normalizedJson: jsonb("normalized_json"),
   disclaimerText: text("disclaimer_text"),
@@ -561,6 +564,9 @@ export const snapshotOffers = pgTable("snapshot_offers", {
   salePrice: real("sale_price"),
   termMonths: integer("term_months"),
   dueAtSigning: real("due_at_signing"),
+  /** Lease mileage allowance, miles/year (e.g. 10000). Null for non-lease
+   *  offers or when the page didn't state one. */
+  mileageAllowance: integer("mileage_allowance"),
   rawText: text("raw_text"),
   normalizedJson: jsonb("normalized_json"),
   disclaimerText: text("disclaimer_text"),

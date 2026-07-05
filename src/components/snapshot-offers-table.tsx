@@ -4,6 +4,7 @@ import {
   type SnapshotOffer,
 } from "@/lib/db";
 import { ComplianceGradeBadge } from "@/components/compliance-grade-badge";
+import { fmtMileage } from "@/lib/report";
 
 function money(value: number | null): string {
   return value === null ? "—" : `$${value.toLocaleString()}`;
@@ -40,6 +41,7 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
             <th className="px-4 py-2 font-medium">APR</th>
             <th className="px-4 py-2 font-medium">Term</th>
             <th className="px-4 py-2 font-medium">Due</th>
+            <th className="px-4 py-2 font-medium">Mi/Yr</th>
             <th className="px-4 py-2 font-medium">Cash</th>
             <th className="px-4 py-2 font-medium">Conf.</th>
             <th className="px-4 py-2 font-medium">Compliance</th>
@@ -85,6 +87,11 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
                 </td>
                 <td className="px-4 py-3 text-zinc-700">
                   {money(offer.dueAtSigning)}
+                </td>
+                <td className="px-4 py-3 text-zinc-700">
+                  {offer.mileageAllowance === null
+                    ? "—"
+                    : fmtMileage(offer.mileageAllowance)}
                 </td>
                 <td className="px-4 py-3 text-zinc-700">
                   {money(offer.cashIncentive)}

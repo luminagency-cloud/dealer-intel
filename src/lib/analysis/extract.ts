@@ -1,4 +1,5 @@
 import type { MissionType, OfferType } from "@/lib/db";
+import { parseMileage } from "@/lib/report";
 
 /**
  * Rule-based offer extraction (Phase 9 classification + normalization). Reads
@@ -23,6 +24,9 @@ export interface ExtractedOffer {
   salePrice: number | null;
   termMonths: number | null;
   dueAtSigning: number | null;
+  /** Lease mileage allowance, miles/year. Null for non-lease offers or when
+   *  the page didn't state one. */
+  mileageAllowance: number | null;
   disclaimerText: string | null;
   /** Short human-readable context around the primary match. */
   rawText: string | null;
@@ -482,6 +486,10 @@ function extractOfferFromText(
   const salePrice = extractSalePrice(text);
 
   const isService = hints.missionType === "service_specials";
+  // Mileage allowance is a lease-specific supplement, not a classification
+  // signal — a stray "X miles per year" shouldn't itself make a chunk look
+  // like a priced offer, so it's kept out of `fields`/signalCount below.
+  const mileageAllowance = isService ? null : parseMileage(text);
   // Service offer text is captured as a human-readable string (e.g. "$25 off",
   // "25% off tires") — no numeric parse, so a percentage isn't stored as a
   // dollar amount and non-price offers (2-for-1, FREE) round-trip cleanly.
@@ -566,6 +574,7 @@ function extractOfferFromText(
     salePrice: fields.salePrice,
     termMonths: fields.termMonths,
     dueAtSigning: fields.dueAtSigning,
+    mileageAllowance,
     disclaimerText: disclaimer,
     rawText,
     confidence: Number(confidence.toFixed(2)),
@@ -635,6 +644,7 @@ function offerSig(o: ExtractedOffer): string {
     o.dueAtSigning ?? "",
     o.cashIncentive ?? "",
     o.salePrice ?? "",
+    o.mileageAllowance ?? "",
     o.matches.serviceOffer ?? "",
     o.offerType === "service" ? (o.rawText ?? "") : "",
   ].join("|");

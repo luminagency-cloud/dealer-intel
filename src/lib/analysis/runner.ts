@@ -12,6 +12,7 @@ import {
 import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
 import { extractOffers, findKnownModel, htmlToText } from "./extract";
 import { getComplianceGrader } from "./compliance";
+import { parseMileage } from "@/lib/report";
 import {
   aiConfidenceThreshold,
   getOfferEnricher,
@@ -342,6 +343,7 @@ async function processAnalysis(
           offer.cashIncentive ?? "",
           offer.salePrice ?? "",
           offer.dueAtSigning ?? "",
+          offer.mileageAllowance ?? "",
           offer.matches?.serviceOffer ?? "",
           offer.offerType === "service" ? (offer.rawText ?? "") : "",
         ].join("|");
@@ -370,6 +372,18 @@ async function processAnalysis(
         );
         const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
         const vehicleModel = matched?.model ?? effective.vehicleModel;
+        // The rule-based pass only scans the price-anchor window for mileage;
+        // the fully-resolved disclaimer (which can pull in a captured
+        // disclaimer screenshot beyond that window) often states it even when
+        // the window missed it — same fallback the report breakdown uses.
+        // Meaningful only on leases — a shared multi-offer disclaimer can
+        // mention lease mileage even for the finance/cash offer on the same page.
+        const mileageAllowance =
+          effective.offerType === "lease"
+            ? effective.mileageAllowance ??
+              parseMileage(disclaimerText) ??
+              parseMileage(effective.rawText)
+            : null;
 
         await db.insert(offers).values({
           collectionRunId: runId,
@@ -385,6 +399,7 @@ async function processAnalysis(
           salePrice: effective.salePrice,
           termMonths: effective.termMonths,
           dueAtSigning: effective.dueAtSigning,
+          mileageAllowance,
           rawText: effective.rawText,
           normalizedJson: { matches: offer.matches, aiAssisted },
           disclaimerText,
@@ -476,6 +491,7 @@ async function processAnalysis(
           effective.cashIncentive ?? "",
           effective.salePrice ?? "",
           effective.dueAtSigning ?? "",
+          effective.mileageAllowance ?? "",
           offer.matches?.serviceOffer ?? "",
           effective.offerType === "service" ? (effective.rawText ?? "") : "",
         ].join("|");
@@ -497,6 +513,18 @@ async function processAnalysis(
         }
 
         const disclaimerText = disclaimerPortion(text).slice(0, 1000);
+        // The disclaimer-modal pass extracts offers from a price-anchor window
+        // within the modal text, but disclaimerText above is the FULL modal's
+        // disclaimer portion (unwindowed) — mileage often sits past the
+        // window even though the disclaimer clearly states it. Meaningful only
+        // on leases — a shared disclaimer can mention lease mileage even for
+        // the finance/cash offer on the same page.
+        const mileageAllowance =
+          effective.offerType === "lease"
+            ? effective.mileageAllowance ??
+              parseMileage(disclaimerText) ??
+              parseMileage(text)
+            : null;
 
         await db.insert(offers).values({
           collectionRunId: runId,
@@ -512,6 +540,7 @@ async function processAnalysis(
           salePrice: effective.salePrice,
           termMonths: effective.termMonths,
           dueAtSigning: effective.dueAtSigning,
+          mileageAllowance,
           rawText: effective.rawText,
           normalizedJson: { matches: offer.matches, aiAssisted },
           disclaimerText,
@@ -611,6 +640,7 @@ async function processAnalysis(
                 enrichment.cashIncentive ?? "",
                 enrichment.salePrice ?? "",
                 enrichment.dueAtSigning ?? "",
+                enrichment.mileageAllowance ?? "",
               ].join("|");
               if (!seen.has(sig)) {
                 seen.add(sig);
@@ -628,6 +658,10 @@ async function processAnalysis(
                   salePrice: enrichment.salePrice,
                   termMonths: enrichment.termMonths,
                   dueAtSigning: enrichment.dueAtSigning,
+                  mileageAllowance:
+                    enrichment.offerType === "lease"
+                      ? enrichment.mileageAllowance ?? parseMileage(enrichment.disclaimerText)
+                      : null,
                   rawText: null,
                   normalizedJson: { aiAssisted: true, source: "image_extraction" },
                   disclaimerText: enrichment.disclaimerText,
@@ -836,7 +870,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
         }
         for (const offer of extracted) {
-          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
+          const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
           if (seen.has(sig)) continue;
           seen.add(sig);
           let effective = offer;
@@ -848,7 +882,8 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
           const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
           const vehicleModel = matched?.model ?? effective.vehicleModel;
-          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(effective.rawText) : null;
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
           offersInserted++;
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
@@ -871,7 +906,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             const labelModel = findKnownModel(row.label);
             if (labelModel) effective = { ...effective, vehicleModel: labelModel };
           }
-          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.salePrice ?? "", effective.dueAtSigning ?? "", offer.matches?.serviceOffer ?? "", effective.offerType === "service" ? (effective.rawText ?? "") : ""].join("|");
+          const sig = [row.siteId, effective.offerType, effective.vehicleModel ?? "", effective.monthlyPayment ?? "", effective.apr ?? "", effective.termMonths ?? "", effective.cashIncentive ?? "", effective.salePrice ?? "", effective.dueAtSigning ?? "", effective.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", effective.offerType === "service" ? (effective.rawText ?? "") : ""].join("|");
           if (seen.has(sig)) continue;
           seen.add(sig);
           let aiAssisted = false;
@@ -880,7 +915,8 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
-          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(text) : null;
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
           offersInserted++;
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
@@ -910,10 +946,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             console.log(`[partial-analysis] image pass site=${siteInfo.name} mission=${missionType} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
             for (const enrichment of extracted) {
               if (enrichment.confidence < 0.3) continue;
-              const sig = [siteId, enrichment.offerType, enrichment.vehicleModel ?? "", enrichment.monthlyPayment ?? "", enrichment.apr ?? "", enrichment.termMonths ?? "", enrichment.cashIncentive ?? "", enrichment.dueAtSigning ?? ""].join("|");
+              const sig = [siteId, enrichment.offerType, enrichment.vehicleModel ?? "", enrichment.monthlyPayment ?? "", enrichment.apr ?? "", enrichment.termMonths ?? "", enrichment.cashIncentive ?? "", enrichment.dueAtSigning ?? "", enrichment.mileageAllowance ?? ""].join("|");
               if (seen.has(sig)) continue;
               seen.add(sig);
-              await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: screenshotRow.id, offerType: enrichment.offerType, vehicleMake: enrichment.vehicleMake, vehicleModel: enrichment.vehicleModel, vehicleTrim: enrichment.vehicleTrim, monthlyPayment: enrichment.monthlyPayment, apr: enrichment.apr, cashIncentive: enrichment.cashIncentive, termMonths: enrichment.termMonths, dueAtSigning: enrichment.dueAtSigning, rawText: null, normalizedJson: { aiAssisted: true, source: "image_extraction" }, disclaimerText: enrichment.disclaimerText, confidence: enrichment.confidence });
+              await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: screenshotRow.id, offerType: enrichment.offerType, vehicleMake: enrichment.vehicleMake, vehicleModel: enrichment.vehicleModel, vehicleTrim: enrichment.vehicleTrim, monthlyPayment: enrichment.monthlyPayment, apr: enrichment.apr, cashIncentive: enrichment.cashIncentive, termMonths: enrichment.termMonths, dueAtSigning: enrichment.dueAtSigning, mileageAllowance: enrichment.offerType === "lease" ? enrichment.mileageAllowance ?? parseMileage(enrichment.disclaimerText) : null, rawText: null, normalizedJson: { aiAssisted: true, source: "image_extraction" }, disclaimerText: enrichment.disclaimerText, confidence: enrichment.confidence });
               const COMPLIANCE_TYPES: typeof enrichment.offerType[] = ["lease", "finance", "cash"];
               const result = COMPLIANCE_TYPES.includes(enrichment.offerType)
                 ? await grader.grade({ evidenceId: screenshotRow.id, offerType: enrichment.offerType, disclaimerText: enrichment.disclaimerText, adText: null, dealerName: siteInfo.name, marketStates, screenshotBuffer: buf })

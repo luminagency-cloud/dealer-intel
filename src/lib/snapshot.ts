@@ -129,6 +129,7 @@ export async function createSnapshotFromRun(
       salePrice: r.offer.salePrice,
       termMonths: r.offer.termMonths,
       dueAtSigning: r.offer.dueAtSigning,
+      mileageAllowance: r.offer.mileageAllowance,
       rawText: r.offer.rawText,
       normalizedJson: r.offer.normalizedJson,
       disclaimerText: r.offer.disclaimerText,

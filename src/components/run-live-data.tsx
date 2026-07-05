@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
 import { RunWorkflowStrip } from "@/components/run-workflow-strip";
@@ -12,7 +12,10 @@ interface LiveStatus {
   stalled: boolean;
   progress: { processed: number; total: number } | null;
   partialAnalysisKeys: string[];
-  results: Pick<MissionResult, "id" | "siteId" | "missionId" | "status" | "pagesCaptured">[];
+  results: Pick<
+    MissionResult,
+    "id" | "siteId" | "missionId" | "status" | "pagesCaptured" | "successfulUrl" | "error"
+  >[];
 }
 
 export function RunLiveData({
@@ -101,8 +104,6 @@ export function RunLiveData({
   });
 
   const active = live.executing || live.analyzing || live.partialAnalysisKeys.length > 0;
-  const activeRef = useRef(active);
-  activeRef.current = active;
 
   useEffect(() => {
     if (!active) return;
@@ -116,18 +117,59 @@ export function RunLiveData({
     };
     const timer = setInterval(poll, 3000);
     return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, runId]);
 
-  // Overlay live status/pagesCaptured onto the full MissionResult objects.
-  const liveById = new Map(live.results.map((r) => [r.id, r]));
-  const mergedResults = new Map(
-    initialResults.map((r) => {
-      const up = liveById.get(r.id);
-      const merged = up ? { ...r, status: up.status, pagesCaptured: up.pagesCaptured } : r;
-      return [`${r.siteId}:${r.missionId}`, merged];
-    })
+  // Overlay live status/pagesCaptured/successfulUrl/error onto the full
+  // MissionResult objects. Keyed on (site, mission) rather than id and
+  // driven off the union of both sources: a background-started run (e.g.
+  // AUTO_START_RUN, which redirects before its result rows are seeded) can
+  // create rows that didn't exist yet in this page's initial SSR snapshot.
+  // Merging by walking only `initialResults` silently dropped those rows on
+  // every poll forever, so the page looked frozen even though polling was
+  // working.
+  const initialByKey = new Map(
+    initialResults.map((r) => [`${r.siteId}:${r.missionId}`, r])
   );
+  const liveByKey = new Map(
+    live.results.map((r) => [`${r.siteId}:${r.missionId}`, r])
+  );
+  const missionById = new Map(items.map((i) => [i.mission.id, i.mission]));
+  const mergedResults = new Map<string, MissionResult>();
+  for (const key of new Set([...initialByKey.keys(), ...liveByKey.keys()])) {
+    const base = initialByKey.get(key);
+    const up = liveByKey.get(key);
+    if (base) {
+      mergedResults.set(
+        key,
+        up
+          ? {
+              ...base,
+              status: up.status,
+              pagesCaptured: up.pagesCaptured,
+              successfulUrl: up.successfulUrl,
+              error: up.error,
+            }
+          : base
+      );
+    } else if (up) {
+      const mission = missionById.get(up.missionId);
+      if (!mission) continue;
+      mergedResults.set(key, {
+        id: up.id,
+        collectionRunId: runId,
+        missionId: up.missionId,
+        siteId: up.siteId,
+        missionType: mission.missionType,
+        status: up.status,
+        pagesCaptured: up.pagesCaptured,
+        successfulUrl: up.successfulUrl,
+        error: up.error,
+        startedAt: null,
+        completedAt: null,
+        createdAt: new Date(),
+      });
+    }
+  }
   const mergedArray = [...mergedResults.values()];
 
   return (

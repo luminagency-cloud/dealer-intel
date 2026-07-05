@@ -31,6 +31,7 @@ export interface OfferEnrichment {
   salePrice: number | null;
   termMonths: number | null;
   dueAtSigning: number | null;
+  mileageAllowance: number | null;
   disclaimerText: string | null;
   /** The model's own 0..1 confidence in this corrected offer. */
   confidence: number;
@@ -77,6 +78,7 @@ const EnrichmentSchema = z.object({
   salePrice: z.number().nullable(),
   termMonths: z.number().int().nullable(),
   dueAtSigning: z.number().nullable(),
+  mileageAllowance: z.number().int().nullable(),
   disclaimerText: z.string().nullable(),
   confidence: z.number(),
 });
@@ -89,6 +91,7 @@ Rules:
 - Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. When a screenshot is provided, look for the model name in the ad graphic — image-only platforms (e.g. DDC/Dealer.com) bake the vehicle name into the image rather than the DOM text.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
 - cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 cash back", "$500 off"). salePrice: the raw advertised sale or cash price of the vehicle (e.g. "Sale Price $28,999"). Use null when not present.
+- mileageAllowance: for lease offers, the annual mileage allowance in miles/year (e.g. "10,000 miles per year" → 10000). Use null when not a lease or not stated.
 - DISCLAIMER (hard rule): the disclaimer is the fine print tied to THIS specific ad (it sits with the offer, e.g. "MSRP $X. Lease for $Y/mo, $Z due at signing..."). It is NEVER the site-wide footer legalese (Terms of Use, Privacy, ©, "do not sell"). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in this corrected offer.`;
 
@@ -100,6 +103,7 @@ Rules:
 - Vehicle make/model/trim: read from the image. Use null when not stated — never guess.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
 - cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 off"). salePrice: the raw advertised sale price (e.g. "Sale Price $28,999"). Use null when not present.
+- mileageAllowance: for lease offers, the annual mileage allowance in miles/year (e.g. "10,000 miles per year" → 10000). Use null when not a lease or not stated.
 - DISCLAIMER (hard rule): the fine print tied to THIS specific ad. NEVER site-wide footer legalese (Terms of Use, Privacy, ©). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in each extracted offer.
 - If the image contains no offers (e.g. it is a banner or navigation), return an empty array.`;
@@ -117,6 +121,7 @@ const BulkExtractionSchema = z.object({
       salePrice: z.number().nullable(),
       termMonths: z.number().int().nullable(),
       dueAtSigning: z.number().nullable(),
+      mileageAllowance: z.number().int().nullable(),
       disclaimerText: z.string().nullable(),
       confidence: z.number(),
     })
@@ -147,6 +152,7 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       salePrice: input.current.salePrice,
       termMonths: input.current.termMonths,
       dueAtSigning: input.current.dueAtSigning,
+      mileageAllowance: input.current.mileageAllowance,
       anchorText: input.current.rawText,
     };
 

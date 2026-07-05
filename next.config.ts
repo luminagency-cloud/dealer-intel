@@ -7,6 +7,13 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "20mb",
     },
   },
+  logging: {
+    incomingRequests: {
+      // Polled every 3s by run-live-data.tsx while a run is active — floods
+      // the terminal without telling you anything a failed request wouldn't.
+      ignore: [/\/api\/runs\/.*\/status/],
+    },
+  },
 };
 
 export default nextConfig;
