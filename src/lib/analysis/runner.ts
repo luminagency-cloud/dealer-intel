@@ -4,14 +4,18 @@ import {
   collectionRuns,
   complianceGrades,
   evidence,
+  ocrArtifacts,
   offers,
   sites,
+  type Db,
   type Evidence,
   type MissionType,
 } from "@/lib/db";
+import { isMistralConfigured } from "@/lib/env";
 import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
 import { extractOffers, findKnownModel, htmlToText } from "./extract";
 import { getComplianceGrader } from "./compliance";
+import { runMistralOcr, type OcrArtifact } from "./ocr-mistral";
 import { parseMileage } from "@/lib/report";
 import {
   aiConfidenceThreshold,
@@ -211,6 +215,54 @@ function matchCapturedDisclaimer(
   return null;
 }
 
+/** OCRs a screenshot with Mistral, caching per evidence id within a single
+ *  analysis pass (a screenshot referenced by several low-confidence offers on
+ *  the same page is only OCR'd once), and upserting the artifact into
+ *  ocr_artifacts for audit. Returns null when Mistral isn't configured, the
+ *  screenshot bytes aren't available, or the OCR call fails — callers proceed
+ *  without it, same graceful degradation as the rest of this pipeline. */
+async function getOcrArtifact(
+  db: Db,
+  runId: string,
+  screenshotRow: Evidence,
+  cache: Map<string, Promise<OcrArtifact | null>>,
+  bufferHint?: Buffer | null
+): Promise<OcrArtifact | null> {
+  if (!isMistralConfigured()) return null;
+  let pending = cache.get(screenshotRow.id);
+  if (!pending) {
+    pending = (async () => {
+      const buf = bufferHint ?? (await getEvidenceBody(screenshotRow));
+      if (!buf) return null;
+      const artifact = await runMistralOcr(buf);
+      if (artifact) {
+        await db
+          .insert(ocrArtifacts)
+          .values({
+            evidenceId: screenshotRow.id,
+            collectionRunId: runId,
+            provider: artifact.provider,
+            model: artifact.model,
+            imageText: artifact.imageText,
+            pagesJson: artifact.pages,
+          })
+          .onConflictDoUpdate({
+            target: ocrArtifacts.evidenceId,
+            set: {
+              provider: artifact.provider,
+              model: artifact.model,
+              imageText: artifact.imageText,
+              pagesJson: artifact.pages,
+            },
+          });
+      }
+      return artifact;
+    })();
+    cache.set(screenshotRow.id, pending);
+  }
+  return pending;
+}
+
 async function processAnalysis(
   runId: string,
   rows: EvidenceWithSite[],
@@ -278,6 +330,8 @@ async function processAnalysis(
     analysisProgress.set(runId, { processed: 0, total: rows.length + disclaimerEvidence.length });
     // Cache R2 fetches: screenshot bytes keyed by evidence row ID.
     const screenshotCache = new Map<string, Buffer | null>();
+    // Cache Mistral OCR reads per screenshot evidence id (see getOcrArtifact).
+    const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
 
     const seen = new Set<string>();
     // Track which sites produced at least one offer (text or disclaimer passes).
@@ -353,11 +407,16 @@ async function processAnalysis(
         let effective = offer;
         let aiAssisted = false;
         if (offer.confidence < aiThreshold || (effective.vehicleModel === null && effective.offerType !== "service")) {
+          let ocrModelHint: string | null = null;
+          if (effective.vehicleModel === null && screenshotRow) {
+            const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, screenshotBuffer);
+            if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
+          }
           const enrichment = await enricher.enrich({
             pageText,
             brand: site.brand,
             current: effective,
-            screenshotBuffer,
+            ocrModelHint,
           });
           if (enrichment) {
             effective = { ...effective, ...enrichment };
@@ -500,11 +559,16 @@ async function processAnalysis(
 
         let aiAssisted = false;
         if (effective.confidence < aiThreshold || effective.vehicleModel === null) {
+          let ocrModelHint: string | null = null;
+          if (effective.vehicleModel === null) {
+            const artifact = await getOcrArtifact(db, runId, row, ocrCache, screenshotBuffer);
+            if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
+          }
           const enrichment = await enricher.enrich({
             pageText,
             brand: site.brand,
             current: effective,
-            screenshotBuffer,
+            ocrModelHint,
           });
           if (enrichment) {
             effective = { ...effective, ...enrichment };
@@ -581,21 +645,22 @@ async function processAnalysis(
 
     // Image pass: sites that produced zero text-extractable offers may have
     // image-only content (e.g. carousel slides on platforms that render offers
-    // as graphics). Send each screenshot evidence row to Claude Vision to
-    // extract offers directly from the image. No-op when AI is not configured.
+    // as graphics). OCR each screenshot evidence row with Mistral, then run
+    // the same deterministic extractor used for DOM text over the OCR'd text.
+    // No-op when Mistral is not configured.
     const imagePassSiteIds = siteIdsInRun.filter((id) => !siteOfferInserted.has(id));
     if (imagePassSiteIds.length > 0) {
-      const aiActive = Boolean(process.env.ANTHROPIC_API_KEY);
+      const ocrActive = isMistralConfigured();
       const zeroSiteNames = imagePassSiteIds.map((id) => {
         const r = rows.find((r) => r.evidence.siteId === id);
         return r?.site.name ?? id;
       });
-      if (!aiActive) {
+      if (!ocrActive) {
         console.warn(
           `[analysis] WARNING: ${imagePassSiteIds.length} site(s) produced zero text offers and appear image-only, ` +
-          `but ANTHROPIC_API_KEY is not set so the image pass is disabled. ` +
+          `but MISTRAL_API_KEY is not set so the image pass is disabled. ` +
           `These sites will have no offers: ${zeroSiteNames.join(", ")}. ` +
-          `Set ANTHROPIC_API_KEY in .env to enable Claude Vision extraction for image-only platforms.`
+          `Set MISTRAL_API_KEY in .env to enable OCR extraction for image-only platforms.`
         );
       } else {
         console.log(`[analysis] image pass: ${imagePassSiteIds.length} sites with zero text offers: ${zeroSiteNames.join(", ")}`);
@@ -625,22 +690,24 @@ async function processAnalysis(
         for (const screenshotRow of shots) {
           const buf = await getEvidenceBody(screenshotRow);
           if (buf) {
-            // Use bulk extraction: one call returns ALL offers visible in the image.
-            const extracted = await enricher.extractAllFromImage(buf, site.brand);
+            const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
+            const extracted = artifact && artifact.imageText.trim()
+              ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: site.brand })
+              : [];
             console.log(`[analysis] image pass site=${site.name} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
-            for (const enrichment of extracted) {
-              if (enrichment.confidence < 0.3) continue;
+            for (const offer of extracted) {
+              if (offer.confidence < 0.3) continue;
               const sig = [
                 siteId,
-                enrichment.offerType,
-                enrichment.vehicleModel ?? "",
-                enrichment.monthlyPayment ?? "",
-                enrichment.apr ?? "",
-                enrichment.termMonths ?? "",
-                enrichment.cashIncentive ?? "",
-                enrichment.salePrice ?? "",
-                enrichment.dueAtSigning ?? "",
-                enrichment.mileageAllowance ?? "",
+                offer.offerType,
+                offer.vehicleModel ?? "",
+                offer.monthlyPayment ?? "",
+                offer.apr ?? "",
+                offer.termMonths ?? "",
+                offer.cashIncentive ?? "",
+                offer.salePrice ?? "",
+                offer.dueAtSigning ?? "",
+                offer.mileageAllowance ?? "",
               ].join("|");
               if (!seen.has(sig)) {
                 seen.add(sig);
@@ -648,37 +715,37 @@ async function processAnalysis(
                   collectionRunId: runId,
                   siteId,
                   sourceEvidenceId: screenshotRow.id,
-                  offerType: enrichment.offerType,
-                  vehicleMake: enrichment.vehicleMake,
-                  vehicleModel: enrichment.vehicleModel,
-                  vehicleTrim: enrichment.vehicleTrim,
-                  monthlyPayment: enrichment.monthlyPayment,
-                  apr: enrichment.apr,
-                  cashIncentive: enrichment.cashIncentive,
-                  salePrice: enrichment.salePrice,
-                  termMonths: enrichment.termMonths,
-                  dueAtSigning: enrichment.dueAtSigning,
+                  offerType: offer.offerType,
+                  vehicleMake: offer.vehicleMake,
+                  vehicleModel: offer.vehicleModel,
+                  vehicleTrim: offer.vehicleTrim,
+                  monthlyPayment: offer.monthlyPayment,
+                  apr: offer.apr,
+                  cashIncentive: offer.cashIncentive,
+                  salePrice: offer.salePrice,
+                  termMonths: offer.termMonths,
+                  dueAtSigning: offer.dueAtSigning,
                   mileageAllowance:
-                    enrichment.offerType === "lease"
-                      ? enrichment.mileageAllowance ?? parseMileage(enrichment.disclaimerText)
+                    offer.offerType === "lease"
+                      ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText)
                       : null,
-                  rawText: null,
-                  normalizedJson: { aiAssisted: true, source: "image_extraction" },
-                  disclaimerText: enrichment.disclaimerText,
-                  confidence: enrichment.confidence,
+                  rawText: offer.rawText,
+                  normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
+                  disclaimerText: offer.disclaimerText,
+                  confidence: offer.confidence,
                 });
-                const COMPLIANCE_TYPES: typeof enrichment.offerType[] = ["lease", "finance", "cash"];
-                const result = COMPLIANCE_TYPES.includes(enrichment.offerType)
+                const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
+                const result = COMPLIANCE_TYPES.includes(offer.offerType)
                   ? await grader.grade({
                       evidenceId: screenshotRow.id,
-                      offerType: enrichment.offerType,
-                      disclaimerText: enrichment.disclaimerText,
-                      adText: null,
+                      offerType: offer.offerType,
+                      disclaimerText: offer.disclaimerText,
+                      adText: offer.rawText,
                       dealerName: site.name,
                       marketStates,
                       screenshotBuffer: buf,
                     })
-                  : { grade: "n/a", details: { notApplicable: true, offerType: enrichment.offerType } };
+                  : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
                 await db
                   .insert(complianceGrades)
                   .values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
@@ -851,6 +918,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       const capturedDisclaimers = await loadCapturedDisclaimers(runId);
       const screenshotIndex = await loadScreenshotIndex(runId);
       const screenshotCache = new Map<string, Buffer | null>();
+      const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
       const seen = new Set<string>();
       let offersInserted = 0;
 
@@ -876,7 +944,12 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           let effective = offer;
           let aiAssisted = false;
           if (offer.confidence < aiThreshold || (effective.vehicleModel === null && effective.offerType !== "service")) {
-            const enrichment = await enricher.enrich({ pageText, brand: site.brand, current: effective, screenshotBuffer });
+            let ocrModelHint: string | null = null;
+            if (effective.vehicleModel === null && screenshotRow) {
+              const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, screenshotBuffer);
+              if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
+            }
+            const enrichment = await enricher.enrich({ pageText, brand: site.brand, current: effective, ocrModelHint });
             if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
@@ -911,7 +984,12 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           seen.add(sig);
           let aiAssisted = false;
           if (effective.confidence < aiThreshold || effective.vehicleModel === null) {
-            const enrichment = await enricher.enrich({ pageText: text, brand: site.brand, current: effective, screenshotBuffer });
+            let ocrModelHint: string | null = null;
+            if (effective.vehicleModel === null) {
+              const artifact = await getOcrArtifact(db, runId, row, ocrCache, screenshotBuffer);
+              if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
+            }
+            const enrichment = await enricher.enrich({ pageText: text, brand: site.brand, current: effective, ocrModelHint });
             if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
@@ -927,8 +1005,9 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       }
 
       // Image pass: if HTML and disclaimer extraction found nothing, this site is
-      // likely image-only (e.g. DDC/Dealer.com). Send screenshots to AI vision.
-      if (offersInserted === 0 && Boolean(process.env.ANTHROPIC_API_KEY)) {
+      // likely image-only (e.g. DDC/Dealer.com). OCR screenshots with Mistral and
+      // run the same deterministic extractor used for DOM text.
+      if (offersInserted === 0 && isMistralConfigured()) {
         const siteInfo = htmlRows[0]?.site ?? disclaimerRows[0]?.site;
         if (siteInfo) {
           const marketStates = [siteInfo.state, ...(siteInfo.otherStates ?? [])].filter((s): s is string => Boolean(s));
@@ -942,18 +1021,21 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             }
             const buf = screenshotCache.get(screenshotRow.id) ?? null;
             if (!buf) continue;
-            const extracted = await enricher.extractAllFromImage(buf, siteInfo.brand);
+            const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
+            const extracted = artifact && artifact.imageText.trim()
+              ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: siteInfo.brand })
+              : [];
             console.log(`[partial-analysis] image pass site=${siteInfo.name} mission=${missionType} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
-            for (const enrichment of extracted) {
-              if (enrichment.confidence < 0.3) continue;
-              const sig = [siteId, enrichment.offerType, enrichment.vehicleModel ?? "", enrichment.monthlyPayment ?? "", enrichment.apr ?? "", enrichment.termMonths ?? "", enrichment.cashIncentive ?? "", enrichment.dueAtSigning ?? "", enrichment.mileageAllowance ?? ""].join("|");
+            for (const offer of extracted) {
+              if (offer.confidence < 0.3) continue;
+              const sig = [siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? ""].join("|");
               if (seen.has(sig)) continue;
               seen.add(sig);
-              await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: screenshotRow.id, offerType: enrichment.offerType, vehicleMake: enrichment.vehicleMake, vehicleModel: enrichment.vehicleModel, vehicleTrim: enrichment.vehicleTrim, monthlyPayment: enrichment.monthlyPayment, apr: enrichment.apr, cashIncentive: enrichment.cashIncentive, termMonths: enrichment.termMonths, dueAtSigning: enrichment.dueAtSigning, mileageAllowance: enrichment.offerType === "lease" ? enrichment.mileageAllowance ?? parseMileage(enrichment.disclaimerText) : null, rawText: null, normalizedJson: { aiAssisted: true, source: "image_extraction" }, disclaimerText: enrichment.disclaimerText, confidence: enrichment.confidence });
-              const COMPLIANCE_TYPES: typeof enrichment.offerType[] = ["lease", "finance", "cash"];
-              const result = COMPLIANCE_TYPES.includes(enrichment.offerType)
-                ? await grader.grade({ evidenceId: screenshotRow.id, offerType: enrichment.offerType, disclaimerText: enrichment.disclaimerText, adText: null, dealerName: siteInfo.name, marketStates, screenshotBuffer: buf })
-                : { grade: "n/a", details: { notApplicable: true, offerType: enrichment.offerType } };
+              await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: screenshotRow.id, offerType: offer.offerType, vehicleMake: offer.vehicleMake, vehicleModel: offer.vehicleModel, vehicleTrim: offer.vehicleTrim, monthlyPayment: offer.monthlyPayment, apr: offer.apr, cashIncentive: offer.cashIncentive, salePrice: offer.salePrice, termMonths: offer.termMonths, dueAtSigning: offer.dueAtSigning, mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null, rawText: offer.rawText, normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" }, disclaimerText: offer.disclaimerText, confidence: offer.confidence });
+              const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
+              const result = COMPLIANCE_TYPES.includes(offer.offerType)
+                ? await grader.grade({ evidenceId: screenshotRow.id, offerType: offer.offerType, disclaimerText: offer.disclaimerText, adText: offer.rawText, dealerName: siteInfo.name, marketStates, screenshotBuffer: buf })
+                : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
               await db.insert(complianceGrades).values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
             }
           }

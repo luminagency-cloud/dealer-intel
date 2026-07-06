@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import sharp from "sharp";
 import { offerTypeEnum, type OfferType } from "@/lib/db";
 import type { ExtractedOffer } from "./extract";
 
@@ -12,6 +11,15 @@ import type { ExtractedOffer } from "./extract";
  * disclaimers the HTML pass missed). Rule-based analysis still handles the
  * routine majority; the offer confidence score is the routing seam (AD: AI is
  * secondary, not the default path).
+ *
+ * Text-only judgment call — this module never sees an image. When the
+ * rule-based guess is missing a vehicle model and a screenshot exists,
+ * runner.ts resolves the model deterministically first (Mistral OCR +
+ * extract.ts's findKnownModel()) and passes the result in as `ocrModelHint`.
+ * The zero-DOM-text "image pass" (image-only platforms like DDC/Dealer.com)
+ * also no longer routes through this module — runner.ts OCRs the screenshot
+ * with Mistral and runs the same deterministic extractOffers() used for DOM
+ * text. See src/lib/analysis/ocr-mistral.ts.
  *
  * Gated like the compliance grader: with no ANTHROPIC_API_KEY it's a no-op, so
  * the platform builds and runs unchanged. Drop a key in `.env` to activate.
@@ -44,25 +52,23 @@ export interface EnrichInput {
   brand: string | null;
   /** The rule-based offer being second-guessed. */
   current: ExtractedOffer;
-  /** Ad screenshot bytes (PNG). Provided when the vehicle model is absent from
-   *  text — DDC and similar image-only platforms bake the model name into the
-   *  ad graphic rather than the DOM, so the rule-based pass can't read it. */
-  screenshotBuffer?: Buffer | null;
+  /** Vehicle model already resolved deterministically from an ad screenshot
+   *  (Mistral OCR + findKnownModel()) when the rule-based pass found none —
+   *  DDC and similar image-only platforms bake the model name into the ad
+   *  graphic rather than the DOM. Null when there was no screenshot, OCR
+   *  failed, or no known model was found in the OCR'd text. */
+  ocrModelHint: string | null;
 }
 
 export interface OfferEnricher {
   /** Returns a corrected offer, or null if the pass is disabled or failed
    *  (caller keeps the rule-based offer). */
   enrich(input: EnrichInput): Promise<OfferEnrichment | null>;
-  /** Extracts ALL offers from a pure-image screenshot. Returns [] when the
-   *  image contains no offers or the pass is disabled. */
-  extractAllFromImage(screenshotBuffer: Buffer, brand: string | null): Promise<OfferEnrichment[]>;
 }
 
 /** Default when no API key is configured: AI is off, rule-based stands. */
 export class NoopOfferEnricher implements OfferEnricher {
   async enrich(): Promise<OfferEnrichment | null> { return null; }
-  async extractAllFromImage(): Promise<OfferEnrichment[]> { return []; }
 }
 
 const EnrichmentSchema = z.object({
@@ -83,50 +89,17 @@ const EnrichmentSchema = z.object({
   confidence: z.number(),
 });
 
-const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER from the visible text (and optional screenshot) of a dealership web page. A rule-based extractor has already produced a first guess; correct it.
+const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER from the visible text of a dealership web page. A rule-based extractor has already produced a first guess; correct it.
 
 Rules:
 - Identify the ONE offer the rule-based guess is anchored on (matched by its monthly payment / price), not every offer on the page. Multi-offer pages are why this is hard — keep the vehicle, payment, term, APR, cash, and due-at-signing consistent with that single ad.
 - offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
-- Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. When a screenshot is provided, look for the model name in the ad graphic — image-only platforms (e.g. DDC/Dealer.com) bake the vehicle name into the image rather than the DOM text.
+- Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. The rule-based guess's vehicleModel may already be resolved from an OCR'd ad image (image-only platforms bake the vehicle name into the image rather than the DOM) — trust it unless the page text clearly contradicts it.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
 - cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 cash back", "$500 off"). salePrice: the raw advertised sale or cash price of the vehicle (e.g. "Sale Price $28,999"). Use null when not present.
 - mileageAllowance: for lease offers, the annual mileage allowance in miles/year (e.g. "10,000 miles per year" → 10000). Use null when not a lease or not stated.
 - DISCLAIMER (hard rule): the disclaimer is the fine print tied to THIS specific ad (it sits with the offer, e.g. "MSRP $X. Lease for $Y/mo, $Z due at signing..."). It is NEVER the site-wide footer legalese (Terms of Use, Privacy, ©, "do not sell"). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in this corrected offer.`;
-
-const BULK_IMAGE_SYSTEM_PROMPT = `You extract ALL automotive dealer ADVERTISED OFFERS visible in a screenshot image. The page produced no DOM text, so the image is the only source.
-
-Rules:
-- Extract EVERY distinct offer visible in the image — there may be 1 to 10+ offers on a single page graphic.
-- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
-- Vehicle make/model/trim: read from the image. Use null when not stated — never guess.
-- Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
-- cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 off"). salePrice: the raw advertised sale price (e.g. "Sale Price $28,999"). Use null when not present.
-- mileageAllowance: for lease offers, the annual mileage allowance in miles/year (e.g. "10,000 miles per year" → 10000). Use null when not a lease or not stated.
-- DISCLAIMER (hard rule): the fine print tied to THIS specific ad. NEVER site-wide footer legalese (Terms of Use, Privacy, ©). Use null if no ad-specific disclaimer is present.
-- confidence: your 0..1 confidence in each extracted offer.
-- If the image contains no offers (e.g. it is a banner or navigation), return an empty array.`;
-
-const BulkExtractionSchema = z.object({
-  offers: z.array(
-    z.object({
-      offerType: z.enum(offerTypeEnum.enumValues as [OfferType, ...OfferType[]]),
-      vehicleMake: z.string().nullable(),
-      vehicleModel: z.string().nullable(),
-      vehicleTrim: z.string().nullable(),
-      monthlyPayment: z.number().nullable(),
-      apr: z.number().nullable(),
-      cashIncentive: z.number().nullable(),
-      salePrice: z.number().nullable(),
-      termMonths: z.number().int().nullable(),
-      dueAtSigning: z.number().nullable(),
-      mileageAllowance: z.number().int().nullable(),
-      disclaimerText: z.string().nullable(),
-      confidence: z.number(),
-    })
-  ),
-});
 
 /** Calls Claude with structured output to re-extract a low-confidence offer. */
 export class ClaudeOfferEnricher implements OfferEnricher {
@@ -137,11 +110,12 @@ export class ClaudeOfferEnricher implements OfferEnricher {
 
   async enrich(input: EnrichInput): Promise<OfferEnrichment | null> {
     const pageText = input.pageText.slice(0, this.maxPageChars);
+    const resolvedVehicleModel = input.current.vehicleModel ?? input.ocrModelHint;
     const current = {
       offerType: input.current.offerType,
       vehicle: [
         input.current.vehicleMake,
-        input.current.vehicleModel,
+        resolvedVehicleModel,
         input.current.vehicleTrim,
       ]
         .filter(Boolean)
@@ -161,45 +135,12 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       `Rule-based guess:\n${JSON.stringify(current)}\n\n` +
       `Page text:\n${pageText}`;
 
-    // Include the ad screenshot when provided. Resize to fit within Claude's
-    // 8000px per-dimension limit — full-page Playwright captures can be 15 000px+ tall.
-    let imageBase64: string | null = null;
-    if (input.screenshotBuffer && input.screenshotBuffer.length > 0) {
-      try {
-        const resized = await sharp(input.screenshotBuffer)
-          .resize({ width: 900, height: 7900, fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: 60 })
-          .toBuffer();
-        imageBase64 = resized.toString("base64");
-      } catch {
-        // Non-fatal — fall back to text-only enrichment.
-      }
-    }
-    const useImage = imageBase64 !== null;
-
     try {
       const response = await this.client.messages.parse({
         model: this.model,
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: useImage
-              ? [
-                  {
-                    type: "image" as const,
-                    source: {
-                      type: "base64" as const,
-                      media_type: "image/jpeg" as const,
-                      data: imageBase64!,
-                    },
-                  },
-                  { type: "text" as const, text: textContent },
-                ]
-              : textContent,
-          },
-        ],
+        messages: [{ role: "user", content: textContent }],
         output_config: { format: zodOutputFormat(EnrichmentSchema) },
       });
       return response.parsed_output ?? null;
@@ -208,44 +149,6 @@ export class ClaudeOfferEnricher implements OfferEnricher {
       return null;
     }
   }
-
-  async extractAllFromImage(screenshotBuffer: Buffer, brand: string | null): Promise<OfferEnrichment[]> {
-    let imageBase64: string | null = null;
-    try {
-      const resized = await sharp(screenshotBuffer)
-        .resize({ width: 1200, height: 7900, fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      imageBase64 = resized.toString("base64");
-    } catch {
-      return [];
-    }
-    try {
-      const response = await this.client.messages.parse({
-        model: this.model,
-        max_tokens: 4096,
-        system: BULK_IMAGE_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image" as const,
-                source: { type: "base64" as const, media_type: "image/jpeg" as const, data: imageBase64 },
-              },
-              { type: "text" as const, text: `Dealer brand: ${brand ?? "unknown"}. Extract all offers visible in this image.` },
-            ],
-          },
-        ],
-        output_config: { format: zodOutputFormat(BulkExtractionSchema) },
-      });
-      return response.parsed_output?.offers ?? [];
-    } catch (err) {
-      console.error("AI bulk image extraction failed:", err);
-      return [];
-    }
-  }
-
 }
 
 /** Returns the Claude enricher when a key is configured, else the no-op. The

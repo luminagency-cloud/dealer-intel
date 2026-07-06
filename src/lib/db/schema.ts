@@ -461,6 +461,35 @@ export const complianceGrades = pgTable(
   ]
 );
 
+/** Mistral OCR reads for image-only evidence (Phase 12 image pass). One row
+ *  per screenshot, upserted on re-analysis — mirrors compliance_grades. The
+ *  OCR text is diagnostic/audit only; classification runs deterministically
+ *  over `imageText` in extract.ts, never inside the OCR call itself. */
+export const ocrArtifacts = pgTable(
+  "ocr_artifacts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    evidenceId: uuid("evidence_id")
+      .notNull()
+      .references(() => evidence.id, { onDelete: "cascade" }),
+    collectionRunId: uuid("collection_run_id")
+      .notNull()
+      .references(() => collectionRuns.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    imageText: text("image_text"),
+    /** Per-page markdown/text/dimensions/blocks/confidence from the provider —
+     *  diagnostic only, never fed back into classification. */
+    pagesJson: jsonb("pages_json"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("ocr_artifacts_evidence_unique").on(table.evidenceId),
+  ]
+);
+
 /** Platform users — operators and dealer clients. Operators have full admin
  *  access; dealers see only the run groups they're associated with via
  *  user_run_groups. Passwords are bcrypt-hashed. */

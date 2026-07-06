@@ -1,4 +1,5 @@
 import Link from "next/link";
+import packageJson from "../../../package.json";
 import { signOut } from "@/auth";
 import { requireSession } from "@/lib/session";
 import { SettingsDropdown } from "@/components/settings-dropdown";
@@ -36,7 +37,7 @@ export default async function AdminLayout({
         <div className="app-shell flex h-14 items-center justify-between px-4">
           <div className="flex items-center gap-8">
             <Link href="/" className="text-sm font-semibold text-zinc-900">
-              Dealer Intel
+              Dealer Intel <span className="font-normal text-zinc-600">v{packageJson.version}</span>
             </Link>
             <nav className="flex items-center gap-4 text-sm text-zinc-600">
               <Link href="/runs" className="hover:text-zinc-900">

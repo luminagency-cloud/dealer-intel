@@ -20,6 +20,8 @@ const envSchema = z.object({
   ADGRADER_CLIENT_SECRET: z.string().min(1).optional(),
   NEWS_API_URL: z.string().url().optional(),
   NEWS_API_KEY: z.string().min(1).optional(),
+  MISTRAL_API_KEY: z.string().min(1).optional(),
+  MISTRAL_OCR_MODEL: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -71,3 +73,5 @@ export const isAdScoreConfigured = () =>
       process.env.ADGRADER_CLIENT_ID &&
       process.env.ADGRADER_CLIENT_SECRET
   );
+
+export const isMistralConfigured = () => Boolean(process.env.MISTRAL_API_KEY);

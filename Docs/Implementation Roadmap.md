@@ -58,19 +58,32 @@ What remains open:
 
 ### AI-Assisted Analysis
 
-Status: **implemented, configured, and producing AI-assisted offers**
+Status: **implemented, configured, and producing AI-assisted offers** (text
+pass); image-only OCR pass moved from Claude Vision to Mistral OCR on
+2026-07-06.
 
 Evidence:
 
-- `src/lib/analysis/ai-enrich.ts` contains `ClaudeOfferEnricher`.
-- `getOfferEnricher()` selects Claude when `ANTHROPIC_API_KEY` is present.
+- `src/lib/analysis/ai-enrich.ts` contains `ClaudeOfferEnricher` — text-only
+  low-confidence correction, gated on `ANTHROPIC_API_KEY`. It never receives
+  an image.
+- `src/lib/analysis/ocr-mistral.ts` contains `runMistralOcr` — OCRs image-only
+  screenshots, gated on `MISTRAL_API_KEY`. `runner.ts` runs the OCR'd text
+  through the same deterministic `extractOffers()` used for DOM text (Mistral
+  reads the ad; the app classifies it) and persists the raw OCR read to the
+  `ocr_artifacts` table for audit/debug.
 - The local `.env.local` contains `ANTHROPIC_API_KEY`.
 - A read-only database check found 146 offers total, with 25 marked
-  `normalized_json.aiAssisted=true`.
+  `normalized_json.aiAssisted=true` (pre-migration figure — from the Claude
+  Vision era).
 
 What remains open:
 
-- No known AI wiring work.
+- `MISTRAL_API_KEY` is not yet in `.env.local` — the image-only pass is
+  currently disabled until it's added.
+- The `ocr_artifacts` migration (`drizzle/0026_classy_the_spike.sql`) has been
+  generated but not yet applied — run `npm run db:migrate` before the image
+  pass can write OCR artifacts.
 - If the UI does not show the AI badge for AI-assisted rows, that is a UI bug,
   not an integration task.
 

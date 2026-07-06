@@ -82,8 +82,13 @@ Analysis is re-runnable and does not visit dealer sites.
 The runner reads stored evidence, extracts offers, grades compliance, and writes
 results back to analysis tables.
 
-Rule-based extraction handles the normal path. Claude is a secondary pass for
-hard cases when `ANTHROPIC_API_KEY` is configured.
+Rule-based extraction handles the normal path. Claude is a secondary,
+text-only pass for low-confidence corrections when `ANTHROPIC_API_KEY` is
+configured. Image-only pages (zero DOM-text offers) are OCR'd with Mistral
+(`MISTRAL_API_KEY`) and run through the same deterministic extractor as DOM
+text — Mistral reads the image, the app classifies it. OCR text is stored in
+`ocr_artifacts` (one row per screenshot) for audit/debug, never fed back into
+classification.
 
 AdScore compliance is implemented through `AdScoreComplianceGrader` and is used
 when all `ADGRADER_*` variables are configured. Otherwise the system falls back
@@ -95,6 +100,7 @@ Key files:
 - `src/lib/analysis/extract.ts`
 - `src/lib/analysis/compliance.ts`
 - `src/lib/analysis/ai-enrich.ts`
+- `src/lib/analysis/ocr-mistral.ts`
 - `src/components/analysis-section.tsx`
 
 ## Reporting
