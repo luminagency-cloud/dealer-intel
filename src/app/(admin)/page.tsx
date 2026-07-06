@@ -13,14 +13,10 @@ import {
 import { getLocalNewsPullStatus, isNewsConfigured } from "@/lib/news";
 import { getInventoryFreshnessStatus, isInventoryConfigured } from "@/lib/inventory";
 import { getActiveInventoryBatch, getInventoryBatchStatus } from "@/lib/inventory-batch";
+import { formatCollectDetail, formatAnalyzeDetail, formatInventoryDetail, getLiveAnalysisProgress } from "@/lib/coverage";
 import { refreshNews } from "./actions";
 
 export const dynamic = "force-dynamic";
-
-/** Joins non-empty detail fragments with "·", e.g. ["11 of 14 groups", "2 failed", null] → "11 of 14 groups · 2 failed". */
-function joinDetail(parts: (string | null | false)[]): string {
-  return parts.filter((p): p is string => Boolean(p)).join(" · ");
-}
 
 // ── step dot ──────────────────────────────────────────────────────────────────
 
@@ -328,29 +324,9 @@ export default async function HomePage() {
       {/* Steps */}
       <div className="mb-6 flex flex-col rounded-xl border border-zinc-200 bg-white px-6 pt-6">
         <Step n={1} label="Collect data" state={collectState}
-          detail={
-            collectCoverage.total === 0
-              ? "No groups configured"
-              : collectCoverage.passing + collectCoverage.failing + collectCoverage.running === 0
-                ? "Not started this week"
-                : joinDetail([
-                    `${collectCoverage.passing} of ${collectCoverage.total} groups collected`,
-                    collectCoverage.failing > 0 ? `${collectCoverage.failing} failed` : null,
-                    collectCoverage.running > 0 ? `${collectCoverage.running} running` : null,
-                  ])
-          } />
+          detail={formatCollectDetail(collectCoverage)} />
         <Step n={2} label="Analyze offers" state={analyzeState}
-          detail={
-            collectCoverage.passing === 0
-              ? "—"
-              : joinDetail([
-                  `${analyzeCoverage.analyzed} of ${analyzeCoverage.total} groups analyzed`,
-                  analyzeCoverage.analyzing > 0 ? `${analyzeCoverage.analyzing} running` : null,
-                  (analyzeCoverage.pageCount > 0 || analyzeCoverage.offerCount > 0)
-                    ? `${analyzeCoverage.pageCount} pages → ${analyzeCoverage.offerCount} ads found`
-                    : null,
-                ])
-          } />
+          detail={formatAnalyzeDetail(analyzeCoverage, collectCoverage.passing, getLiveAnalysisProgress(currentGroups))} />
         <Step n={3} label="Load news" state={newsState}
           detail={
             newsPullStatus
@@ -370,13 +346,7 @@ export default async function HomePage() {
             detail={
               inventoryActive
                 ? `Running — ${inventoryProgress?.done ?? 0} of ${inventoryProgress?.total ?? 0} dealers`
-                : inventoryStatus?.ranThisWeek
-                  ? joinDetail([
-                      `${inventoryStatus.okCount} of ${inventoryStatus.totalActiveSites} dealers`,
-                      inventoryStatus.failedCount > 0 ? `${inventoryStatus.failedCount} failed` : null,
-                      `last run ${inventoryStatus.lastRunAt?.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`,
-                    ])
-                  : "Not run this week"
+                : formatInventoryDetail(inventoryStatus)
             }>
             <Link href="/inventory" className="mt-1.5 inline-block text-xs text-zinc-700 hover:text-zinc-600 underline underline-offset-2">
               {inventoryActive ? "View progress →" : "Go to inventory →"}

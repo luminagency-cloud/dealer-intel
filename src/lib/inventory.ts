@@ -1,20 +1,36 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb, inventoryResults, sites } from "@/lib/db";
 import { getISOWeekLabel } from "@/lib/cycle";
+import { ensureLocalInventoryApi } from "@/lib/local-inventory-process";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
+// Some dealer sites block the deployed inventory API's IP but pass fine when
+// it runs on the operator's own machine. RUN_INVENTORY_LOCALLY switches the
+// collector to a locally-running instance of the same service (see
+// local-inventory-process.ts, which auto-starts it) instead of editing env
+// vars by hand every time. Never active in production, regardless of the flag.
+export function runningLocally(): boolean {
+  return process.env.NODE_ENV !== "production" && process.env.RUN_INVENTORY_LOCALLY === "true";
+}
+
 export const isInventoryConfigured = (): boolean =>
-  Boolean(process.env.INVENTORY_API_URL && process.env.INVENTORY_API_KEY);
+  runningLocally()
+    ? Boolean(process.env.INVENTORY_API_URL_LOCAL)
+    : Boolean(process.env.INVENTORY_API_URL && process.env.INVENTORY_API_KEY);
 
 function apiBase(): string {
+  if (runningLocally()) return process.env.INVENTORY_API_URL_LOCAL ?? "";
   return process.env.INVENTORY_API_URL ?? "";
 }
 
 function apiHeaders(): HeadersInit {
-  return { "x-api-key": process.env.INVENTORY_API_KEY ?? "", "Content-Type": "application/json" };
+  const key = runningLocally()
+    ? process.env.INVENTORY_API_KEY_LOCAL ?? process.env.INVENTORY_API_KEY ?? ""
+    : process.env.INVENTORY_API_KEY ?? "";
+  return { "x-api-key": key, "Content-Type": "application/json" };
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +96,7 @@ export type CollectInventoryInput = {
 export async function collectInventoryForDealer(
   input: CollectInventoryInput
 ): Promise<InventoryApiResult | null> {
+  if (runningLocally()) await ensureLocalInventoryApi();
   const base = apiBase();
   if (!base) return null;
   const endpoint = `${base}/v1/inventory`;

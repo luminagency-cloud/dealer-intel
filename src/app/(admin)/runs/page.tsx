@@ -18,6 +18,8 @@ import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { createRun, deleteSelectedRuns } from "./actions";
 import { fmtDateTime } from "@/lib/fmt-date";
 import { getISOWeekLabel } from "@/lib/cycle";
+import { getCycleGroupStatus, summarizeCollectCoverage, summarizeAnalyzeCoverage } from "@/lib/db/ops-board";
+import { formatCollectDetail, formatAnalyzeDetail, getLiveAnalysisProgress } from "@/lib/coverage";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +42,9 @@ export default async function RunsPage({
     );
   }
 
-  const [runs, groups, allSites, adHocRows, activeMissions] =
+  const currentCycle = getISOWeekLabel();
+
+  const [runs, groups, allSites, adHocRows, activeMissions, currentGroups] =
     await Promise.all([
       listCollectionRuns(),
       getDb().select().from(runGroups).orderBy(asc(runGroups.name)),
@@ -59,6 +63,7 @@ export default async function RunsPage({
         .from(missions)
         .where(eq(missions.active, true))
         .orderBy(asc(missions.name)),
+      getCycleGroupStatus(currentCycle),
     ]);
   const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]));
   const siteNames = Object.fromEntries(allSites.map((s) => [s.id, s.name]));
@@ -70,6 +75,9 @@ export default async function RunsPage({
     adHocNames.set(row.runId, list);
   }
 
+  const collectCoverage = summarizeCollectCoverage(currentGroups);
+  const analyzeCoverage = summarizeAnalyzeCoverage(currentGroups);
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
@@ -79,7 +87,7 @@ export default async function RunsPage({
             groups={groups.map((g) => ({ id: g.id, name: g.name }))}
             sites={activeSites.map((s) => ({ id: s.id, name: s.name }))}
             missions={activeMissions}
-            defaultCycle={getISOWeekLabel()}
+            defaultCycle={currentCycle}
           />
           <button
             type="submit"
@@ -88,6 +96,16 @@ export default async function RunsPage({
             New Run
           </button>
         </form>
+      </div>
+
+      <div className="mb-6 rounded-lg border border-zinc-200 bg-white px-4 py-3 text-sm">
+        <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-zinc-700">
+          This week · {currentCycle}
+        </p>
+        <p className="text-zinc-800">Collect: {formatCollectDetail(collectCoverage)}</p>
+        <p className="mt-0.5 text-zinc-800">
+          Analyze: {formatAnalyzeDetail(analyzeCoverage, collectCoverage.passing, getLiveAnalysisProgress(currentGroups))}
+        </p>
       </div>
 
       {error && (

@@ -1,8 +1,10 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, runGroupMembers, runGroups, sites } from "@/lib/db";
 import { inventoryResults } from "@/lib/db/schema";
-import { isInventoryConfigured, brandsToMakeAllowList } from "@/lib/inventory";
+import { isInventoryConfigured, brandsToMakeAllowList, getInventoryFreshnessStatus, runningLocally } from "@/lib/inventory";
 import { getActiveInventoryBatch } from "@/lib/inventory-batch";
+import { checkLocalInventoryHealth } from "@/lib/local-inventory-process";
+import { formatInventoryDetail } from "@/lib/coverage";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { InventoryTable, type InventorySiteRow } from "./inventory-table";
 
@@ -19,12 +21,16 @@ export default async function InventoryPage() {
   }
 
   const configured = isInventoryConfigured();
+  const isLocal = runningLocally();
+  const localApiUrl = process.env.INVENTORY_API_URL_LOCAL ?? "";
+  const localApiHealthy = isLocal && localApiUrl ? await checkLocalInventoryHealth(localApiUrl) : false;
   const db = getDb();
 
-  const [allGroups, allSites, allMembers] = await Promise.all([
+  const [allGroups, allSites, allMembers, freshness] = await Promise.all([
     db.select().from(runGroups).orderBy(asc(runGroups.name)),
     db.select().from(sites).orderBy(asc(sites.name)),
     db.select({ groupId: runGroupMembers.runGroupId, siteId: runGroupMembers.siteId }).from(runGroupMembers),
+    configured ? getInventoryFreshnessStatus() : Promise.resolve(null),
   ]);
 
   const activeSites = allSites.filter((s) => s.active);
@@ -87,6 +93,11 @@ export default async function InventoryPage() {
             <p className="mt-0.5 text-sm text-zinc-700">
               Collect live vehicle inventory counts via the inventory API.
             </p>
+            {configured && (
+              <p className="mt-1 text-sm font-medium text-zinc-800">
+                This week: {formatInventoryDetail(freshness)}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs text-zinc-700 mr-1">Age:</span>
@@ -103,6 +114,22 @@ export default async function InventoryPage() {
         <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <strong>Not configured.</strong> Set <code>INVENTORY_API_URL</code> and{" "}
           <code>INVENTORY_API_KEY</code> in your <code>.env</code> to enable collection.
+        </div>
+      )}
+
+      {isLocal && !localApiHealthy && (
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <strong>Local inventory mode is on, but the API isn&apos;t responding</strong> at{" "}
+          <code>{localApiUrl || "(INVENTORY_API_URL_LOCAL not set)"}</code>. Make sure it&apos;s
+          running — <code>npm run start:local</code> in <code>dealer-inventory-api</code> — before
+          running a collection, or it will fail.
+        </div>
+      )}
+
+      {isLocal && localApiHealthy && (
+        <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <strong>Local inventory mode is on.</strong> Using <code>{localApiUrl}</code> instead of
+          the deployed API.
         </div>
       )}
 

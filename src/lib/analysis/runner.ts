@@ -63,6 +63,20 @@ export function getAnalysisProgress(
   return analysisProgress.get(runId) ?? null;
 }
 
+/** Summed live progress across several concurrently-analyzing runs (e.g. one
+ *  per group), for a single "N of M pages" figure across a week's groups. */
+export function getAnalysisProgressForRuns(runIds: string[]): { processed: number; total: number } {
+  let processed = 0, total = 0;
+  for (const runId of runIds) {
+    const p = analysisProgress.get(runId);
+    if (p) {
+      processed += p.processed;
+      total += p.total;
+    }
+  }
+  return { processed, total };
+}
+
 interface SiteInfo {
   brand: string | null;
   name: string;
