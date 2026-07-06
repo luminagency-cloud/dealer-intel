@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useCallback, useRef } from "react";
-import { runInventoryForSite } from "./actions";
+import { useState, useEffect } from "react";
+import { runInventoryBatch } from "./actions";
 import { fmtDateTime } from "@/lib/fmt-date";
 
 export type MakeSubtotal = { make: string; inStock: number; inTransit: number };
@@ -33,19 +33,39 @@ type RowPhase =
   | { kind: "ok"; totals?: { inStock: number; inTransit: number; displayValue: string }; makeSubtotals?: MakeSubtotal[]; models?: ModelRow[] }
   | { kind: "failed"; error: { message: string; code: string; statusCode?: number } };
 
+type BatchStatusPayload = {
+  active: boolean;
+  siteIds: string[];
+  current: string | null;
+  startedAt: string | null;
+  results: Record<
+    string,
+    {
+      status: "ok" | "failed";
+      totals?: { inStock: number; inTransit: number; displayValue: string };
+      makeSubtotals?: MakeSubtotal[];
+      models?: ModelRow[];
+      error?: { message: string; code: string; statusCode?: number };
+    }
+  >;
+};
+
 export function InventoryTable({
   sites,
   groups,
   configured,
+  initialActiveBatch,
 }: {
   sites: InventorySiteRow[];
   groups: { id: string; name: string; siteIds: string[] }[];
   configured: boolean;
+  initialActiveBatch: { batchId: string; siteIds: string[]; startedAt: Date } | null;
 }) {
   const router = useRouter();
   const [phases, setPhases] = useState<Record<string, RowPhase>>({});
-  const [batchTotal, setBatchTotal] = useState<number | null>(null);
-  const [batchStartedAt, setBatchStartedAt] = useState<Date | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(initialActiveBatch?.batchId ?? null);
+  const [batchTotal, setBatchTotal] = useState<number | null>(initialActiveBatch?.siteIds.length ?? null);
+  const [batchStartedAt, setBatchStartedAt] = useState<Date | null>(initialActiveBatch?.startedAt ?? null);
   const [batchEndedAt, setBatchEndedAt] = useState<Date | null>(null);
 
   // Scope picker state
@@ -54,49 +74,74 @@ export function InventoryTable({
   const [checkedSites, setCheckedSites] = useState<Set<string>>(new Set());
   const [scopeOpen, setScopeOpen] = useState(false);
 
-  const setPhase = useCallback((id: string, phase: RowPhase) => {
-    setPhases((prev) => ({ ...prev, [id]: phase }));
-  }, []);
+  // Progress lives server-side (see inventory-batch.ts) so a started batch
+  // keeps running — and this table keeps reflecting it — no matter what the
+  // operator navigates to in the meantime. This effect just polls for
+  // display; it never drives the batch itself.
+  useEffect(() => {
+    if (!activeBatchId) return;
+    let cancelled = false;
 
-  // Shared queue — both individual clicks and batch runs feed into this.
-  const queueRef = useRef<string[]>([]);
-  const processingRef = useRef(false);
-
-  async function processQueue() {
-    if (processingRef.current) return;
-    processingRef.current = true;
-    while (queueRef.current.length > 0) {
-      const siteId = queueRef.current.shift()!;
-      setPhase(siteId, { kind: "running" });
+    async function poll() {
       try {
-        const result = await runInventoryForSite(siteId);
-        if (result.status === "ok") {
-          setPhase(siteId, { kind: "ok", totals: result.totals, makeSubtotals: result.makeSubtotals, models: result.models });
-        } else {
-          setPhase(siteId, { kind: "failed", error: result.error ?? { message: "Unknown error", code: "unknown" } });
-        }
-      } catch (err) {
-        setPhase(siteId, {
-          kind: "failed",
-          error: { message: err instanceof Error ? err.message : String(err), code: "client_error" },
-        });
-      }
-      router.refresh();
-    }
-    processingRef.current = false;
-  }
+        const res = await fetch(`/api/inventory/batch/${activeBatchId}/status`);
+        if (!res.ok || cancelled) return;
+        const data: BatchStatusPayload = await res.json();
+        if (cancelled) return;
 
-  function enqueue(ids: string[]) {
-    const fresh = ids.filter((id) => !queueRef.current.includes(id));
-    queueRef.current.push(...fresh);
+        setPhases((prev) => {
+          const next = { ...prev };
+          for (const id of data.siteIds) {
+            const result = data.results[id];
+            if (result) {
+              next[id] =
+                result.status === "ok"
+                  ? { kind: "ok", totals: result.totals, makeSubtotals: result.makeSubtotals, models: result.models }
+                  : { kind: "failed", error: result.error ?? { message: "Unknown error", code: "unknown" } };
+            } else if (id === data.current) {
+              next[id] = { kind: "running" };
+            } else if (data.active) {
+              next[id] = { kind: "queued" };
+            }
+          }
+          return next;
+        });
+        setBatchTotal(data.siteIds.length);
+        if (data.startedAt) setBatchStartedAt((prev) => prev ?? new Date(data.startedAt!));
+
+        if (!data.active) {
+          setBatchEndedAt(new Date());
+          setActiveBatchId(null);
+          router.refresh();
+        }
+      } catch {
+        // transient network error — next tick retries
+      }
+    }
+
+    poll();
+    const timer = setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeBatchId, router]);
+
+  async function runBatchFor(ids: string[]) {
+    if (ids.length === 0) return;
     setPhases((prev) => {
       const next = { ...prev };
-      for (const id of fresh) {
+      for (const id of ids) {
         if (prev[id]?.kind !== "running") next[id] = { kind: "queued" };
       }
       return next;
     });
-    processQueue();
+    if (!activeBatchId) {
+      setBatchStartedAt(new Date());
+      setBatchEndedAt(null);
+    }
+    const { batchId } = await runInventoryBatch(ids);
+    setActiveBatchId(batchId);
   }
 
   function scopeSiteIds(): string[] {
@@ -109,26 +154,6 @@ export function InventoryTable({
       return [...ids];
     }
     return [...checkedSites];
-  }
-
-  async function runScope() {
-    const ids = scopeSiteIds();
-    if (ids.length === 0) return;
-    setBatchTotal((ids.length + (batchTotal ?? 0)));
-    setBatchStartedAt((prev) => prev ?? new Date());
-    setBatchEndedAt(null);
-    enqueue(ids);
-    // Wait for the queue to drain so we can set batch end time
-    await new Promise<void>((resolve) => {
-      const interval = setInterval(() => {
-        if (!processingRef.current && queueRef.current.length === 0) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 200);
-    });
-    setBatchEndedAt(new Date());
-    setBatchTotal(null);
   }
 
   const anyActive = Object.values(phases).some((p) => p.kind === "running" || p.kind === "queued");
@@ -228,7 +253,7 @@ export function InventoryTable({
 
         {configured && (
           <button
-            onClick={runScope}
+            onClick={() => runBatchFor(scopeSiteIds())}
             disabled={anyActive || (scope === "groups" && checkedGroups.size === 0) || (scope === "custom" && checkedSites.size === 0)}
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
           >
@@ -304,7 +329,7 @@ export function InventoryTable({
                   site={site}
                   phase={phase}
                   configured={configured}
-                  onRun={() => enqueue([site.id])}
+                  onRun={() => runBatchFor([site.id])}
                 />
               );
             })}

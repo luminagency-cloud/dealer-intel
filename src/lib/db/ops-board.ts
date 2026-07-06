@@ -3,6 +3,7 @@ import { getDb } from "./index";
 import {
   collectionRuns,
   collectionRunSites,
+  evidence,
   missionResults,
   offers,
   reportSnapshots,
@@ -17,6 +18,11 @@ export type RunSummary = {
   status: RunStatus;
   doneMissions: number;
   totalMissions: number;
+  /** Evidence pages captured, summed over this group's member sites only
+   *  (an ad-hoc run's sites can span more than one group — see
+   *  `getCycleGroupStatus`). */
+  pageCount: number;
+  /** Ads found, summed over this group's member sites only — same caveat. */
   offerCount: number;
   analysisRunning: boolean;
   analysisDone: boolean;
@@ -79,13 +85,17 @@ export async function getCycleGroupStatus(weekLabel: string): Promise<GroupCycle
 
   const runIds = cycleRuns.map((r) => r.id);
 
-  const [allMissionResults, allOffers, snapshots, adHocSiteRows, allMembers] = await Promise.all([
+  const [allMissionResults, allEvidence, allOffers, snapshots, adHocSiteRows, allMembers] = await Promise.all([
     db
-      .select({ runId: missionResults.collectionRunId, status: missionResults.status })
+      .select({ runId: missionResults.collectionRunId, siteId: missionResults.siteId, status: missionResults.status })
       .from(missionResults)
       .where(inArray(missionResults.collectionRunId, runIds)),
     db
-      .select({ runId: offers.collectionRunId })
+      .select({ runId: evidence.collectionRunId, siteId: evidence.siteId })
+      .from(evidence)
+      .where(inArray(evidence.collectionRunId, runIds)),
+    db
+      .select({ runId: offers.collectionRunId, siteId: offers.siteId })
       .from(offers)
       .where(inArray(offers.collectionRunId, runIds)),
     db
@@ -112,24 +122,47 @@ export async function getCycleGroupStatus(weekLabel: string): Promise<GroupCycle
       .where(inArray(runGroupMembers.runGroupId, groupIds)),
   ]);
 
-  // runId → { total, done }
-  const missionMap = new Map<string, { total: number; done: number }>();
-  for (const mr of allMissionResults) {
-    const e = missionMap.get(mr.runId) ?? { total: 0, done: 0 };
-    e.total++;
-    if (mr.status !== "pending" && mr.status !== "running") e.done++;
-    missionMap.set(mr.runId, e);
+  // The hierarchy is runs -> groups -> sites -> pages/ads. A shared ad-hoc
+  // run's sites can span more than one group, so group-level totals can't
+  // just read a run's raw counts — they have to be built by summing
+  // per-(run, site) numbers over that group's own member sites. This map is
+  // the one source of truth every group total is derived from.
+  type SiteMetrics = { missionsTotal: number; missionsDone: number; pages: number; ads: number };
+  const runSiteMetrics = new Map<string, Map<string, SiteMetrics>>(); // runId -> siteId -> metrics
+  function bump(runId: string, siteId: string, patch: Partial<SiteMetrics>) {
+    const bySite = runSiteMetrics.get(runId) ?? new Map<string, SiteMetrics>();
+    const cur = bySite.get(siteId) ?? { missionsTotal: 0, missionsDone: 0, pages: 0, ads: 0 };
+    cur.missionsTotal += patch.missionsTotal ?? 0;
+    cur.missionsDone += patch.missionsDone ?? 0;
+    cur.pages += patch.pages ?? 0;
+    cur.ads += patch.ads ?? 0;
+    bySite.set(siteId, cur);
+    runSiteMetrics.set(runId, bySite);
   }
+  for (const mr of allMissionResults) {
+    bump(mr.runId, mr.siteId, {
+      missionsTotal: 1,
+      missionsDone: mr.status !== "pending" && mr.status !== "running" ? 1 : 0,
+    });
+  }
+  for (const e of allEvidence) bump(e.runId, e.siteId, { pages: 1 });
+  for (const o of allOffers) bump(o.runId, o.siteId, { ads: 1 });
 
-  const offerMap = new Map<string, number>();
-  for (const o of allOffers) offerMap.set(o.runId, (offerMap.get(o.runId) ?? 0) + 1);
-
-  // siteId → groupIds
+  // siteId → groupIds (for resolving which group(s) an ad-hoc run's sites belong to)
   const siteToGroups = new Map<string, Set<string>>();
   for (const m of allMembers) {
     const s = siteToGroups.get(m.siteId) ?? new Set();
     s.add(m.groupId);
     siteToGroups.set(m.siteId, s);
+  }
+
+  // groupId → member siteIds (for filtering a shared run's totals down to
+  // just this group's own sites)
+  const groupToSites = new Map<string, Set<string>>();
+  for (const m of allMembers) {
+    const s = groupToSites.get(m.groupId) ?? new Set();
+    s.add(m.siteId);
+    groupToSites.set(m.groupId, s);
   }
 
   // adHoc runId → groupIds (via site membership)
@@ -170,24 +203,89 @@ export async function getCycleGroupStatus(weekLabel: string): Promise<GroupCycle
 
   return groups.map((g) => {
     const run = groupToRun.get(g.id) ?? null;
-    const mc = run ? (missionMap.get(run.id) ?? { total: 0, done: 0 }) : null;
+    if (!run) {
+      return { groupId: g.id, groupName: g.name, run: null, snapshots: groupToSnapshots.get(g.id) ?? [] };
+    }
+
+    const memberSites = groupToSites.get(g.id) ?? new Set<string>();
+    const bySite = runSiteMetrics.get(run.id) ?? new Map<string, SiteMetrics>();
+    let doneMissions = 0, totalMissions = 0, pageCount = 0, offerCount = 0;
+    for (const [siteId, m] of bySite) {
+      if (!memberSites.has(siteId)) continue; // exclude other groups' sites on a shared ad-hoc run
+      doneMissions += m.missionsDone;
+      totalMissions += m.missionsTotal;
+      pageCount += m.pages;
+      offerCount += m.ads;
+    }
+
     return {
       groupId: g.id,
       groupName: g.name,
-      run: run
-        ? {
-            id: run.id,
-            status: run.status,
-            doneMissions: mc!.done,
-            totalMissions: mc!.total,
-            offerCount: offerMap.get(run.id) ?? 0,
-            analysisRunning: run.analysisStartedAt !== null && run.analysisCompletedAt === null,
-            analysisDone: run.analysisCompletedAt !== null,
-          }
-        : null,
+      run: {
+        id: run.id,
+        status: run.status,
+        doneMissions,
+        totalMissions,
+        pageCount,
+        offerCount,
+        analysisRunning: run.analysisStartedAt !== null && run.analysisCompletedAt === null,
+        analysisDone: run.analysisCompletedAt !== null,
+      },
       snapshots: groupToSnapshots.get(g.id) ?? [],
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Pure summary reducers — operate on already-fetched GroupCycleStatus[], no
+// DB access, so any page that's already called getCycleGroupStatus (home
+// page, and eventually /runs) can derive the same numbers without a second
+// round trip or a second, possibly-inconsistent query.
+// ---------------------------------------------------------------------------
+
+export type CollectCoverage = {
+  total: number;
+  passing: number;
+  failing: number;
+  running: number;
+  notStarted: number;
+};
+
+/** Buckets each group's collection status for the week. "Passing" mirrors
+ *  the same complete/review definition used elsewhere (e.g. the home page's
+ *  exceptions list) for whether a group's collection is considered done. */
+export function summarizeCollectCoverage(groups: GroupCycleStatus[]): CollectCoverage {
+  let passing = 0, failing = 0, running = 0, notStarted = 0;
+  for (const g of groups) {
+    const status = g.run?.status;
+    if (status === "complete" || status === "review") passing++;
+    else if (status === "failed") failing++;
+    else if (status === "running") running++;
+    else notStarted++; // no run yet, or still pending
+  }
+  return { total: groups.length, passing, failing, running, notStarted };
+}
+
+export type AnalyzeCoverage = {
+  total: number;
+  analyzed: number;
+  analyzing: number;
+  notAnalyzed: number;
+  /** Sums of each group's own pageCount/offerCount — informational totals,
+   *  not a completion measure (a fully-analyzed week can still find 0 ads). */
+  pageCount: number;
+  offerCount: number;
+};
+
+export function summarizeAnalyzeCoverage(groups: GroupCycleStatus[]): AnalyzeCoverage {
+  let analyzed = 0, analyzing = 0, pageCount = 0, offerCount = 0;
+  for (const g of groups) {
+    if (g.run?.analysisDone) analyzed++;
+    else if (g.run?.analysisRunning) analyzing++;
+    pageCount += g.run?.pageCount ?? 0;
+    offerCount += g.run?.offerCount ?? 0;
+  }
+  return { total: groups.length, analyzed, analyzing, notAnalyzed: groups.length - analyzed - analyzing, pageCount, offerCount };
 }
 
 /** Aggregate pipeline status across all runs in a given ISO week. */

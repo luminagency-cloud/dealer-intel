@@ -1,22 +1,14 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-import { randomUUID } from "crypto";
-import { eq } from "drizzle-orm";
-import { getDb, sites } from "@/lib/db";
 import { requireSession } from "@/lib/session";
-import { collectAndStore, type CollectAndStoreResult } from "@/lib/inventory";
+import { startInventoryBatch } from "@/lib/inventory-batch";
 
-/** Run inventory collection for a single dealer. Returns the result so the
- *  client can update state immediately without waiting for a page refresh. */
-export async function runInventoryForSite(siteId: string): Promise<CollectAndStoreResult> {
+/** Starts (or extends) a background inventory batch for the given sites and
+ *  returns immediately. Collection runs off-request so it survives the
+ *  operator navigating elsewhere in the app — see `inventory-batch.ts`. The
+ *  client polls `/api/inventory/batch/[batchId]/status` for progress. */
+export async function runInventoryBatch(siteIds: string[]): Promise<{ batchId: string }> {
   await requireSession();
-  const db = getDb();
-  const [site] = await db.select().from(sites).where(eq(sites.id, siteId));
-  if (!site) throw new Error("Site not found");
-
-  const batchId = randomUUID();
-  const result = await collectAndStore(site, batchId);
-  revalidatePath("/inventory");
-  return result;
+  if (siteIds.length === 0) throw new Error("No sites selected");
+  return startInventoryBatch(siteIds);
 }

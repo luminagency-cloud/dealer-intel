@@ -2,6 +2,7 @@ import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, runGroupMembers, runGroups, sites } from "@/lib/db";
 import { inventoryResults } from "@/lib/db/schema";
 import { isInventoryConfigured, brandsToMakeAllowList } from "@/lib/inventory";
+import { getActiveInventoryBatch } from "@/lib/inventory-batch";
 import { DbNotConfigured } from "@/components/db-not-configured";
 import { InventoryTable, type InventorySiteRow } from "./inventory-table";
 
@@ -114,6 +115,7 @@ export default async function InventoryPage() {
           sites={tableRows}
           groups={groups}
           configured={configured}
+          initialActiveBatch={getActiveInventoryBatch()}
         />
       )}
     </div>

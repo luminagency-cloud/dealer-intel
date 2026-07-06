@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, max } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb, inventoryResults, sites } from "@/lib/db";
 import { getISOWeekLabel } from "@/lib/cycle";
 
@@ -227,24 +227,50 @@ export async function getLatestInventoryBySite(
 export type InventoryFreshnessStatus = {
   ranThisWeek: boolean;
   lastRunAt: Date | null;
-  siteCount: number;
+  /** Active sites whose *latest* result this week was "ok" (a dealer
+   *  retried after a failure counts by its latest outcome, not both). */
+  okCount: number;
+  /** Active sites whose latest result this week was "failed". */
+  failedCount: number;
+  /** Total active sites, for "N of totalActiveSites" coverage display. */
+  totalActiveSites: number;
 };
 
-/** Returns freshness info for the home page nag — whether inventory has been
- *  collected this ISO week and when it last ran. */
+/** Returns freshness info for the home page nag — how many active dealers
+ *  have inventory data this ISO week (out of all active dealers), split by
+ *  ok/failed, and when it was last collected. */
 export async function getInventoryFreshnessStatus(): Promise<InventoryFreshnessStatus> {
   const weekKey = getISOWeekLabel();
   const db = getDb();
 
-  const [thisWeek] = await db
-    .select({ lastRunAt: max(inventoryResults.collectedAt), siteCount: count() })
-    .from(inventoryResults)
-    .where(eq(inventoryResults.weekKey, weekKey));
+  const [[{ n: totalActiveSites }], rows] = await Promise.all([
+    db.select({ n: count() }).from(sites).where(eq(sites.active, true)),
+    db
+      .select({ siteId: inventoryResults.siteId, status: inventoryResults.status, collectedAt: inventoryResults.collectedAt })
+      .from(inventoryResults)
+      .where(eq(inventoryResults.weekKey, weekKey))
+      .orderBy(desc(inventoryResults.collectedAt)),
+  ]);
+
+  // Rows are latest-first; keep only the first (latest) row seen per site.
+  const latestBySite = new Map<string, { status: string; collectedAt: Date }>();
+  for (const r of rows) {
+    if (!latestBySite.has(r.siteId)) latestBySite.set(r.siteId, { status: r.status, collectedAt: r.collectedAt });
+  }
+
+  let okCount = 0, failedCount = 0, lastRunAt: Date | null = null;
+  for (const { status, collectedAt } of latestBySite.values()) {
+    if (status === "ok") okCount++;
+    else failedCount++;
+    if (!lastRunAt || collectedAt > lastRunAt) lastRunAt = collectedAt;
+  }
 
   return {
-    ranThisWeek: (thisWeek?.siteCount ?? 0) > 0,
-    lastRunAt: thisWeek?.lastRunAt ? new Date(thisWeek.lastRunAt) : null,
-    siteCount: thisWeek?.siteCount ?? 0,
+    ranThisWeek: latestBySite.size > 0,
+    lastRunAt,
+    okCount,
+    failedCount,
+    totalActiveSites,
   };
 }
 
