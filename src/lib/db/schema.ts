@@ -180,6 +180,7 @@ export const runGroupMembers = pgTable(
 export const runStatusEnum = pgEnum("run_status", [
   "pending",
   "running",
+  "paused",
   "review",
   "complete",
   "failed",
@@ -190,6 +191,7 @@ export type RunStatus = (typeof runStatusEnum.enumValues)[number];
 export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   pending: "Pending",
   running: "Running",
+  paused: "Paused",
   review: "Review",
   complete: "Complete",
   failed: "Failed",

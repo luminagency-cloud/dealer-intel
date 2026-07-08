@@ -728,6 +728,39 @@ function splitHtmlIntoCards(html: string): string[] {
     .map(b => b.text);
 }
 
+/** Detects combo ad chunks — a single OCR or text window that contains both
+ *  an APR offer and a monthly-payment offer. Image-based ad cards commonly
+ *  present two alternatives side-by-side (APR column / lease column) with no
+ *  "OR" text between them, so no separator is required. Whenever both fields
+ *  appear together the chunk is split into a pure-finance offer (APR only) and
+ *  a payment offer (lease if due-at-signing is present, otherwise finance).
+ *  Returns the original single offer when only one pricing field is present. */
+function splitComboOffer(offer: ExtractedOffer): ExtractedOffer[] {
+  if (offer.monthlyPayment === null || offer.apr === null) return [offer];
+
+  const financeOffer: ExtractedOffer = {
+    ...offer,
+    offerType: "finance",
+    monthlyPayment: null,
+    dueAtSigning: null,
+    mileageAllowance: null,
+    matches: Object.fromEntries(
+      Object.entries(offer.matches).filter(([k]) => k !== "monthlyPayment" && k !== "dueAtSigning")
+    ),
+  };
+
+  const paymentOffer: ExtractedOffer = {
+    ...offer,
+    offerType: offer.dueAtSigning !== null ? "lease" : "finance",
+    apr: null,
+    matches: Object.fromEntries(
+      Object.entries(offer.matches).filter(([k]) => k !== "apr")
+    ),
+  };
+
+  return [financeOffer, paymentOffer];
+}
+
 /** Reads HTML, segments offer cards, and returns one ExtractedOffer per
  *  distinct priced ad on the page. Returns empty array when no signal found. */
 export function extractOffers(
@@ -801,17 +834,26 @@ export function extractOffers(
     );
     const offer = extractOfferFromText(chunk, hints);
     if (!offer) continue;
-    const sig = offerSig(offer);
-    if (seen.has(sig)) continue;
-    seen.add(sig);
-    results.push(offer);
+    for (const split of splitComboOffer(offer)) {
+      const sig = offerSig(split);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      results.push(split);
+    }
   }
 
   // All windows duped to each other (e.g. a sticky-header repeating one price) —
   // fall back to a single full-page extraction so we don't lose the offer.
   if (results.length === 0) {
     const offer = extractOfferFromText(text, hints);
-    return offer ? [offer] : [];
+    if (!offer) return [];
+    const fallbackSeen = new Set<string>();
+    return splitComboOffer(offer).filter((s) => {
+      const sig = offerSig(s);
+      if (fallbackSeen.has(sig)) return false;
+      fallbackSeen.add(sig);
+      return true;
+    });
   }
 
   return results;

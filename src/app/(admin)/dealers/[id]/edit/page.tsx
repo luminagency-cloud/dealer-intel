@@ -33,7 +33,7 @@ export default async function EditDealerPage({
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-semibold text-zinc-900">
+      <h1 className="mb-6 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
         Edit Dealer
       </h1>
       <SiteForm
@@ -43,19 +43,19 @@ export default async function EditDealerPage({
         submitLabel="Save Changes"
       />
 
-      <div className="mt-8 max-w-2xl rounded-lg border border-zinc-200 bg-white shadow-sm">
-        <div className="border-b border-zinc-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-zinc-900">
+      <div className="mt-8 max-w-2xl rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
             Collection URLs per Mission
           </h2>
-          <p className="mt-0.5 text-xs text-zinc-700">
+          <p className="mt-0.5 text-xs text-zinc-700 dark:text-zinc-200">
             Where on this dealer&apos;s site each mission collects. Homepage
             missions fall back to the site URL when blank — only set one to point
             at a different page. Other missions discover and remember a URL when
             blank. Every listed URL is captured on each run.
           </p>
         </div>
-        <div className="divide-y divide-zinc-100">
+        <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {allMissions.map((mission) => {
             const config = configByMission.get(mission.id);
             return (
@@ -65,14 +65,14 @@ export default async function EditDealerPage({
                 className="px-4 py-4"
               >
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-medium text-zinc-900">
+                  <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                     {mission.name}{" "}
-                    <span className="text-xs font-normal text-zinc-700">
+                    <span className="text-xs font-normal text-zinc-700 dark:text-zinc-200">
                       ({MISSION_TYPE_LABELS[mission.missionType]}
                       {!mission.active && ", mission disabled"})
                     </span>
                   </h3>
-                  <label className="flex items-center gap-1.5 text-xs text-zinc-600">
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-200">
                     <input
                       type="checkbox"
                       name="active"
@@ -92,25 +92,25 @@ export default async function EditDealerPage({
                         ? `Blank → uses site URL (${site.url})`
                         : "Blank → discover from site URL"
                     }
-                    className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+                    className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none dark:border-zinc-600 dark:focus:border-zinc-400"
                   />
                   <textarea
                     name="alternateUrls"
                     rows={2}
                     defaultValue={(config?.alternateUrls ?? []).join("\n")}
                     placeholder="Additional URLs, one per line (optional)"
-                    className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+                    className="block w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none dark:border-zinc-600 dark:focus:border-zinc-400"
                   />
                 </div>
                 <div className="mt-2 flex items-center justify-between">
-                  <span className="text-xs text-zinc-700">
+                  <span className="text-xs text-zinc-700 dark:text-zinc-200">
                     {config?.lastSuccessAt
                       ? `Last success: ${new Date(config.lastSuccessAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
                       : "Never collected"}
                   </span>
                   <button
                     type="submit"
-                    className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
+                    className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
                     Save
                   </button>

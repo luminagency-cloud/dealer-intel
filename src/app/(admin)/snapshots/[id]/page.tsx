@@ -46,7 +46,7 @@ export default async function SnapshotDetailPage({
       <div className="mb-6">
         <Link
           href="/snapshots"
-          className="text-sm text-zinc-700 hover:underline"
+          className="text-sm text-zinc-700 hover:underline dark:text-zinc-200"
         >
           ← Snapshots
         </Link>
@@ -54,10 +54,10 @@ export default async function SnapshotDetailPage({
 
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-zinc-900">
+          <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
             {scopeLabel}
           </h1>
-          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
             Frozen
           </span>
         </div>
@@ -71,61 +71,61 @@ export default async function SnapshotDetailPage({
         </form>
       </div>
 
-      <div className="mb-8 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-        <dl className="divide-y divide-zinc-100 text-sm">
+      <div className="mb-8 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <dl className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-700">Snapshot ID</dt>
-            <dd className="font-mono text-zinc-900">{snapshot.id}</dd>
+            <dt className="text-zinc-700 dark:text-zinc-200">Snapshot ID</dt>
+            <dd className="font-mono text-zinc-900 dark:text-zinc-100">{snapshot.id}</dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-700">Source run</dt>
+            <dt className="text-zinc-700 dark:text-zinc-200">Source run</dt>
             <dd>
               <Link
                 href={`/runs/${snapshot.collectionRunId}`}
-                className="font-mono text-zinc-900 hover:underline"
+                className="font-mono text-zinc-900 hover:underline dark:text-zinc-100"
               >
                 {snapshot.collectionRunId}
               </Link>
             </dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-700">Offers · Sites</dt>
-            <dd className="text-zinc-900">
+            <dt className="text-zinc-700 dark:text-zinc-200">Offers · Sites</dt>
+            <dd className="text-zinc-900 dark:text-zinc-100">
               {snapshot.offerCount} · {snapshot.siteCount}
             </dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-700">Approved</dt>
-            <dd className="text-zinc-900">{formatDate(snapshot.approvedAt)}</dd>
+            <dt className="text-zinc-700 dark:text-zinc-200">Approved</dt>
+            <dd className="text-zinc-900 dark:text-zinc-100">{formatDate(snapshot.approvedAt)}</dd>
           </div>
           <div className="flex justify-between px-4 py-3">
-            <dt className="text-zinc-700">Approved by</dt>
-            <dd className="text-zinc-900">{snapshot.approvedBy}</dd>
+            <dt className="text-zinc-700 dark:text-zinc-200">Approved by</dt>
+            <dd className="text-zinc-900 dark:text-zinc-100">{snapshot.approvedBy}</dd>
           </div>
         </dl>
       </div>
 
-      <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
+      <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
           <div>
-            <h2 className="text-sm font-semibold text-zinc-900">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
               Frozen Offers{" "}
-              <span className="font-normal text-zinc-700">
+              <span className="font-normal text-zinc-700 dark:text-zinc-200">
                 — {offers.length}
               </span>
             </h2>
-            <p className="mt-0.5 text-xs text-zinc-700">
+            <p className="mt-0.5 text-xs text-zinc-700 dark:text-zinc-200">
               A snapshot in time. Re-running analysis on the source run will not
               change these rows.
             </p>
           </div>
           {Object.keys(gradeCounts).length > 0 && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-zinc-700">Compliance:</span>
+              <span className="text-zinc-700 dark:text-zinc-200">Compliance:</span>
               {Object.entries(gradeCounts).map(([grade, count]) => (
                 <span
                   key={grade}
-                  className="inline-flex rounded-full bg-zinc-100 px-2 py-0.5 font-medium text-zinc-700"
+                  className="inline-flex rounded-full bg-zinc-100 px-2 py-0.5 font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
                 >
                   {count} {grade}
                 </span>

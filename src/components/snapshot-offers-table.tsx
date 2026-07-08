@@ -1,4 +1,4 @@
-import {
+﻿import {
   MISSION_TYPE_LABELS,
   OFFER_TYPE_LABELS,
   type SnapshotOffer,
@@ -22,7 +22,7 @@ function confidenceStyle(confidence: number | null): string {
 export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
   if (offers.length === 0) {
     return (
-      <p className="px-4 py-6 text-sm text-zinc-700">
+      <p className="px-4 py-6 text-sm text-zinc-700 dark:text-zinc-200">
         This snapshot contains no offers.
       </p>
     );
@@ -32,7 +32,7 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
+          <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
             <th className="px-4 py-2 font-medium">Site</th>
             <th className="px-4 py-2 font-medium">Source</th>
             <th className="px-4 py-2 font-medium">Type</th>
@@ -48,7 +48,7 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
             <th className="px-4 py-2 font-medium">Evidence</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-100">
+        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {offers.map((offer) => {
             const vehicle = [
               offer.vehicleMake,
@@ -59,41 +59,41 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
               .join(" ");
             return (
               <tr key={offer.id}>
-                <td className="px-4 py-3 text-zinc-900">
+                <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                   {offer.siteName}
                   {offer.siteBrand && (
-                    <span className="block text-xs text-zinc-700">
+                    <span className="block text-xs text-zinc-700 dark:text-zinc-200">
                       {offer.siteBrand}
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-xs text-zinc-700">
+                <td className="px-4 py-3 text-xs text-zinc-700 dark:text-zinc-200">
                   {MISSION_TYPE_LABELS[offer.missionType]}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {OFFER_TYPE_LABELS[offer.offerType]}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">{vehicle || "—"}</td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">{vehicle || "—"}</td>
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {offer.monthlyPayment === null
                     ? "—"
                     : `${money(offer.monthlyPayment)}/mo`}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {offer.apr === null ? "—" : `${offer.apr}%`}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {offer.termMonths === null ? "—" : `${offer.termMonths} mo`}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {money(offer.dueAtSigning)}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {offer.mileageAllowance === null
                     ? "—"
                     : fmtMileage(offer.mileageAllowance)}
                 </td>
-                <td className="px-4 py-3 text-zinc-700">
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {money(offer.cashIncentive)}
                 </td>
                 <td

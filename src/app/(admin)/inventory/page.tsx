@@ -1,4 +1,4 @@
-import { asc, desc, eq, inArray } from "drizzle-orm";
+﻿import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, runGroupMembers, runGroups, sites } from "@/lib/db";
 import { inventoryResults } from "@/lib/db/schema";
 import { isInventoryConfigured, brandsToMakeAllowList, getInventoryFreshnessStatus, runningLocally } from "@/lib/inventory";
@@ -89,12 +89,12 @@ export default async function InventoryPage() {
       <div className="mb-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold text-zinc-900">Inventory</h1>
-            <p className="mt-0.5 text-sm text-zinc-700">
+            <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">Inventory</h1>
+            <p className="mt-0.5 text-sm text-zinc-700 dark:text-zinc-200">
               Collect live vehicle inventory counts via the inventory API.
             </p>
             {configured && (
-              <p className="mt-1 text-sm font-medium text-zinc-800">
+              <p className="mt-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">
                 This week: {formatInventoryDetail(freshness)}
               </p>
             )}
@@ -111,14 +111,14 @@ export default async function InventoryPage() {
       </div>
 
       {!configured && (
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           <strong>Not configured.</strong> Set <code>INVENTORY_API_URL</code> and{" "}
           <code>INVENTORY_API_KEY</code> in your <code>.env</code> to enable collection.
         </div>
       )}
 
       {isLocal && !localApiHealthy && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
           <strong>Local inventory mode is on, but the API isn&apos;t responding</strong> at{" "}
           <code>{localApiUrl || "(INVENTORY_API_URL_LOCAL not set)"}</code>. Make sure it&apos;s
           running — <code>npm run start:local</code> in <code>dealer-inventory-api</code> — before
@@ -127,14 +127,14 @@ export default async function InventoryPage() {
       )}
 
       {isLocal && localApiHealthy && (
-        <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
           <strong>Local inventory mode is on.</strong> Using <code>{localApiUrl}</code> instead of
           the deployed API.
         </div>
       )}
 
       {activeSites.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
           No active dealers found.
         </p>
       ) : (

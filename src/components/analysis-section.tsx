@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { OFFER_TYPE_LABELS, type ComplianceGrade, type Offer, type Site } from "@/lib/db";
@@ -87,18 +87,18 @@ export function AnalysisSection({
     : filtered;
 
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
+    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => setCollapsed((c) => !c)}
-              className="text-xl font-semibold text-zinc-900 hover:text-zinc-600"
+              className="text-xl font-semibold text-zinc-900 hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
             >
               Analysis{" "}
               {offers.length > 0 && (
-                <span className="font-normal text-zinc-700">
+                <span className="font-normal text-zinc-700 dark:text-zinc-200">
                   — {offers.length} offer{offers.length === 1 ? "" : "s"}
                   {siteFilter !== "all" && ` · ${filtered.length} shown`}
                 </span>
@@ -112,7 +112,7 @@ export function AnalysisSection({
                 <select
                   value={siteFilter}
                   onChange={(e) => setSiteFilter(e.target.value)}
-                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 focus:outline-none"
+                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 focus:outline-none dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
                 >
                   <option value="all">All sites</option>
                   {siteOptions
@@ -128,8 +128,8 @@ export function AnalysisSection({
                   onClick={() => setSorted((s) => !s)}
                   className={`rounded-md border px-2.5 py-1 text-sm transition-colors ${
                     sorted
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+                      ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                      : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                   }`}
                 >
                   Dealer &amp; Type
@@ -139,7 +139,7 @@ export function AnalysisSection({
           </div>
           {analyzing ? (
             <div className="mt-1.5">
-              <p className="text-sm text-zinc-700">
+              <p className="text-sm text-zinc-700 dark:text-zinc-200">
                 {analysisStartedAt && <>Started {fmtTime(analysisStartedAt)} · </>}
                 {evidencePageCount > 0 && pagesProcessed !== null
                   ? `Analyzing item ${pagesProcessed} of ${evidencePageCount} · ${offers.length} offer${offers.length !== 1 ? "s" : ""} found`
@@ -148,7 +148,7 @@ export function AnalysisSection({
                     : "Starting…"}
               </p>
               {evidencePageCount > 0 && pagesProcessed !== null && (
-                <div className="mt-1.5 h-1.5 w-full max-w-sm rounded-full bg-zinc-100">
+                <div className="mt-1.5 h-1.5 w-full max-w-sm rounded-full bg-zinc-100 dark:bg-zinc-800">
                   <div
                     className="h-1.5 rounded-full bg-zinc-400 transition-all duration-300"
                     style={{
@@ -184,7 +184,7 @@ export function AnalysisSection({
               <button
                 type="submit"
                 disabled={analyzing}
-                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
                 {analyzing
                   ? "Analyzing…"
@@ -226,7 +226,7 @@ export function AnalysisSection({
                   <col style={{ width: "70px" }} />
                 </colgroup>
                 <thead>
-                  <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
+                  <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
                     {siteFilter === "all" && (
                       <th className="px-4 py-2 font-medium">Site</th>
                     )}
@@ -243,7 +243,7 @@ export function AnalysisSection({
                     <th className="px-4 py-2 font-medium">Ad</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-100">
+                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   {visible.map((offer) => {
                     const compliance = offer.sourceEvidenceId
                       ? gradeByEvidence.get(offer.sourceEvidenceId)
@@ -259,13 +259,13 @@ export function AnalysisSection({
                     const nJson = offer.normalizedJson as { aiAssisted?: boolean; source?: string } | null;
                     const isImagePromo = isPromotional && nJson?.source === "image_extraction";
                     return (
-                      <tr key={offer.id} className={isPromotional ? "bg-amber-50" : ""}>
+                      <tr key={offer.id} className={isPromotional ? "bg-amber-50 dark:bg-amber-950/30" : ""}>
                         {siteFilter === "all" && (
-                          <td className="px-4 py-3 text-zinc-900">
+                          <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                             {siteNames[offer.siteId] ?? "—"}
                           </td>
                         )}
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           <span>{OFFER_TYPE_LABELS[offer.offerType]}</span>
                           {isImagePromo && (
                             <span
@@ -276,14 +276,14 @@ export function AnalysisSection({
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {offer.offerType === "service"
                             ? (offer.rawText || "—")
                             : isImagePromo
                               ? <span className="italic text-zinc-400">see ad image →</span>
                               : (vehicle || "—")}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {offer.offerType === "service"
                             ? ((offer.normalizedJson as { matches?: { serviceOffer?: string } } | null)?.matches?.serviceOffer ?? "—")
                             : offer.monthlyPayment !== null
@@ -292,23 +292,23 @@ export function AnalysisSection({
                                 ? money(offer.salePrice)
                                 : "—"}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {offer.apr === null ? "—" : `${offer.apr}%`}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {offer.termMonths === null
                             ? "—"
                             : `${offer.termMonths} mo`}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {money(offer.dueAtSigning)}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {offer.mileageAllowance === null
                             ? "—"
                             : fmtMileage(offer.mileageAllowance)}
                         </td>
-                        <td className="px-4 py-3 text-zinc-700">
+                        <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {money(offer.cashIncentive)}
                         </td>
                         <td
@@ -346,7 +346,7 @@ export function AnalysisSection({
                               href={`/api/evidence/${offer.sourceEvidenceId}/file`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-xs text-zinc-900 underline hover:text-zinc-600"
+                              className="text-xs text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
                             >
                               View ad
                             </a>

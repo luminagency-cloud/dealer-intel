@@ -1,12 +1,18 @@
 @import "tailwindcss";
 
-/* This app does not support dark mode — all surfaces are light. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 :root {
-  --background: #ffffff;
+  --background: #e4e4e7;
   --foreground: #171717;
   --app-shell-max-width: 1600px;
   --app-shell-viewport-width: 90vw;
   --app-shell-inline-gutter: clamp(1rem, 2vw, 2rem);
+}
+
+[data-theme="dark"] {
+  --background: #09090b;
+  --foreground: #f4f4f5;
 }
 
 @theme inline {
@@ -18,7 +24,7 @@
 
 html {
   font-size: 16px;
-  color-scheme: only light;
+  color-scheme: light dark;
 }
 
 body {
@@ -33,6 +39,12 @@ body {
   select {
     color: #171717;
     background-color: #ffffff;
+  }
+  [data-theme="dark"] input,
+  [data-theme="dark"] textarea,
+  [data-theme="dark"] select {
+    color: #f4f4f5;
+    background-color: #27272a;
   }
 }
 

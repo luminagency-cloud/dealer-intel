@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { isDatabaseConfigured, getDb, runGroups } from "@/lib/db";
 import { count } from "drizzle-orm";
 import { getISOWeekLabel, getPriorISOWeekLabel } from "@/lib/cycle";
@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 function StepDot({ state, n }: { state: "done" | "active" | "action" | "waiting"; n: number }) {
   if (state === "done")
     return (
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 text-emerald-600">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 text-emerald-600 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
         </svg>
@@ -31,18 +31,18 @@ function StepDot({ state, n }: { state: "done" | "active" | "action" | "waiting"
     );
   if (state === "active")
     return (
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-blue-300 bg-blue-50 text-sm font-medium text-blue-600">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-blue-300 bg-blue-50 text-sm font-medium text-blue-600 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-400">
         …
       </div>
     );
   if (state === "action")
     return (
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-sm font-medium text-zinc-800">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-sm font-medium text-zinc-800 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200">
         {n}
       </div>
     );
   return (
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-100 bg-zinc-50 text-sm font-medium text-zinc-600">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-100 bg-zinc-50 text-sm font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
       {n}
     </div>
   );
@@ -69,17 +69,17 @@ function Step({
     <div className="flex flex-1 items-start gap-3">
       <div className="flex flex-col items-center gap-1">
         <StepDot state={state} n={n} />
-        {!isLast && <div className="h-full w-px bg-zinc-100" style={{ minHeight: 32 }} />}
+        {!isLast && <div className="h-full w-px bg-zinc-100 dark:bg-zinc-800" style={{ minHeight: 32 }} />}
       </div>
       <div className="pb-8">
-        <p className={`text-sm font-medium ${state === "waiting" ? "text-zinc-600" : "text-zinc-800"}`}>
+        <p className={`text-sm font-medium ${state === "waiting" ? "text-zinc-600 dark:text-zinc-200" : "text-zinc-800 dark:text-zinc-200"}`}>
           {label}
         </p>
         <p className={`mt-0.5 text-sm ${
-          state === "done" ? "text-emerald-600"
-          : state === "active" ? "text-blue-600"
-          : state === "action" ? "text-amber-700 font-medium"
-          : "text-zinc-600"
+          state === "done" ? "text-emerald-600 dark:text-emerald-400"
+          : state === "active" ? "text-blue-600 dark:text-blue-400"
+          : state === "action" ? "text-amber-700 font-medium dark:text-amber-400"
+          : "text-zinc-600 dark:text-zinc-200"
         }`}>
           {detail}
         </p>
@@ -115,15 +115,15 @@ function Exceptions({ groups, weekLabel }: { groups: GroupCycleStatus[]; weekLab
   if (issues.length === 0) return null;
 
   return (
-    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-amber-700">
+    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
         Needs attention
       </p>
       <div className="space-y-1">
         {issues.map((issue) => (
           <div key={issue.groupId} className="flex items-center justify-between text-sm">
-            <span className="text-amber-800">{issue.groupName}</span>
-            <Link href={issue.href} className="text-amber-600 hover:underline">
+            <span className="text-amber-800 dark:text-amber-300">{issue.groupName}</span>
+            <Link href={issue.href} className="text-amber-600 hover:underline dark:text-amber-400">
               {issue.reason} →
             </Link>
           </div>
@@ -233,7 +233,7 @@ function PrimaryCTA({
 export default async function HomePage() {
   if (!isDatabaseConfigured()) {
     return (
-      <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-white p-8 text-center text-sm text-zinc-700">
+      <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-white p-8 text-center text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
         Database not configured.
       </div>
     );
@@ -311,10 +311,10 @@ export default async function HomePage() {
       {/* Week label */}
       <div className="mb-6 flex items-baseline justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-zinc-900">
+          <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
             {allLive ? "This week is done ✓" : "What needs doing"}
           </h1>
-          <p className="mt-0.5 text-sm text-zinc-700 font-mono">{currentCycle}</p>
+          <p className="mt-0.5 text-sm text-zinc-700 font-mono dark:text-zinc-200">{currentCycle}</p>
         </div>
         <Link href="/runs" className="text-xs text-zinc-700 hover:text-zinc-700">
           Advanced →
@@ -322,7 +322,7 @@ export default async function HomePage() {
       </div>
 
       {/* Steps */}
-      <div className="mb-6 flex flex-col rounded-xl border border-zinc-200 bg-white px-6 pt-6">
+      <div className="mb-6 flex flex-col rounded-xl border border-zinc-200 bg-white px-6 pt-6 dark:border-zinc-700 dark:bg-zinc-900">
         <Step n={1} label="Collect data" state={collectState}
           detail={formatCollectDetail(collectCoverage)} />
         <Step n={2} label="Analyze offers" state={analyzeState}
@@ -370,9 +370,9 @@ export default async function HomePage() {
       {!allLive && <Exceptions groups={currentGroups} weekLabel={currentCycle} />}
 
       {/* Prior week */}
-      <div className="mt-8 flex items-center gap-3 border-t border-zinc-100 pt-5">
+      <div className="mt-8 flex items-center gap-3 border-t border-zinc-100 pt-5 dark:border-zinc-800">
         <div className={`h-2 w-2 shrink-0 rounded-full ${priorAllLive ? "bg-emerald-400" : "bg-amber-400"}`} />
-        <span className="text-sm text-zinc-700">
+        <span className="text-sm text-zinc-700 dark:text-zinc-200">
           {priorCycle}
           {priorAllLive
             ? " — complete"

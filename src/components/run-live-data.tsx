@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
@@ -9,6 +9,7 @@ import { AnalysisSection } from "@/components/analysis-section";
 interface LiveStatus {
   executing: boolean;
   analyzing: boolean;
+  paused: boolean;
   stalled: boolean;
   progress: { processed: number; total: number } | null;
   partialAnalysisKeys: string[];
@@ -22,6 +23,7 @@ export function RunLiveData({
   runId,
   initialExecuting,
   initialAnalyzing,
+  initialPaused,
   initialStalled,
   initialProgress,
   initialPartialAnalysisKeys,
@@ -43,6 +45,8 @@ export function RunLiveData({
   retryAction,
   forceReCollectAction,
   reAnalyzeSiteMissionAction,
+  pauseAction,
+  resumePausedRunAction,
   resumeAction,
   runAnalysisAction,
   resumeAnalysisAction,
@@ -60,6 +64,7 @@ export function RunLiveData({
   runId: string;
   initialExecuting: boolean;
   initialAnalyzing: boolean;
+  initialPaused: boolean;
   initialStalled: boolean;
   initialProgress: { processed: number; total: number } | null;
   initialPartialAnalysisKeys: string[];
@@ -81,6 +86,8 @@ export function RunLiveData({
   retryAction: (resultId: string) => Promise<void>;
   forceReCollectAction?: (siteId: string, missionId: string) => Promise<void>;
   reAnalyzeSiteMissionAction?: (siteId: string, missionType: string) => Promise<void>;
+  pauseAction?: () => Promise<void>;
+  resumePausedRunAction?: () => Promise<void>;
   resumeAction?: () => Promise<void>;
   runAnalysisAction: () => Promise<void>;
   resumeAnalysisAction?: () => Promise<void>;
@@ -97,6 +104,7 @@ export function RunLiveData({
   const [live, setLive] = useState<LiveStatus>({
     executing: initialExecuting,
     analyzing: initialAnalyzing,
+    paused: initialPaused,
     stalled: initialStalled,
     progress: initialProgress,
     partialAnalysisKeys: initialPartialAnalysisKeys,
@@ -181,6 +189,7 @@ export function RunLiveData({
         offerCount={offers.length}
         snapshots={snapshots}
         executing={live.executing}
+        paused={live.paused}
         stalled={live.stalled}
         canCollect={canCollect}
         analyzing={live.analyzing}
@@ -189,12 +198,14 @@ export function RunLiveData({
         runAnalysisAction={runAnalysisAction}
         publishSnapshotAction={publishSnapshotAction}
         executeAllAction={executeAllAction}
+        pauseAction={pauseAction}
+        resumePausedRunAction={resumePausedRunAction}
         resumeAction={resumeAction ?? (async () => {})}
         defaultSnapshotLabel={defaultSnapshotLabel}
       />
 
       {/* Static metadata bar */}
-      <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-700">
+      <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
         <span className="font-mono">{runIdShort}</span>
         <span>Created {createdLabel}</span>
         {startedLabel && <span>Started {startedLabel}</span>}

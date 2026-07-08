@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -184,7 +184,7 @@ export function InventoryTable({
               setCheckedSites(new Set());
               setScopeOpen(true);
             }}
-            className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm focus:outline-none"
+            className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm focus:outline-none dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
           >
             <option value="all">Scope: All active dealers</option>
             <option value="groups">Pick groups…</option>
@@ -202,10 +202,10 @@ export function InventoryTable({
                 {checkedGroups.size === 0 ? "none selected" : `${checkedGroups.size} group${checkedGroups.size !== 1 ? "s" : ""}`} ▾
               </button>
               {scopeOpen && (
-                <div className="absolute left-0 top-full z-10 mt-2 max-h-80 w-64 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
-                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-700">Select one or more groups to run.</p>
+                <div className="absolute left-0 top-full z-10 mt-2 max-h-80 w-64 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-700 dark:text-zinc-200">Select one or more groups to run.</p>
                   {groups.map((g) => (
-                    <label key={g.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-900 hover:bg-zinc-50">
+                    <label key={g.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-900 hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800">
                       <input
                         type="checkbox"
                         checked={checkedGroups.has(g.id)}
@@ -213,7 +213,7 @@ export function InventoryTable({
                         className="h-4 w-4 rounded border-zinc-300"
                       />
                       {g.name}
-                      <span className="ml-auto text-xs text-zinc-700">{g.siteIds.length}</span>
+                      <span className="ml-auto text-xs text-zinc-700 dark:text-zinc-200">{g.siteIds.length}</span>
                     </label>
                   ))}
                 </div>
@@ -232,10 +232,10 @@ export function InventoryTable({
                 {checkedSites.size === 0 ? "none selected" : `${checkedSites.size} dealer${checkedSites.size !== 1 ? "s" : ""}`} ▾
               </button>
               {scopeOpen && (
-                <div className="absolute left-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
-                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-700">Select individual dealers to run.</p>
+                <div className="absolute left-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                  <p className="px-2 pb-2 pt-1 text-xs text-zinc-700 dark:text-zinc-200">Select individual dealers to run.</p>
                   {sites.map((s) => (
-                    <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-900 hover:bg-zinc-50">
+                    <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-zinc-900 hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800">
                       <input
                         type="checkbox"
                         checked={checkedSites.has(s.id)}
@@ -255,7 +255,7 @@ export function InventoryTable({
           <button
             onClick={() => runBatchFor(scopeSiteIds())}
             disabled={anyActive || (scope === "groups" && checkedGroups.size === 0) || (scope === "custom" && checkedSites.size === 0)}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             {batchTotal !== null
               ? `Running — ${batchDone} / ${batchTotal}${batchTotal - batchDone > 0 ? ` (${batchTotal - batchDone} left)` : ""}`
@@ -266,9 +266,9 @@ export function InventoryTable({
 
       {/* ── Run status bar ────────────────────────────────────────────── */}
       {batchTotal !== null && (
-        <div className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+        <div className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
           <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium text-zinc-700">
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">
               {anyActive
                 ? `Running — ${batchDone} of ${batchTotal} complete`
                 : `Done — ${batchDone} of ${batchTotal} complete`}
@@ -276,7 +276,7 @@ export function InventoryTable({
                 <span className="ml-2 text-red-600">({batchFailed} failed)</span>
               )}
             </span>
-            <span className="text-xs text-zinc-700 tabular-nums">
+            <span className="text-xs text-zinc-700 tabular-nums dark:text-zinc-200">
               {batchStartedAt && (
                 <>
                   Started {batchStartedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -287,7 +287,7 @@ export function InventoryTable({
               )}
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
             <div
               className="h-full rounded-full bg-zinc-800 transition-all duration-300"
               style={{ width: `${batchTotal > 0 ? (batchDone / batchTotal) * 100 : 0}%` }}
@@ -308,9 +308,9 @@ export function InventoryTable({
       )}
 
       {/* ── Dealer table ──────────────────────────────────────────────── */}
-      <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
+          <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
             <tr>
               <th className="px-4 py-3">Dealer</th>
               <th className="px-4 py-3">Make Filter</th>
@@ -320,7 +320,7 @@ export function InventoryTable({
               <th className="px-4 py-3 text-right">Collect</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100">
+          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {sites.map((site) => {
               const phase = phases[site.id] ?? { kind: "idle" };
               return (
@@ -359,7 +359,7 @@ function rowAgeTier(site: InventorySiteRow, phase: RowPhase): AgeTier {
 }
 
 const TIER_ROW: Record<AgeTier, string> = {
-  none:   "!bg-white",
+  none:   "!bg-white dark:!bg-zinc-900",
   blue:   "!bg-blue-500",
   green:  "!bg-green-500",
   yellow: "!bg-yellow-400",
@@ -367,7 +367,7 @@ const TIER_ROW: Record<AgeTier, string> = {
   red:    "!bg-red-600",
 };
 const TIER_TEXT: Record<AgeTier, string> = {
-  none:   "!text-zinc-900",
+  none:   "!text-zinc-900 dark:!text-zinc-100",
   blue:   "!text-white",
   green:  "!text-white",
   yellow: "!text-yellow-950",
@@ -375,7 +375,7 @@ const TIER_TEXT: Record<AgeTier, string> = {
   red:    "!text-white",
 };
 const TIER_SUBTEXT: Record<AgeTier, string> = {
-  none:   "!text-zinc-700",
+  none:   "!text-zinc-700 dark:!text-zinc-400",
   blue:   "!text-blue-100",
   green:  "!text-green-100",
   yellow: "!text-yellow-800",
@@ -383,7 +383,7 @@ const TIER_SUBTEXT: Record<AgeTier, string> = {
   red:    "!text-red-200",
 };
 const TIER_MAKE_CHIP: Record<AgeTier, string> = {
-  none:   "bg-zinc-100 text-zinc-700",
+  none:   "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
   blue:   "bg-blue-600 text-white",
   green:  "bg-green-600 text-white",
   yellow: "bg-yellow-500 text-yellow-950",
@@ -391,7 +391,7 @@ const TIER_MAKE_CHIP: Record<AgeTier, string> = {
   red:    "bg-red-700 text-white",
 };
 const TIER_BTN: Record<AgeTier, string> = {
-  none:   "border-zinc-300 text-zinc-700 hover:bg-zinc-50",
+  none:   "border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800",
   blue:   "border-blue-300 text-white hover:bg-blue-600",
   green:  "border-green-300 text-white hover:bg-green-600",
   yellow: "border-yellow-600 text-yellow-950 hover:bg-yellow-500",

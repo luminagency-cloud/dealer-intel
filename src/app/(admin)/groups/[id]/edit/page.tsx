@@ -35,7 +35,7 @@ export default async function EditRunGroupPage({
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-semibold text-zinc-900">
+      <h1 className="mb-6 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
         Edit Run Group
       </h1>
       <RunGroupForm

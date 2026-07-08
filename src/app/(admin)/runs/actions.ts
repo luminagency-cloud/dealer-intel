@@ -11,7 +11,9 @@ import { removeEvidence, uploadEvidence } from "@/lib/evidence";
 import {
   forceReCollectSingle,
   markContentRemoved,
+  pauseRunExecution,
   requeueStalledRun,
+  resumeRunExecution,
   retryMissionResult,
   startRunExecution,
 } from "@/lib/run-executor";
@@ -235,7 +237,7 @@ async function requireCollectableRun(runId: string) {
   if (!run) {
     throw new Error("Run not found");
   }
-  if (run.status !== "pending" && run.status !== "running") {
+  if (run.status !== "pending" && run.status !== "running" && run.status !== "paused" && run.status !== "complete") {
     throw new Error(`Cannot collect on a ${run.status} run`);
   }
   if (run.status === "pending") {
@@ -420,6 +422,22 @@ export async function forceReCollect(
 ) {
   await requireSession();
   await forceReCollectSingle(runId, siteId, missionId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(`/runs/${runId}`);
+}
+
+/** Signal the running executor to pause after the current site finishes. */
+export async function pauseRun(runId: string) {
+  await requireSession();
+  await pauseRunExecution(runId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(`/runs/${runId}`);
+}
+
+/** Resume a paused run, picking up where it left off. */
+export async function resumePausedRun(runId: string) {
+  await requireSession();
+  await resumeRunExecution(runId);
   revalidatePath(`/runs/${runId}`);
   redirect(`/runs/${runId}`);
 }

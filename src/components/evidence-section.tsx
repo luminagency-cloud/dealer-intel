@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import {
@@ -33,11 +33,11 @@ export function EvidenceSection({
       : evidence.filter((e) => e.siteId === siteFilter);
 
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
-        <h2 className="text-sm font-semibold text-zinc-900">
+    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
           Evidence{" "}
-          <span className="font-normal text-zinc-700">
+          <span className="font-normal text-zinc-700 dark:text-zinc-200">
             ({visible.length}{siteFilter !== "all" ? ` of ${evidence.length}` : ""})
           </span>
         </h2>
@@ -45,7 +45,7 @@ export function EvidenceSection({
           <select
             value={siteFilter}
             onChange={(e) => setSiteFilter(e.target.value)}
-            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none"
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 focus:outline-none dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200"
           >
             <option value="all">All sites</option>
             {siteOptions
@@ -60,17 +60,17 @@ export function EvidenceSection({
       </div>
 
       {evidence.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-zinc-700">
+        <p className="px-4 py-6 text-sm text-zinc-700 dark:text-zinc-200">
           No evidence captured for this run yet.
         </p>
       ) : visible.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-zinc-700">
+        <p className="px-4 py-6 text-sm text-zinc-700 dark:text-zinc-200">
           No evidence for the selected site.
         </p>
       ) : (
         <table className="w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
+            <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
               <th className="px-4 py-2 font-medium">Type</th>
               <th className="px-4 py-2 font-medium">Detail</th>
               {siteFilter === "all" && (
@@ -81,40 +81,40 @@ export function EvidenceSection({
               <th className="px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100">
+          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {visible.map((row) => (
               <tr key={row.id}>
-                <td className="px-4 py-3 text-zinc-900">
+                <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                   {EVIDENCE_TYPE_LABELS[row.evidenceType]}
                 </td>
-                <td className="max-w-xs px-4 py-3 text-zinc-700">
+                <td className="max-w-xs px-4 py-3 text-zinc-700 dark:text-zinc-300">
                   {row.label ? (
                     <span className="block truncate" title={row.label}>
                       {row.label}
                     </span>
                   ) : (
-                    <span className="text-zinc-700">—</span>
+                    <span className="text-zinc-700 dark:text-zinc-200">—</span>
                   )}
                   {row.textContent && (
                     <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-zinc-700 hover:text-zinc-600">
+                      <summary className="cursor-pointer text-xs text-zinc-700 hover:text-zinc-600 dark:text-zinc-200 dark:hover:text-zinc-200">
                         Disclaimer text
                       </summary>
-                      <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600">
+                      <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600 dark:text-zinc-200">
                         {row.textContent}
                       </p>
                     </details>
                   )}
                 </td>
                 {siteFilter === "all" && (
-                  <td className="px-4 py-3 text-zinc-900">
+                  <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                     {siteNames[row.siteId] ?? row.siteId.slice(0, 8)}
                   </td>
                 )}
-                <td className="px-4 py-3 text-zinc-600">
+                <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                   {MISSION_TYPE_LABELS[row.missionType]}
                 </td>
-                <td className="px-4 py-3 text-zinc-600">
+                <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                   {new Date(row.createdAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                 </td>
                 <td className="px-4 py-3">
@@ -123,7 +123,7 @@ export function EvidenceSection({
                       href={`/api/evidence/${row.id}/file`}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-zinc-900 underline hover:text-zinc-600"
+                      className="text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
                     >
                       View
                     </a>
@@ -146,15 +146,15 @@ export function EvidenceSection({
       {canUpload && (
         <form
           action={uploadAction}
-          className="flex flex-wrap items-end gap-3 border-t border-zinc-100 bg-zinc-50 px-4 py-3"
+          className="flex flex-wrap items-end gap-3 border-t border-zinc-100 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-800/50"
         >
-          <label className="block text-xs font-medium text-zinc-600">
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
             Site
             <select
               name="siteId"
               required
               defaultValue=""
-              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800"
             >
               <option value="" disabled>
                 Select…
@@ -166,13 +166,13 @@ export function EvidenceSection({
               ))}
             </select>
           </label>
-          <label className="block text-xs font-medium text-zinc-600">
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
             Mission
             <select
               name="missionType"
               required
               defaultValue=""
-              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800"
             >
               <option value="" disabled>
                 Select…
@@ -184,13 +184,13 @@ export function EvidenceSection({
               ))}
             </select>
           </label>
-          <label className="block text-xs font-medium text-zinc-600">
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
             Evidence Type
             <select
               name="evidenceType"
               required
               defaultValue=""
-              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800"
             >
               <option value="" disabled>
                 Select…
@@ -202,19 +202,19 @@ export function EvidenceSection({
               ))}
             </select>
           </label>
-          <label className="block text-xs font-medium text-zinc-600">
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
             File
             <input
               type="file"
               name="file"
               required
               accept=".png,.jpg,.jpeg,.webp,.html"
-              className="mt-1 block text-sm text-zinc-600 file:mr-2 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2 file:py-1 file:text-sm"
+              className="mt-1 block text-sm text-zinc-600 file:mr-2 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2 file:py-1 file:text-sm dark:text-zinc-200 dark:file:border-zinc-600 dark:file:bg-zinc-700 dark:file:text-zinc-200"
             />
           </label>
           <button
             type="submit"
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
+            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             Upload Evidence
           </button>

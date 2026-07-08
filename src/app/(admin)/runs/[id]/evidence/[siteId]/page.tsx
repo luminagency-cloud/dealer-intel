@@ -39,7 +39,7 @@ export default async function SiteEvidencePage({
 
   return (
     <div>
-      <div className="mb-6 flex items-center gap-2 text-sm text-zinc-700">
+      <div className="mb-6 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
         <Link href="/runs" className="hover:underline">
           Runs
         </Link>
@@ -48,25 +48,25 @@ export default async function SiteEvidencePage({
           Run {runId.slice(0, 8)}
         </Link>
         <span>›</span>
-        <span className="text-zinc-900">{site.name}</span>
+        <span className="text-zinc-900 dark:text-zinc-100">{site.name}</span>
       </div>
 
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-zinc-900">{site.name}</h1>
-        <p className="mt-1 text-sm text-zinc-700">
+        <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">{site.name}</h1>
+        <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-200">
           Evidence — {evidence.length} item{evidence.length !== 1 ? "s" : ""}
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
         {evidence.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-zinc-700">
+          <p className="px-4 py-6 text-sm text-zinc-700 dark:text-zinc-200">
             No evidence captured for this site in this run.
           </p>
         ) : (
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
+              <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
                 <th className="px-4 py-2 font-medium">Type</th>
                 <th className="px-4 py-2 font-medium">Detail</th>
                 <th className="px-4 py-2 font-medium">Mission</th>
@@ -74,35 +74,35 @@ export default async function SiteEvidencePage({
                 <th className="px-4 py-2 font-medium">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-100">
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {evidence.map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-zinc-900">
+                  <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                     {EVIDENCE_TYPE_LABELS[row.evidenceType]}
                   </td>
-                  <td className="max-w-xs px-4 py-3 text-zinc-700">
+                  <td className="max-w-xs px-4 py-3 text-zinc-700 dark:text-zinc-300">
                     {row.label ? (
                       <span className="block truncate" title={row.label}>
                         {row.label}
                       </span>
                     ) : (
-                      <span className="text-zinc-700">—</span>
+                      <span className="text-zinc-700 dark:text-zinc-200">—</span>
                     )}
                     {row.textContent && (
                       <details className="mt-1">
-                        <summary className="cursor-pointer text-xs text-zinc-700 hover:text-zinc-600">
+                        <summary className="cursor-pointer text-xs text-zinc-700 hover:text-zinc-600 dark:text-zinc-200 dark:hover:text-zinc-200">
                           Disclaimer text
                         </summary>
-                        <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600">
+                        <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs text-zinc-600 dark:text-zinc-200">
                           {row.textContent}
                         </p>
                       </details>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600">
+                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                     {MISSION_TYPE_LABELS[row.missionType]}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600">
+                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                     {new Date(row.createdAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                   </td>
                   <td className="px-4 py-3">
@@ -111,7 +111,7 @@ export default async function SiteEvidencePage({
                         href={`/api/evidence/${row.id}/file`}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-zinc-900 underline hover:text-zinc-600"
+                        className="text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-400"
                       >
                         View
                       </a>
@@ -136,17 +136,17 @@ export default async function SiteEvidencePage({
         {canUpload && (
           <form
             action={uploadRunEvidence.bind(null, runId)}
-            className="flex flex-wrap items-end gap-3 border-t border-zinc-100 bg-zinc-50 px-4 py-3"
+            className="flex flex-wrap items-end gap-3 border-t border-zinc-100 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-800/50"
           >
             {/* siteId is pre-filled for this page */}
             <input type="hidden" name="siteId" value={siteId} />
-            <label className="block text-xs font-medium text-zinc-600">
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
               Mission
               <select
                 name="missionType"
                 required
                 defaultValue=""
-                className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+                className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800"
               >
                 <option value="" disabled>
                   Select…
@@ -158,13 +158,13 @@ export default async function SiteEvidencePage({
                 ))}
               </select>
             </label>
-            <label className="block text-xs font-medium text-zinc-600">
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
               Evidence Type
               <select
                 name="evidenceType"
                 required
                 defaultValue=""
-                className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+                className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800"
               >
                 <option value="" disabled>
                   Select…
@@ -176,19 +176,19 @@ export default async function SiteEvidencePage({
                 ))}
               </select>
             </label>
-            <label className="block text-xs font-medium text-zinc-600">
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-200">
               File
               <input
                 type="file"
                 name="file"
                 required
                 accept=".png,.jpg,.jpeg,.webp,.html"
-                className="mt-1 block text-sm text-zinc-600 file:mr-2 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2 file:py-1 file:text-sm"
+                className="mt-1 block text-sm text-zinc-600 file:mr-2 file:rounded-md file:border file:border-zinc-300 file:bg-white file:px-2 file:py-1 file:text-sm dark:text-zinc-200 dark:file:border-zinc-600 dark:file:bg-zinc-700 dark:file:text-zinc-200"
               />
             </label>
             <button
               type="submit"
-              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
+              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
               Upload Evidence
             </button>

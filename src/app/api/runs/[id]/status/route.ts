@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { eq } from "drizzle-orm";
 import { getDb, missionResults } from "@/lib/db";
-import { isRunExecuting } from "@/lib/run-executor";
+import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
 import {
   isAnalysisRunning,
   getAnalysisProgress,
@@ -37,13 +37,16 @@ export async function GET(
     Promise.resolve(getPartialAnalysisKeys(id)),
   ]);
 
+  const paused = isPausedRun(id);
   const stalled =
     !executing &&
+    !paused &&
     results.some((r) => r.status === "pending" || r.status === "running");
 
   return NextResponse.json({
     executing,
     analyzing,
+    paused,
     stalled,
     progress,
     partialAnalysisKeys: [...partialKeys],

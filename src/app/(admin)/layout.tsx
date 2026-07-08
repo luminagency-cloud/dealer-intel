@@ -1,8 +1,9 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import packageJson from "../../../package.json";
 import { signOut } from "@/auth";
 import { requireSession } from "@/lib/session";
 import { SettingsDropdown } from "@/components/settings-dropdown";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { getDb, collectionRuns, missionResults } from "@/lib/db";
 
@@ -32,43 +33,44 @@ export default async function AdminLayout({
   const hasReviewItems = reviewItems.length > 0;
 
   return (
-    <div className="min-h-screen bg-zinc-50">
-      <header className="border-b border-zinc-200 bg-white">
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
+      <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <div className="app-shell flex h-14 items-center justify-between px-4">
           <div className="flex items-center gap-8">
-            <Link href="/" className="text-sm font-semibold text-zinc-900">
-              Dealer Intel <span className="font-normal text-zinc-600">v{packageJson.version}</span>
+            <Link href="/" className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              Dealer Intel <span className="font-normal text-zinc-600 dark:text-zinc-200">v{packageJson.version}</span>
             </Link>
-            <nav className="flex items-center gap-4 text-sm text-zinc-600">
-              <Link href="/runs" className="hover:text-zinc-900">
+            <nav className="flex items-center gap-4 text-sm text-zinc-600 dark:text-zinc-200">
+              <Link href="/runs" className="hover:text-zinc-900 dark:hover:text-zinc-100">
                 Runs
               </Link>
-              <Link href="/review" className="relative hover:text-zinc-900">
+              <Link href="/review" className="relative hover:text-zinc-900 dark:hover:text-zinc-100">
                 Review
                 {hasReviewItems && (
                   <span className="absolute -right-2 -top-1 h-2 w-2 rounded-full bg-red-500" />
                 )}
               </Link>
-              <Link href="/snapshots" className="hover:text-zinc-900">
+              <Link href="/snapshots" className="hover:text-zinc-900 dark:hover:text-zinc-100">
                 Snapshots
               </Link>
-              <Link href="/inventory" className="hover:text-zinc-900">
+              <Link href="/inventory" className="hover:text-zinc-900 dark:hover:text-zinc-100">
                 Inventory
               </Link>
-              <Link href="/reports" className="hover:text-zinc-900">
+              <Link href="/reports" className="hover:text-zinc-900 dark:hover:text-zinc-100">
                 Reports
               </Link>
               <SettingsDropdown />
             </nav>
           </div>
-          <div className="flex items-center gap-4">
-            <Link href="/account" className="text-sm text-zinc-700 hover:text-zinc-900">
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <Link href="/account" className="text-sm text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
               {session.user?.email}
             </Link>
             <form action={logout}>
               <button
                 type="submit"
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100"
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
               >
                 Sign out
               </button>

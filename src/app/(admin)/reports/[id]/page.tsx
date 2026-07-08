@@ -55,7 +55,7 @@ export default async function AdminReportPage({
   return (
     <div>
       <div className="mb-4">
-        <Link href="/reports" className="text-sm text-zinc-700 hover:underline">
+        <Link href="/reports" className="text-sm text-zinc-700 hover:underline dark:text-zinc-200">
           ← Reports
         </Link>
       </div>

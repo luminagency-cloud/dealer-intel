@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
@@ -167,30 +167,30 @@ export function MissionRunPanel({
   }
 
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
+    <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
         <div>
           <button
             type="button"
             onClick={() => setCollapsed((c) => !c)}
-            className="text-xl font-semibold text-zinc-900 hover:text-zinc-600"
+            className="text-xl font-semibold text-zinc-900 hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
           >
             Collection{" "}
             {showProgress && (
-              <span className="font-normal text-zinc-700">
+              <span className="font-normal text-zinc-700 dark:text-zinc-200">
                 — collecting {done}/{all.length}
               </span>
             )}
-            <span className="ml-2 text-sm font-normal text-zinc-700">
+            <span className="ml-2 text-sm font-normal text-zinc-700 dark:text-zinc-200">
               {collapsed ? "▸ expand" : "▾ collapse"}
             </span>
           </button>
-          <p className="mt-1 text-sm text-zinc-700">
+          <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-200">
             Runs in the background; this page refreshes itself while work is
             in flight. Roughly a minute per page.
           </p>
           {(collectionStartedAt || collectionCompletedAt) && (
-            <p className="mt-1 text-sm text-zinc-700">
+            <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-200">
               {collectionStartedAt && <>Started {fmtTime(collectionStartedAt)}</>}
               {collectionCompletedAt && <> · Completed {fmtTime(collectionCompletedAt)}</>}
               {totalMin(collectionStartedAt, collectionCompletedAt) && (
@@ -231,8 +231,8 @@ export function MissionRunPanel({
 
       {/* Status filters + bulk actions */}
       {!collapsed && items.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 border-b border-zinc-100 px-4 py-2">
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-zinc-700">
+        <div className="flex flex-wrap items-center gap-3 border-b border-zinc-100 px-4 py-2 dark:border-zinc-800">
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
             <input
               type="checkbox"
               checked={isAll}
@@ -241,11 +241,11 @@ export function MissionRunPanel({
             />
             All
           </label>
-          <span className="h-4 w-px bg-zinc-200" />
+          <span className="h-4 w-px bg-zinc-200 dark:bg-zinc-700" />
           {FILTER_STATUSES.map((status) => (
             <label
               key={status}
-              className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600"
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-200"
             >
               <input
                 type="checkbox"
@@ -258,12 +258,12 @@ export function MissionRunPanel({
           ))}
           {canBulkRecollect && someVisibleSelected && (
             <>
-              <span className="h-4 w-px bg-zinc-200" />
+              <span className="h-4 w-px bg-zinc-200 dark:bg-zinc-700" />
               <button
                 type="button"
                 onClick={handleBulkRecollect}
                 disabled={bulkPending}
-                className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
+                className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
                 {bulkPending
                   ? "Queuing…"
@@ -277,7 +277,7 @@ export function MissionRunPanel({
       {!collapsed && (
         <>
           {stalled && (
-            <p className="mx-4 mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <p className="mx-4 mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
               This run was interrupted — items left mid-collection are stalled with
               no active collector. Click <span className="font-medium">Resume</span>{" "}
               to re-queue and finish them.
@@ -285,13 +285,13 @@ export function MissionRunPanel({
           )}
 
           {error && (
-            <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
               {error}
             </p>
           )}
 
           {items.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-zinc-700">
+            <p className="px-4 py-6 text-sm text-zinc-700 dark:text-zinc-200">
               Nothing to collect in this run&apos;s scope.{" "}
               <Link href="/missions" className="underline">
                 Check missions
@@ -307,7 +307,7 @@ export function MissionRunPanel({
           ) : (
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700">
+                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
                   {canBulkRecollect && (
                     <th className="pl-4 py-2 w-8">
                       <input
@@ -327,7 +327,7 @@ export function MissionRunPanel({
                   <th className="px-4 py-2 font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-100">
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {visibleItems.map(({ mission, site }) => {
                   const result = results.get(`${site.id}:${mission.id}`);
                   const reAnalyzing = partialAnalysisKeys?.has(`${site.id}:${mission.missionType}`) ?? false;
@@ -350,28 +350,28 @@ export function MissionRunPanel({
                           />
                         </td>
                       )}
-                      <td className="px-4 py-3 text-zinc-900">{site.name}</td>
-                      <td className="px-4 py-3 text-zinc-900">{mission.name}</td>
+                      <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">{site.name}</td>
+                      <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">{mission.name}</td>
                       <td className="px-4 py-3">
                         {result ? (
                           <MissionStatusBadge status={result.status} />
                         ) : (
-                          <span className="text-xs text-zinc-700">
+                          <span className="text-xs text-zinc-700 dark:text-zinc-200">
                             not collected
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-zinc-600">
+                      <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                         {result ? result.pagesCaptured : "—"}
                       </td>
-                      <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-700">
+                      <td className="max-w-xs truncate px-4 py-3 text-xs text-zinc-700 dark:text-zinc-200">
                         {result?.error ?? result?.successfulUrl ?? "—"}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <Link
                             href={`/runs/${runId}/evidence/${site.id}`}
-                            className="text-xs text-zinc-700 underline hover:text-zinc-800"
+                            className="text-xs text-zinc-700 underline hover:text-zinc-800 dark:text-zinc-200 dark:hover:text-zinc-200"
                           >
                             Evidence
                           </Link>
@@ -390,7 +390,7 @@ export function MissionRunPanel({
                               >
                                 <button
                                   type="submit"
-                                  className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                                  className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
                                 >
                                   Re-analyze
                                 </button>
@@ -398,12 +398,12 @@ export function MissionRunPanel({
                             )
                           )}
                           {busy ? (
-                            <span className="text-xs text-zinc-700">—</span>
+                            <span className="text-xs text-zinc-700 dark:text-zinc-200">—</span>
                           ) : retryable && canCollect && !executing ? (
                             <form action={retryAction.bind(null, result.id)}>
                               <button
                                 type="submit"
-                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
+                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                               >
                                 Retry
                               </button>
@@ -418,7 +418,7 @@ export function MissionRunPanel({
                             >
                               <button
                                 type="submit"
-                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
+                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                               >
                                 Re-collect
                               </button>
@@ -433,13 +433,13 @@ export function MissionRunPanel({
                             >
                               <button
                                 type="submit"
-                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50"
+                                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                               >
                                 Re-collect
                               </button>
                             </form>
                           ) : (
-                            <span className="text-xs text-zinc-700">—</span>
+                            <span className="text-xs text-zinc-700 dark:text-zinc-200">—</span>
                           )}
                         </div>
                       </td>

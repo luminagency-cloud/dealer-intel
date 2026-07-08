@@ -12,7 +12,7 @@ export default async function NewMissionPage({
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-semibold text-zinc-900">Add Mission</h1>
+      <h1 className="mb-6 text-xl font-semibold text-zinc-900 dark:text-zinc-100">Add Mission</h1>
       <MissionForm
         action={createMission}
         error={error}

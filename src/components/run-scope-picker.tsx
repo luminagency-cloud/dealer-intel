@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 
@@ -109,17 +109,17 @@ export function RunScopePicker({
       {/* Group picker panel */}
       {scope === "groups" && (
         <>
-          <span className="text-xs text-zinc-700">
+          <span className="text-xs text-zinc-700 dark:text-zinc-200">
             {checkedGroups.size} group{checkedGroups.size !== 1 ? "s" : ""}
           </span>
-          <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-64 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
-            <p className="px-2 pb-2 pt-1 text-xs text-zinc-700">
+          <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-64 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+            <p className="px-2 pb-2 pt-1 text-xs text-zinc-700 dark:text-zinc-200">
               Check one or more groups — their sites are combined into one run.
             </p>
             {groups.map((group) => (
               <label
                 key={group.id}
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-zinc-900 hover:bg-zinc-50"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-zinc-900 hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
               >
                 <input
                   type="checkbox"
@@ -139,18 +139,18 @@ export function RunScopePicker({
       {/* Dealer picker panel */}
       {scope === "custom" && (
         <>
-          <span className="text-xs text-zinc-700">
+          <span className="text-xs text-zinc-700 dark:text-zinc-200">
             {checkedSites.size} selected
           </span>
-          <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg">
-            <p className="px-2 pb-2 pt-1 text-xs text-zinc-700">
+          <div className="absolute right-0 top-full z-10 mt-2 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+            <p className="px-2 pb-2 pt-1 text-xs text-zinc-700 dark:text-zinc-200">
               Check the dealers to collect in this one run — a throwaway group,
               nothing saved.
             </p>
             {sites.map((site) => (
               <label
                 key={site.id}
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-zinc-900 hover:bg-zinc-50"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-zinc-900 hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
               >
                 <input
                   type="checkbox"

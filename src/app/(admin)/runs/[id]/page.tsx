@@ -16,7 +16,7 @@ import {
   listWorkItemsForRun,
   resolveRunGroups,
 } from "@/lib/db/repository";
-import { isRunExecuting } from "@/lib/run-executor";
+import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
 import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
@@ -28,7 +28,9 @@ import {
   executeAllMissions,
   executeWorkItem,
   forceReCollect,
+  pauseRun,
   publishSnapshot,
+  resumePausedRun,
   resumeRun,
   retryResult,
   runAnalysis,
@@ -90,8 +92,9 @@ export default async function RunDetailPage({
     (s) => !(run.status === "pending" && s === "running")
   );
 
-  const canCollect = run.status === "pending" || run.status === "running";
+  const canCollect = run.status === "pending" || run.status === "running" || run.status === "paused";
   const executing = isRunExecuting(run.id);
+  const paused = isPausedRun(run.id);
   const evidencePageCount = runResults.reduce(
     (sum, r) => sum + (r.pagesCaptured ?? 0),
     0
@@ -111,15 +114,15 @@ export default async function RunDetailPage({
       {/* Title row */}
       <div className="mb-2 flex items-center justify-between py-2">
         <div className="flex items-center gap-2 text-sm">
-          <Link href="/runs" className="text-zinc-700 hover:text-zinc-700">
+          <Link href="/runs" className="text-zinc-700 hover:text-zinc-700 dark:text-zinc-200 dark:hover:text-zinc-200">
             ← Runs
           </Link>
-          <span className="text-zinc-600">/</span>
-          <span className="font-semibold text-zinc-900">
+          <span className="text-zinc-600 dark:text-zinc-200">/</span>
+          <span className="font-semibold text-zinc-900 dark:text-zinc-100">
             Run {run.id.slice(0, 8)}
           </span>
           {scopeLabel && (
-            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-200">
               {scopeLabel}
             </span>
           )}
@@ -133,7 +136,7 @@ export default async function RunDetailPage({
                 className={
                   status === "failed"
                     ? "rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
-                    : "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
+                    : "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
                 }
               >
                 {status === "failed" ? "Mark Failed" : `Move to ${RUN_STATUS_LABELS[status]}`}
@@ -156,6 +159,7 @@ export default async function RunDetailPage({
         runId={run.id}
         initialExecuting={executing}
         initialAnalyzing={analyzing}
+        initialPaused={paused}
         initialStalled={stalled}
         initialProgress={analysisProgressData}
         initialPartialAnalysisKeys={[...partialAnalysisKeys]}
@@ -177,6 +181,8 @@ export default async function RunDetailPage({
         retryAction={retryResult.bind(null, `/runs/${run.id}`)}
         forceReCollectAction={forceReCollect.bind(null, run.id)}
         reAnalyzeSiteMissionAction={runAnalysisForSiteMission.bind(null, run.id)}
+        pauseAction={pauseRun.bind(null, run.id)}
+        resumePausedRunAction={resumePausedRun.bind(null, run.id)}
         resumeAction={resumeRun.bind(null, run.id)}
         runAnalysisAction={runAnalysis.bind(null, run.id)}
         resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}

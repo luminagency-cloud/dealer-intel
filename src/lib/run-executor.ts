@@ -28,6 +28,21 @@ const AUTO_PUBLISH_MIN_SITE_SUCCESS = Number(
   process.env.AUTO_PUBLISH_MIN_SITE_SUCCESS ?? 0.8
 );
 
+/** Max sites collected in parallel within one run. Each site opens one
+ *  Chromium browser; Playwright registers 3 process signal handlers per
+ *  browser (SIGINT, SIGTERM, exit). Setting an accurate ceiling here lets us
+ *  size process.setMaxListeners to the real architectural limit rather than
+ *  an arbitrary large number. Tune with COLLECTOR_CONCURRENCY env var. */
+const COLLECTOR_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.COLLECTOR_CONCURRENCY ?? "5", 10)
+);
+
+// Playwright: 3 handlers × COLLECTOR_CONCURRENCY browsers.
+// Next.js + system: ~15 for everything else running in this process.
+// This is a declared architectural limit, not a "hide the warning" bump.
+process.setMaxListeners(COLLECTOR_CONCURRENCY * 3 + 15);
+
 /**
  * Background run execution. Server actions enqueue work here and return
  * immediately; processing happens off-request in this Node process, writing
@@ -38,11 +53,33 @@ const AUTO_PUBLISH_MIN_SITE_SUCCESS = Number(
 // Survives dev-server HMR module reloads; one active execution per run.
 const globalState = globalThis as unknown as {
   __activeRunExecutions?: Set<string>;
+  __pausedRunExecutions?: Set<string>;
 };
 const activeRuns = (globalState.__activeRunExecutions ??= new Set<string>());
+const pausedRuns = (globalState.__pausedRunExecutions ??= new Set<string>());
 
 export function isRunExecuting(runId: string): boolean {
   return activeRuns.has(runId);
+}
+
+export function isPausedRun(runId: string): boolean {
+  return pausedRuns.has(runId);
+}
+
+/** Signal the executor to pause after the current site finishes. Updates the
+ *  DB status immediately so the UI reflects the intent before the drainer exits. */
+export async function pauseRunExecution(runId: string): Promise<void> {
+  pausedRuns.add(runId);
+  await getDb()
+    .update(collectionRuns)
+    .set({ status: "paused" })
+    .where(and(eq(collectionRuns.id, runId), eq(collectionRuns.status, "running")));
+}
+
+/** Clear the pause signal and restart the drainer to pick up pending items. */
+export async function resumeRunExecution(runId: string): Promise<void> {
+  pausedRuns.delete(runId);
+  ensureDrainer(runId);
 }
 
 /** (site, mission) pair identifying one unit of work within a run. */
@@ -97,8 +134,10 @@ async function seedResults(runId: string, items: WorkItem[]): Promise<void> {
   }
 }
 
-/** Collects a batch of work items, one browser visit per site (Phase 8).
- *  Pure processing — does not manage the activeRuns guard or finalize. */
+/** Collects a batch of work items with up to COLLECTOR_CONCURRENCY sites
+ *  running in parallel. Sites are dispatched one-by-one so the pause flag
+ *  is honoured before each new site starts; sites already in flight complete
+ *  normally. Pure processing — does not manage the activeRuns guard or finalize. */
 async function processSites(runId: string, items: WorkItem[]): Promise<void> {
   const db = getDb();
   const bySite = new Map<string, WorkItem[]>();
@@ -108,11 +147,10 @@ async function processSites(runId: string, items: WorkItem[]): Promise<void> {
     bySite.set(item.site.id, list);
   }
 
-  for (const siteItems of bySite.values()) {
+  async function runOneSite(siteItems: WorkItem[]): Promise<void> {
     const site = siteItems[0].site;
     const missionIds = siteItems.map((i) => i.mission.id);
 
-    // The whole site goes "running" for the duration of its single visit.
     await db
       .update(missionResults)
       .set({ status: "running", startedAt: new Date() })
@@ -153,8 +191,7 @@ async function processSites(runId: string, items: WorkItem[]): Promise<void> {
       }
     } catch (err) {
       // collectSite absorbs browser failures itself; this guards
-      // infrastructure errors (R2/database) so the queue keeps moving —
-      // settle whatever rows are still in flight for this site.
+      // infrastructure errors (R2/database) so the queue keeps moving.
       await db
         .update(missionResults)
         .set({
@@ -172,15 +209,41 @@ async function processSites(runId: string, items: WorkItem[]): Promise<void> {
         );
     }
   }
+
+  // Bounded concurrent pool: dispatch sites one-by-one, but let up to
+  // COLLECTOR_CONCURRENCY run simultaneously. Pause is checked before each
+  // new dispatch so an in-flight site finishes before the run actually stops.
+  const inFlight = new Set<Promise<void>>();
+  for (const siteItems of bySite.values()) {
+    if (pausedRuns.has(runId)) break;
+
+    // Wait for a slot to open when the pool is full.
+    if (inFlight.size >= COLLECTOR_CONCURRENCY) {
+      await Promise.race(inFlight);
+    }
+    if (pausedRuns.has(runId)) break;
+
+    const task: Promise<void> = runOneSite(siteItems).finally(() => {
+      inFlight.delete(task);
+    });
+    inFlight.add(task);
+  }
+
+  // Drain any sites still in flight.
+  if (inFlight.size > 0) await Promise.all(inFlight);
 }
 
 async function processQueue(runId: string, items: WorkItem[]): Promise<void> {
   try {
     await processSites(runId, items);
-    await finalizeRunIfDone(runId);
+    if (!pausedRuns.has(runId)) {
+      await finalizeRunIfDone(runId);
+    }
   } finally {
     activeRuns.delete(runId);
-    await rescuePending(runId);
+    if (!pausedRuns.has(runId)) {
+      await rescuePending(runId);
+    }
   }
 }
 
@@ -227,7 +290,7 @@ async function drainRun(runId: string): Promise<void> {
       .where(eq(collectionRuns.id, runId));
     if (!run) return;
     // Surface progress on the run page; finalize re-settles at the end.
-    if (run.status === "pending" || run.status === "review" || run.status === "failed" || run.status === "complete") {
+    if (run.status === "pending" || run.status === "paused" || run.status === "review" || run.status === "failed" || run.status === "complete") {
       await db
         .update(collectionRuns)
         .set({ status: "running", startedAt: run.startedAt ?? new Date() })
@@ -238,6 +301,7 @@ async function drainRun(runId: string): Promise<void> {
     const byKey = new Map(scope.map((i) => [`${i.site.id}:${i.mission.id}`, i]));
 
     while (true) {
+      if (pausedRuns.has(runId)) break;
       const pendings = await db
         .select({
           siteId: missionResults.siteId,
@@ -262,10 +326,14 @@ async function drainRun(runId: string): Promise<void> {
       await processSites(runId, items);
     }
 
-    await finalizeRunIfDone(runId);
+    if (!pausedRuns.has(runId)) {
+      await finalizeRunIfDone(runId);
+    }
   } finally {
     activeRuns.delete(runId);
-    await rescuePending(runId);
+    if (!pausedRuns.has(runId)) {
+      await rescuePending(runId);
+    }
   }
 }
 

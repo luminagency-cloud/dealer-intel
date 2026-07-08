@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { asc, eq } from "drizzle-orm";
 import { getDb, sites } from "@/lib/db";
 import { RunGroupForm } from "@/components/run-group-form";
@@ -21,11 +21,11 @@ export default async function NewRunGroupPage({
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-semibold text-zinc-900">
+      <h1 className="mb-6 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
         Add Run Group
       </h1>
       {siteOptions.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
           Create some{" "}
           <Link href="/dealers/new" className="underline">
             dealers

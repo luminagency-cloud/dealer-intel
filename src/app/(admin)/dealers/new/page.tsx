@@ -10,7 +10,7 @@ export default async function NewDealerPage({
 
   return (
     <div>
-      <h1 className="mb-6 text-xl font-semibold text-zinc-900">Add Dealer</h1>
+      <h1 className="mb-6 text-xl font-semibold text-zinc-900 dark:text-zinc-100">Add Dealer</h1>
       <SiteForm action={createSite} error={error} submitLabel="Create Dealer" />
     </div>
   );

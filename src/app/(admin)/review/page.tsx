@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import {
   MISSION_TYPE_LABELS,
@@ -78,20 +78,20 @@ export default async function ReviewPage() {
     <div>
       <AutoRefresh active={inProgressCount > 0} />
       {inProgressCount > 0 && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
           Re-collecting {inProgressCount} queued item
           {inProgressCount === 1 ? "" : "s"}… this page refreshes as they finish.
         </div>
       )}
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-zinc-900">Review Queue</h1>
+        <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">Review Queue</h1>
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3 text-sm text-zinc-600">
+          <div className="flex items-center gap-3 text-sm text-zinc-600 dark:text-zinc-200">
             {OPEN_STATUSES.map((status) => (
               <span key={status}>
                 {MISSION_RESULT_STATUS_LABELS[status]}:{" "}
-                <span className="font-semibold text-zinc-900">
+                <span className="font-semibold text-zinc-900 dark:text-zinc-100">
                   {counts[status]}
                 </span>
               </span>
@@ -101,7 +101,7 @@ export default async function ReviewPage() {
             <form id="bulk-delete" action={deleteSelectedResults}>
               <ConfirmSubmitButton
                 confirmMessage="Delete the selected items? Their evidence files are also removed."
-                className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+                className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
               >
                 Delete Selected
               </ConfirmSubmitButton>
@@ -111,13 +111,13 @@ export default async function ReviewPage() {
       </div>
 
       {rows.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700">
+        <p className="rounded-lg border border-dashed border-zinc-300 bg-white p-8 text-center text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
           Nothing needs review — all collections on open runs succeeded.
         </p>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700">
+            <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
               <tr>
                 <th className="px-4 py-3 text-center">Del</th>
                 <th className="px-4 py-3">Site</th>
@@ -128,7 +128,7 @@ export default async function ReviewPage() {
                 <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-100">
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {rows.map(({ result, run, site, mission }) => (
                 <tr key={result.id}>
                   <td className="px-4 py-3 text-center">
@@ -141,22 +141,22 @@ export default async function ReviewPage() {
                       className="h-4 w-4 rounded border-zinc-300 text-red-600 focus:ring-red-500"
                     />
                   </td>
-                  <td className="px-4 py-3 font-medium text-zinc-900">
+                  <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
                     {site.name}
                   </td>
-                  <td className="px-4 py-3 text-zinc-900">
+                  <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                     {mission?.name ?? MISSION_TYPE_LABELS[result.missionType]}
                   </td>
                   <td className="px-4 py-3">
                     <MissionStatusBadge status={result.status} />
                   </td>
-                  <td className="max-w-sm truncate px-4 py-3 text-xs text-zinc-700">
+                  <td className="max-w-sm truncate px-4 py-3 text-xs text-zinc-700 dark:text-zinc-200">
                     {result.error ??
                       (result.status === "needs_review"
                         ? `Captured ${result.pagesCaptured} page(s); some configured pages failed`
                         : "—")}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600">
+                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                     <Link
                       href={`/runs/${run.id}`}
                       className="hover:underline"
@@ -170,14 +170,14 @@ export default async function ReviewPage() {
                       <form action={retryResult.bind(null, "/review", result.id)}>
                         <button
                           type="submit"
-                          className="text-zinc-900 underline hover:text-zinc-600"
+                          className="text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
                         >
                           Retry
                         </button>
                       </form>
                       <Link
                         href={`/dealers/${site.id}/edit`}
-                        className="text-zinc-600 hover:underline"
+                        className="text-zinc-600 hover:underline dark:text-zinc-200 dark:hover:text-zinc-200"
                       >
                         Fix URL
                       </Link>
@@ -190,7 +190,7 @@ export default async function ReviewPage() {
                       >
                         <button
                           type="submit"
-                          className="text-zinc-600 hover:underline"
+                          className="text-zinc-600 hover:underline dark:text-zinc-200 dark:hover:text-zinc-200"
                           title="The content is genuinely gone from the site"
                         >
                           Content Removed
@@ -204,7 +204,7 @@ export default async function ReviewPage() {
           </table>
         </div>
       )}
-      <p className="mt-4 text-xs text-zinc-700">
+      <p className="mt-4 text-xs text-zinc-700 dark:text-zinc-200">
         Retry re-collects the mission immediately. Fix URL opens the mission
         to update its target pages. Content Removed resolves the item when
         the page is genuinely gone.

@@ -37,7 +37,7 @@ export function SettingsDropdown() {
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-zinc-200 bg-white py-1 shadow-md">
+        <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-zinc-200 bg-white py-1 shadow-md dark:border-zinc-700 dark:bg-zinc-900">
           {[
             { href: "/dealers", label: "Dealers" },
             { href: "/missions", label: "Missions" },
@@ -48,7 +48,7 @@ export function SettingsDropdown() {
               key={href}
               href={href}
               onClick={() => setOpen(false)}
-              className="block px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900"
+              className="block px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               {label}
             </Link>

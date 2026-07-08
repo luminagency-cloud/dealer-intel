@@ -176,7 +176,7 @@ export async function getCycleGroupStatus(weekLabel: string): Promise<GroupCycle
   }
 
   const priority = (s: RunStatus) =>
-    ({ complete: 4, review: 3, running: 2, pending: 1, failed: 0 }[s] ?? 0);
+    ({ complete: 4, review: 3, running: 2, paused: 2, pending: 1, failed: 0 }[s] ?? 0);
 
   const groupToRun = new Map<string, (typeof cycleRuns)[0]>();
   const tryAssign = (gid: string, run: (typeof cycleRuns)[0]) => {
