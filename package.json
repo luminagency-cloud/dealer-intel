@@ -1,7 +1,7 @@
 {
   "name": "dealer-intel",
-  "version": "2.1.96",
-  "description": "adding Darkmode; fixing OCR logic",
+  "version": "2.4.710",
+  "description": "bashing on analysis quality",
   "private": true,
   "scripts": {
     "dev": "next dev",
