@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { eq } from "drizzle-orm";
-import { getDb, missionResults } from "@/lib/db";
+import { getDb, missionResults, collectionRuns } from "@/lib/db";
 import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
 import {
   isAnalysisRunning,
@@ -18,8 +18,9 @@ export async function GET(
 
   const { id } = await params;
 
-  const [results, executing, analyzing, progress, partialKeys] = await Promise.all([
-    getDb()
+  const db = getDb();
+  const [results, executing, analyzing, progress, partialKeys, runRecord] = await Promise.all([
+    db
       .select({
         id: missionResults.id,
         siteId: missionResults.siteId,
@@ -35,6 +36,13 @@ export async function GET(
     Promise.resolve(isAnalysisRunning(id)),
     Promise.resolve(getAnalysisProgress(id)),
     Promise.resolve(getPartialAnalysisKeys(id)),
+    db
+      .select({
+        startedAt: collectionRuns.startedAt,
+        completedAt: collectionRuns.completedAt,
+      })
+      .from(collectionRuns)
+      .where(eq(collectionRuns.id, id)),
   ]);
 
   const paused = isPausedRun(id);
@@ -51,5 +59,7 @@ export async function GET(
     progress,
     partialAnalysisKeys: [...partialKeys],
     results,
+    collectionStartedAt: runRecord[0]?.startedAt ?? null,
+    collectionCompletedAt: runRecord[0]?.completedAt ?? null,
   });
 }

@@ -16,6 +16,31 @@ function confidenceStyle(confidence: number | null): string {
   return "text-red-700";
 }
 
+/** How a service coupon read from an image was verified against its alt text.
+ *  "corroborated" is trusted; the others are worth a human glance at the ad. */
+type CouponVerify = "ocr_only" | "alt_only" | "mismatch";
+
+function couponVerify(offer: Offer): CouponVerify | null {
+  const nj = offer.normalizedJson as { matches?: { verify?: string } } | null;
+  const v = nj?.matches?.verify;
+  return v === "ocr_only" || v === "alt_only" || v === "mismatch" ? v : null;
+}
+
+const VERIFY_LABEL: Record<CouponVerify, string> = {
+  mismatch: "check",
+  ocr_only: "unconfirmed",
+  alt_only: "unconfirmed",
+};
+
+function verifyTitle(offer: Offer, v: CouponVerify): string {
+  const nj = offer.normalizedJson as { matches?: { ocrValue?: string; altValue?: string } } | null;
+  if (v === "mismatch") {
+    return `The coupon image and its alt text disagree — image read "${nj?.matches?.ocrValue ?? "?"}", alt said "${nj?.matches?.altValue ?? "?"}". Showing the image read; check the ad.`;
+  }
+  if (v === "ocr_only") return "Read from the coupon image; no alt text to confirm it. Glance at the ad if it looks off.";
+  return "Read from alt text only (no image read available); can be stale. Glance at the ad if it looks off.";
+}
+
 const TYPE_ORDER: Record<string, number> = {
   lease: 0,
   finance: 1,
@@ -86,6 +111,10 @@ export function AnalysisSection({
       })
     : filtered;
 
+  // Image-coupon offers whose read wasn't corroborated — a glance-if-curious
+  // count, never a gate. Scoped to the current site filter.
+  const uncertainCount = filtered.filter((o) => couponVerify(o) !== null).length;
+
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
@@ -101,6 +130,11 @@ export function AnalysisSection({
                 <span className="font-normal text-zinc-700 dark:text-zinc-200">
                   — {offers.length} offer{offers.length === 1 ? "" : "s"}
                   {siteFilter !== "all" && ` · ${filtered.length} shown`}
+                  {uncertainCount > 0 && (
+                    <span className="text-amber-700 dark:text-amber-500">
+                      {" · "}{uncertainCount} to check
+                    </span>
+                  )}
                 </span>
               )}
               <span className="ml-2 text-sm font-normal text-zinc-700">
@@ -258,6 +292,7 @@ export function AnalysisSection({
                     const isPromotional = offer.offerType === "promotional";
                     const nJson = offer.normalizedJson as { aiAssisted?: boolean; source?: string } | null;
                     const isImagePromo = isPromotional && nJson?.source === "image_extraction";
+                    const verify = couponVerify(offer);
                     return (
                       <tr key={offer.id} className={isPromotional ? "bg-amber-50 dark:bg-amber-950/30" : ""}>
                         {siteFilter === "all" && (
@@ -291,6 +326,18 @@ export function AnalysisSection({
                               : offer.salePrice !== null
                                 ? money(offer.salePrice)
                                 : "—"}
+                          {verify && (
+                            <span
+                              className={`ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                                verify === "mismatch"
+                                  ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
+                                  : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+                              }`}
+                              title={verifyTitle(offer, verify)}
+                            >
+                              {VERIFY_LABEL[verify]}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {offer.apr === null ? "—" : `${offer.apr}%`}

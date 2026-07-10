@@ -208,6 +208,25 @@ function extractSalePrice(text: string) {
   return { value, match: m[0].trim() };
 }
 
+// Template placeholder / abstract offers that dealer CMS themes ship as filler.
+// DDC's "Wild Card" coupon is a generic "up to $X off anything" slot, not a
+// real advertised service — it must never become an offer row.
+const PLACEHOLDER_OFFER_MARKERS = ["wild card", "wildcard"];
+
+/** True when the card text is a CMS placeholder rather than a real offer. */
+function isPlaceholderServiceOffer(text: string): boolean {
+  const lower = text.toLowerCase();
+  return PLACEHOLDER_OFFER_MARKERS.some((mk) => lower.includes(mk));
+}
+
+/** A recognizable service keyword appears somewhere in the text. Used to gate
+ *  the fallback anchor path so a discount phrase in unrelated page copy (or
+ *  legal boilerplate) is never read as a service offer. */
+function hasServiceContext(text: string): boolean {
+  const lower = text.toLowerCase();
+  return SERVICE_TYPE_KEYWORDS.some(([kw]) => lower.includes(kw));
+}
+
 // Service type keywords in priority order. First match wins.
 // Pairs of [search-substring (lowercase), display label].
 const SERVICE_TYPE_KEYWORDS: [string, string][] = [
@@ -281,28 +300,62 @@ function buildServiceLabel(chunkText: string): string {
   return "Service Special";
 }
 
-/** Captures the service offer value as a human-readable string — no numeric
- *  parsing. Patterns tried in priority order so "25% off tires" beats "$25"
- *  and a percentage isn't rendered with a dollar sign.
+/** Collapses whitespace and title-normalizes a captured benefit string. */
+function normalizeOfferValue(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Captures the SERVICE OFFER VALUE — the benefit only, not what it's for.
  *
- *  Returns null when no monetary or discount signal is found (no priced offer). */
+ *  The "what" (Oil Change, Brake Service…) is the label, produced separately by
+ *  buildServiceLabel(). This returns just the benefit: "$10 Off", "15% Off",
+ *  "Complimentary", "Free". Deliberately narrow — we trigger on the discount,
+ *  never on a stray dollar amount, and we never trail into the card's UI chrome
+ *  ("CLAIM OFFER", "SCHEDULE SERVICE") or its description prose.
+ *
+ *  Free/complimentary collapse to a single canonical token so two windows over
+ *  the same coupon can't survive as distinct rows ("Complimentary Expires…" vs
+ *  "Complimentary Bring your…" were the same offer all along).
+ *
+ *  Returns null when there is no discount/free signal — i.e. not a real offer. */
 function extractServiceOfferText(text: string): string | null {
-  const patterns: [RegExp, number][] = [
-    [/\d+\s*%\s*off\b[^.!\n]{0,50}/i, 0],                  // "25% off new tires"
-    [/\$\s?[\d,]+(?:\.\d{2})?\s*off\b[^.!\n]{0,40}/i, 0],  // "$25 off cabin air filter"
-    [/save\s+(?:up\s+to\s+)?\$[\d,]+(?:\.\d{2})?/i, 0],    // "save $25"
-    [/complimentary\b[^.!\n]{0,50}/i, 0],                   // "Complimentary Rental w/Major Maintenance"
-    [/free\b[^.!\n]{0,30}/i, 0],                            // "FREE with purchase"
-    [/\d+\s*for\s*\d+/i, 0],                                // "2 for 1"
-    [/buy\s+\d+[^.!\n]{0,30}/i, 0],                         // "buy 2 get 1 free"
-    [/\d+\s*%\s*price match\b[^.!\n]{0,30}/i, 0],           // "120% Price Match on Tire Purchases"
-    [/price match\b[^.!\n]{0,30}/i, 0],                     // "Price Match Guarantee"
-    [/\$\s?[\d,]{1,5}(?:\.\d{2})?\b/, 0],                   // flat price "$24.95" / "$30"
-  ];
-  for (const [re] of patterns) {
-    const m = text.match(re);
-    if (m) return m[0].trim();
-  }
+  // The value is the discount itself — "10% Off", "$10 Off" — and nothing else.
+  // No trailing scope/qualifier: it only ever dragged in card prose ("…for
+  // Students and Teachers Offer val…") and the operator wants the bare discount.
+  // Percentage off — most specific.
+  let m = text.match(/\d+\s*%\s*off\b/i);
+  if (m) return normalizeOfferValue(m[0]);
+
+  // Dollar off.
+  m = text.match(/\$\s?[\d,]+(?:\.\d{2})?\s*off\b/i);
+  if (m) return normalizeOfferValue(m[0]);
+
+  // Save $X.
+  m = text.match(/save\s+(?:up\s+to\s+)?\$[\d,]+(?:\.\d{2})?/i);
+  if (m) return normalizeOfferValue(m[0]);
+
+  // Free / complimentary — canonical token, NO trailing description. This is
+  // what killed "Complimentary Expires" / "Free with your…" garbage: the word
+  // after the benefit is the card's prose, not part of the offer.
+  if (/\bcomplimentary\b/i.test(text)) return "Complimentary";
+  if (/\bfree\b/i.test(text)) return "Free";
+
+  // Bundle offers — require a concrete benefit after the count so "buy 2" alone
+  // (no reward) isn't treated as an offer.
+  m = text.match(/buy\s+\d+\s+(?:get|and)\s+\d*\s*(?:free|half\s+off|\d+\s*%\s*off|\$[\d,]+\s*off)/i);
+  if (m) return normalizeOfferValue(m[0]);
+
+  // Price match.
+  m = text.match(/\d+\s*%\s*price\s+match/i);
+  if (m) return normalizeOfferValue(m[0]);
+  if (/price\s+match\s+guarantee/i.test(text)) return "Price Match Guarantee";
+
+  // Flat coupon price — decimal cents only ("$24.95"), which is how service
+  // coupons are priced. Bare integers ("$399") are excluded: that is the doc-fee
+  // / MSRP / tax-figure noise that must never be read as an offer.
+  m = text.match(/\$\s?[\d,]{1,5}\.\d{2}\b/);
+  if (m) return normalizeOfferValue(m[0]);
+
   return null;
 }
 
@@ -490,24 +543,32 @@ function extractOfferFromText(
   // signal — a stray "X miles per year" shouldn't itself make a chunk look
   // like a priced offer, so it's kept out of `fields`/signalCount below.
   const mileageAllowance = isService ? null : parseMileage(text);
-  // Service offer text is captured as a human-readable string (e.g. "$25 off",
-  // "25% off tires") — no numeric parse, so a percentage isn't stored as a
-  // dollar amount and non-price offers (2-for-1, FREE) round-trip cleanly.
+  // Service offer text is captured as a human-readable string (e.g. "$25 Off",
+  // "25% Off", "Complimentary") — no numeric parse, so a percentage isn't
+  // stored as a dollar amount and free/complimentary offers round-trip cleanly.
   const serviceOfferText = isService ? extractServiceOfferText(text) : null;
 
+  // A service coupon is shop work with a discount — NEVER a lease/finance/cash
+  // vehicle offer. Payment, APR, term, due-at-signing, cash, and sale price are
+  // vehicle-offer fields; forcing them null on service stops a stray "12 month
+  // warranty" becoming a lease term or a warranty dollar figure becoming cash.
   const fields = {
-    monthlyPayment: payment?.value ?? null,
-    apr: apr?.value ?? null,
+    monthlyPayment: isService ? null : (payment?.value ?? null),
+    apr: isService ? null : (apr?.value ?? null),
     // Service never populates cashIncentive/salePrice — the offer lives in matches.serviceOffer.
     cashIncentive: isService ? null : (cash?.value ?? null),
     salePrice: isService ? null : (salePrice?.value ?? null),
-    termMonths: term?.value ?? null,
-    dueAtSigning: due?.value ?? null,
+    termMonths: isService ? null : (term?.value ?? null),
+    dueAtSigning: isService ? null : (due?.value ?? null),
   };
 
   const signalCount = Object.values(fields).filter((v) => v !== null).length;
   const hasServiceSignal = Boolean(serviceOfferText);
   if (signalCount === 0 && !hasServiceSignal) return null;
+
+  // Drop CMS placeholder coupons ("Wild Card up to $X off anything") — they are
+  // filler slots, not advertised services. Only applies to the service path.
+  if (isService && isPlaceholderServiceOffer(text)) return null;
 
   const offerType = classify(fields, hints);
 
@@ -526,35 +587,37 @@ function extractOfferFromText(
   // section) produces wrong labels AND breaks dedup (same offer, different model
   // → two rows). Always null for service.
   const vehicle = isService ? { make: null, model: null, trim: null } : extractVehicle(text, hints, anchorContext);
-  const disclaimer = extractDisclaimerNear(text, anchorIndex);
+  // Disclaimers are ad fine print for priced VEHICLE offers. Service coupons
+  // don't carry ad-specific disclaimers we report on (hard rule: no disclaimer
+  // text on service ads), so never attach one.
+  const disclaimer = isService ? null : extractDisclaimerNear(text, anchorIndex);
 
   const matches: Record<string, string> = {};
-  if (payment) matches.monthlyPayment = payment.match;
-  if (apr) matches.apr = apr.match;
-  if (term) matches.termMonths = term.match;
-  if (due) matches.dueAtSigning = due.match;
+  // Vehicle-offer field matches — omitted entirely on service so the drill-down
+  // JSON can't imply a lease term / APR the offer doesn't have.
+  if (!isService && payment) matches.monthlyPayment = payment.match;
+  if (!isService && apr) matches.apr = apr.match;
+  if (!isService && term) matches.termMonths = term.match;
+  if (!isService && due) matches.dueAtSigning = due.match;
   if (!isService && cash) matches.cashIncentive = cash.match;
   if (!isService && salePrice) matches.salePrice = salePrice.match;
   if (serviceOfferText) matches.serviceOffer = serviceOfferText;
 
   // Service: label = "what's it for" (Oil Change, Brake Service…);
-  // offer value lives in matches.serviceOffer ("$25 off", "25% off", "$24.95").
+  // offer value lives in matches.serviceOffer ("$25 Off", "25% Off", "Complimentary").
   const rawText = isService
     ? buildServiceLabel(text)
     : contextAround(text, anchor);
 
-  // Service confidence is scored independently from vehicle offers:
-  // finding a price/discount is the dominant signal (0.4), a recognized
-  // service label (not the generic fallback) adds 0.2. This pushes
-  // well-extracted service offers above the AI threshold so they skip AI
-  // enrichment — service offers are vehicle-free by design, so the null-model
-  // AI trigger must not fire for them.
+  // Service confidence: a clean discount/free signal is the dominant evidence
+  // (0.5), a recognized service label (not the generic fallback) adds 0.3. A
+  // well-extracted service offer therefore clears the AI threshold (0.5) and
+  // skips the vehicle-oriented AI pass, which has no business rewriting it.
   const confidence = isService
     ? Math.min(
         1,
-        (hasServiceSignal ? 0.4 : 0) +
-          (rawText !== "Service Special" ? 0.2 : 0) +
-          (disclaimer ? 0.1 : 0)
+        (hasServiceSignal ? 0.5 : 0) +
+          (rawText !== "Service Special" ? 0.3 : 0)
       )
     : Math.min(
         1,
@@ -590,23 +653,123 @@ interface ServiceAnchor {
   text: string;
 }
 
-/** Anchors for service-specials pages: flat prices, dollar-off, and
- *  percentage-off phrases. Returns matched text alongside position so we can
- *  inject the exact anchor value into the offer rather than re-searching the
- *  window and risking picking up a different price that happens to appear
- *  earlier in the surrounding text. */
+/** Anchors for service-specials pages: dollar-off and percentage-off phrases ONLY.
+ *  Flat prices ($X.XX) are excluded because they match too much noise:
+ *  doc fees ($399, $499), state-specific charges, tax info, MSRP, etc.
+ *  Service offers MUST have explicit discount/off language.
+ *  Returns matched text alongside position so we can inject the exact anchor
+ *  value into the offer rather than re-searching the window and risking
+ *  picking up a different value that happens to appear earlier. */
 function serviceAnchors(text: string): ServiceAnchor[] {
-  const priceRe = /\$\s?[\d,]{1,5}\.\d{2}\b/gi;
+  // Match the discount phrase ONLY — no trailing description. The anchor text
+  // becomes the offer value, so it must be clean ("15% Off", "$10 Off"), never
+  // "15% off CLAIM OFFER SCHEDULE SERVICE".
   const discountRe = /\$\s?[\d,]{1,5}(?:\.\d{2})?\s*off\b/gi;
-  const percentRe = /\d+\s*%\s*off\b[^.!\n]{0,60}/gi;
+  const percentRe = /\d+\s*%\s*off\b/gi;
   const results: ServiceAnchor[] = [];
   let m: RegExpExecArray | null;
-  for (const re of [priceRe, discountRe, percentRe]) {
+  for (const re of [discountRe, percentRe]) {
     while ((m = re.exec(text)) !== null) {
-      results.push({ pos: m.index, text: m[0].trim() });
+      results.push({ pos: m.index, text: normalizeOfferValue(m[0]) });
     }
   }
   return results.sort((a, b) => a.pos - b.pos);
+}
+
+/** A service coupon rendered as an image (DDC/Dealer.com). `data-image-url`
+ *  marks the coupon graphic — vehicle thumbnails and logos don't carry it — so
+ *  it cleanly selects the coupons to OCR. `alt` is the paired accessibility
+ *  text used as a cross-check on the OCR read. */
+export interface ServiceCouponImage {
+  alt: string | null;
+  imageUrl: string;
+}
+
+/** Finds coupon images on a service-specials page. Selects `<img>` tags with a
+ *  `data-image-url` (the Dealer.com coupon-graphic marker) and pairs each with
+ *  its `alt`. The image is what customers see (OCR reads it, primary); alt is
+ *  the cross-check. Deduped by URL. */
+export function findServiceCouponImages(html: string): ServiceCouponImage[] {
+  const out: ServiceCouponImage[] = [];
+  const seen = new Set<string>();
+  const imgRe = /<img\b[^>]*>/gi;
+  let tag: RegExpExecArray | null;
+  while ((tag = imgRe.exec(html)) !== null) {
+    const t = tag[0];
+    const urlM = t.match(/\bdata-image-url=(?:"([^"]*)"|'([^']*)')/i);
+    if (!urlM) continue;
+    let url = (urlM[1] ?? urlM[2] ?? "").trim();
+    if (!url) continue;
+    if (url.startsWith("//")) url = "https:" + url;
+    if (!/^https?:/i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const altM = t.match(/\balt=(?:"([^"]*)"|'([^']*)')/i);
+    const alt = altM ? htmlToText(altM[1] ?? altM[2] ?? "") : "";
+    out.push({ alt: alt.length >= 3 ? alt : null, imageUrl: url });
+  }
+  return out;
+}
+
+/** Normalizes a service offer value to a comparable token so OCR and alt reads
+ *  can be checked for agreement. Dollar amounts compare on whole dollars
+ *  ("$599.95" ≈ "$599"); percentages on the number; free/complimentary collapse. */
+function normalizeValueForMatch(v: string | undefined): string {
+  if (!v) return "";
+  const s = v.toLowerCase();
+  const pct = s.match(/(\d+)\s*%/);
+  if (pct) return `pct:${pct[1]}`;
+  if (/complimentary|free/.test(s)) return "free";
+  const dol = s.match(/\$\s?([\d,]+)/);
+  if (dol) return `usd:${dol[1].replace(/,/g, "")}`;
+  if (/price\s*match/.test(s)) return "pricematch";
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Two reads describe the same offer when their normalized values agree. */
+function fuzzyOfferMatch(a: ExtractedOffer, b: ExtractedOffer): boolean {
+  const va = normalizeValueForMatch(a.matches.serviceOffer);
+  const vb = normalizeValueForMatch(b.matches.serviceOffer);
+  return va !== "" && va === vb;
+}
+
+/** Reconciles the OCR read of a coupon image (primary — it's the live graphic
+ *  customers see) against its alt text (cross-check — accessibility metadata
+ *  that can drift). Sets confidence and a `verify` marker consumed by the UI:
+ *   - corroborated: OCR + alt agree            → 0.85, trusted
+ *   - mismatch:     they disagree              → 0.50, keep OCR, flag for a look
+ *   - ocr_only:     OCR read it, no usable alt → 0.60
+ *   - alt_only:     OCR blank, alt had it      → 0.50, weakest (stale-prone)
+ *  Returns null when neither read yields an offer. */
+export function reconcileServiceCoupon(
+  ocrText: string | null,
+  altText: string | null,
+  hints: ExtractHints
+): ExtractedOffer | null {
+  const ocrOffer = ocrText && ocrText.trim() ? extractOfferFromText(ocrText, hints) : null;
+  const altOffer = altText && altText.trim() ? extractOfferFromText(altText, hints) : null;
+  if (!ocrOffer && !altOffer) return null;
+
+  if (ocrOffer && altOffer) {
+    if (fuzzyOfferMatch(ocrOffer, altOffer)) {
+      ocrOffer.confidence = 0.85;
+      ocrOffer.matches.verify = "corroborated";
+      return ocrOffer;
+    }
+    ocrOffer.confidence = 0.5;
+    ocrOffer.matches.verify = "mismatch";
+    ocrOffer.matches.ocrValue = ocrOffer.matches.serviceOffer ?? "";
+    ocrOffer.matches.altValue = altOffer.matches.serviceOffer ?? "";
+    return ocrOffer;
+  }
+  if (ocrOffer) {
+    ocrOffer.confidence = 0.6;
+    ocrOffer.matches.verify = "ocr_only";
+    return ocrOffer;
+  }
+  altOffer!.confidence = 0.5;
+  altOffer!.matches.verify = "alt_only";
+  return altOffer!;
 }
 
 /** Find every priced-offer anchor position in page text — monthly payment
@@ -767,54 +930,52 @@ export function extractOffers(
   html: string,
   hints: ExtractHints
 ): ExtractedOffer[] {
-  // Service specials: split by DOM card boundaries first — true card isolation
-  // with no character windowing. Each offer card in the HTML grid is a sibling
-  // block element; splitHtmlIntoCards finds that layer automatically.
+  // Service specials — DOM/text extraction only. This is the trusted path:
+  //   1. DOM offer cards            — Dealer Inspire grids, DOM-text specials
+  //   2. discount-anchor windowing  — last-resort fallback for loose text
+  // Image coupons (DDC/Dealer.com), which have no DOM text, are handled
+  // separately by the runner: it OCRs each coupon graphic and reconciles it
+  // against the alt via reconcileServiceCoupon(). So when this returns empty for
+  // a service page, the runner falls through to that OCR pass.
   if (hints.missionType === "service_specials") {
-    const cards = splitHtmlIntoCards(html);
-    if (cards.length > 0) {
-      const results: ExtractedOffer[] = [];
-      const seen = new Set<string>();
-      for (const cardText of cards) {
-        const offer = extractOfferFromText(cardText, hints);
-        if (!offer) continue;
-        const sig = offerSig(offer);
-        if (seen.has(sig)) continue;
-        seen.add(sig);
-        results.push(offer);
-      }
-      if (results.length > 0) return results;
+    const results: ExtractedOffer[] = [];
+    const seen = new Set<string>();
+    const push = (offer: ExtractedOffer | null) => {
+      if (!offer) return;
+      const sig = offerSig(offer);
+      if (seen.has(sig)) return;
+      seen.add(sig);
+      results.push(offer);
+    };
+
+    // 1. DOM offer cards — visible, maintained ad copy.
+    for (const cardText of splitHtmlIntoCards(html)) {
+      push(extractOfferFromText(cardText, hints));
     }
-    // Card structure not detected — fall back to anchor-based windowing.
+
+    // 2. Fallback: only when cards found nothing. Window around each discount
+    //    anchor, requiring a recognized service nearby so a stray "$10 off" or
+    //    legal figure can't hallucinate a coupon.
+    if (results.length === 0) {
+      const svcText = htmlToText(html);
+      for (const anchor of serviceAnchors(svcText)) {
+        const chunk = svcText.slice(
+          Math.max(0, anchor.pos - WINDOW_BEFORE),
+          Math.min(svcText.length, anchor.pos + WINDOW_AFTER)
+        );
+        if (!hasServiceContext(chunk)) continue;
+        const offer = extractOfferFromText(chunk, hints);
+        if (!offer) continue;
+        offer.matches.serviceOffer = anchor.text;
+        push(offer);
+      }
+    }
+
+    return results;
   }
 
   const text = htmlToText(html);
   if (!text) return [];
-
-  // Service specials fallback: window around price / discount anchors.
-  if (hints.missionType === "service_specials") {
-    const anchors = serviceAnchors(text);
-    // No service-specific price/discount anchors → page has no service specials.
-    // Do NOT fall back to full-page extraction; that picks up vehicle prices,
-    // nav links, or other page chrome unrelated to service offers.
-    if (anchors.length === 0) return [];
-    const results: ExtractedOffer[] = [];
-    const seen = new Set<string>();
-    for (const anchor of anchors) {
-      const chunk = text.slice(
-        Math.max(0, anchor.pos - WINDOW_BEFORE),
-        Math.min(text.length, anchor.pos + WINDOW_AFTER)
-      );
-      const offer = extractOfferFromText(chunk, hints);
-      if (!offer) continue;
-      offer.matches.serviceOffer = anchor.text;
-      const sig = offerSig(offer);
-      if (seen.has(sig)) continue;
-      seen.add(sig);
-      results.push(offer);
-    }
-    return results;
-  }
 
   const positions = offerAnchorPositions(text);
 

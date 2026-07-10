@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
+import { fmtDateTime } from "@/lib/fmt-date";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
 import { RunWorkflowStrip } from "@/components/run-workflow-strip";
 import { AnalysisSection } from "@/components/analysis-section";
@@ -17,6 +18,8 @@ interface LiveStatus {
     MissionResult,
     "id" | "siteId" | "missionId" | "status" | "pagesCaptured" | "successfulUrl" | "error"
   >[];
+  collectionStartedAt?: Date | null;
+  collectionCompletedAt?: Date | null;
 }
 
 export function RunLiveData({
@@ -57,8 +60,6 @@ export function RunLiveData({
   // Static metadata bar content — pre-formatted by the server page
   runIdShort,
   createdLabel,
-  startedLabel,
-  completedLabel,
   error,
 }: {
   runId: string;
@@ -97,8 +98,6 @@ export function RunLiveData({
   collectionCompletedAt?: Date | null;
   runIdShort: string;
   createdLabel: string;
-  startedLabel: string | null;
-  completedLabel: string | null;
   error?: string;
 }) {
   const [live, setLive] = useState<LiveStatus>({
@@ -109,6 +108,8 @@ export function RunLiveData({
     progress: initialProgress,
     partialAnalysisKeys: initialPartialAnalysisKeys,
     results: initialResults,
+    collectionStartedAt,
+    collectionCompletedAt,
   });
 
   const active = live.executing || live.analyzing || live.partialAnalysisKeys.length > 0;
@@ -204,12 +205,12 @@ export function RunLiveData({
         defaultSnapshotLabel={defaultSnapshotLabel}
       />
 
-      {/* Static metadata bar */}
+      {/* Metadata bar with live updates */}
       <div className="mb-6 flex items-center gap-4 border-b border-zinc-100 py-2 text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
         <span className="font-mono">{runIdShort}</span>
         <span>Created {createdLabel}</span>
-        {startedLabel && <span>Started {startedLabel}</span>}
-        {completedLabel && <span>Completed {completedLabel}</span>}
+        {live.collectionStartedAt && <span>Started {fmtDateTime(live.collectionStartedAt)}</span>}
+        {live.collectionCompletedAt && <span>Completed {fmtDateTime(live.collectionCompletedAt)}</span>}
       </div>
 
       <div id="collection" className="mb-8">

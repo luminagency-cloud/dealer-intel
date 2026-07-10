@@ -196,8 +196,6 @@ export default async function RunDetailPage({
         collectionCompletedAt={run.completedAt}
         runIdShort={run.id}
         createdLabel={fmtDateTime(run.createdAt)}
-        startedLabel={run.startedAt ? fmtDateTime(run.startedAt) : null}
-        completedLabel={run.completedAt ? fmtDateTime(run.completedAt) : null}
         error={error}
       />
 

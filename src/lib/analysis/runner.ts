@@ -13,7 +13,14 @@ import {
 } from "@/lib/db";
 import { isMistralConfigured } from "@/lib/env";
 import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
-import { extractOffers, findKnownModel, htmlToText } from "./extract";
+import {
+  extractOffers,
+  findKnownModel,
+  htmlToText,
+  findServiceCouponImages,
+  reconcileServiceCoupon,
+  type ExtractedOffer,
+} from "./extract";
 import { getComplianceGrader } from "./compliance";
 import { runMistralOcr, type OcrArtifact } from "./ocr-mistral";
 import { parseMileage } from "@/lib/report";
@@ -333,6 +340,48 @@ async function getOcrArtifact(
   return pending;
 }
 
+const MAX_COUPON_IMAGES = 12;
+
+/** Image-coupon service pass: for pages whose coupons are graphics (DDC/
+ *  Dealer.com), OCR each coupon image (primary — it's what customers see) and
+ *  reconcile it against the image's alt text (cross-check). Returns reconciled
+ *  offers, each carrying a `verify` marker (corroborated / mismatch / ocr_only /
+ *  alt_only) and a confidence set by that agreement. Called only when the DOM
+ *  pass found nothing, so DOM-text coupons keep their trusted extraction and
+ *  never pay for OCR. Degrades gracefully: if Mistral is off or an image fails,
+ *  the alt cross-check alone still yields an (alt_only) offer. */
+async function serviceCouponOffers(
+  html: string,
+  brand: string | null
+): Promise<ExtractedOffer[]> {
+  const coupons = findServiceCouponImages(html);
+  if (coupons.length === 0) return [];
+  const hints = { missionType: "service_specials" as const, brand };
+  const mistralOn = isMistralConfigured();
+  const out: ExtractedOffer[] = [];
+  let tried = 0;
+  for (const coupon of coupons) {
+    if (tried >= MAX_COUPON_IMAGES) break;
+    tried++;
+    let ocrText: string | null = null;
+    if (mistralOn) {
+      try {
+        const resp = await fetch(coupon.imageUrl, { signal: AbortSignal.timeout(10_000) });
+        if (resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          const artifact = await runMistralOcr(buf);
+          ocrText = artifact?.imageText ?? null;
+        }
+      } catch {
+        // Image fetch/OCR failed — fall back to the alt cross-check alone.
+      }
+    }
+    const offer = reconcileServiceCoupon(ocrText, coupon.alt, hints);
+    if (offer) out.push(offer);
+  }
+  return out;
+}
+
 async function processAnalysis(
   runId: string,
   rows: EvidenceWithSite[],
@@ -423,10 +472,16 @@ async function processAnalysis(
       }
       console.log(`[analysis] html fetched ok for site="${site.name}", length=${html.length}`);
 
-      const extracted = extractOffers(html, {
+      let extracted = extractOffers(html, {
         missionType: row.missionType,
         brand: site.brand,
       });
+      // Image-coupon service pages have no DOM text — OCR each coupon graphic
+      // and reconcile against its alt (see serviceCouponOffers).
+      if (row.missionType === "service_specials" && extracted.length === 0) {
+        extracted = await serviceCouponOffers(html, site.brand);
+        console.log(`[analysis] service coupon OCR pass for site="${site.name}" -> ${extracted.length} offer(s)`);
+      }
       console.log(`[analysis] extracted ${extracted.length} offers for site="${site.name}"`);
       const pageText = htmlToText(html);
 
@@ -1081,7 +1136,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       for (const { evidence: row, site } of htmlRows) {
         const html = await getEvidenceText(row);
         if (!html) continue;
-        const extracted = extractOffers(html, { missionType: row.missionType, brand: site.brand });
+        let extracted = extractOffers(html, { missionType: row.missionType, brand: site.brand });
+        if (row.missionType === "service_specials" && extracted.length === 0) {
+          extracted = await serviceCouponOffers(html, site.brand);
+        }
         const pageText = htmlToText(html);
         const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
         const screenshotKey = `${row.siteId}:${row.missionType}:${row.label ?? ""}`;
