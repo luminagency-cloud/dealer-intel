@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { eq } from "drizzle-orm";
 import { getDb, missionResults, collectionRuns } from "@/lib/db";
+import { listOffersForRun, listComplianceGradesForRun } from "@/lib/db/repository";
 import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
 import {
   isAnalysisRunning,
@@ -19,7 +20,7 @@ export async function GET(
   const { id } = await params;
 
   const db = getDb();
-  const [results, executing, analyzing, progress, partialKeys, runRecord] = await Promise.all([
+  const [results, executing, analyzing, progress, partialKeys, runRecord, offers, grades] = await Promise.all([
     db
       .select({
         id: missionResults.id,
@@ -40,9 +41,15 @@ export async function GET(
       .select({
         startedAt: collectionRuns.startedAt,
         completedAt: collectionRuns.completedAt,
+        analysisStartedAt: collectionRuns.analysisStartedAt,
+        analysisCompletedAt: collectionRuns.analysisCompletedAt,
       })
       .from(collectionRuns)
       .where(eq(collectionRuns.id, id)),
+    // Offers + grades so the Analysis panel updates live during analysis and
+    // lands its final populated state without a manual reload.
+    listOffersForRun(id),
+    listComplianceGradesForRun(id),
   ]);
 
   const paused = isPausedRun(id);
@@ -59,7 +66,11 @@ export async function GET(
     progress,
     partialAnalysisKeys: [...partialKeys],
     results,
+    offers,
+    grades,
     collectionStartedAt: runRecord[0]?.startedAt ?? null,
     collectionCompletedAt: runRecord[0]?.completedAt ?? null,
+    analysisStartedAt: runRecord[0]?.analysisStartedAt ?? null,
+    analysisCompletedAt: runRecord[0]?.analysisCompletedAt ?? null,
   });
 }

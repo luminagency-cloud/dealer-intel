@@ -305,57 +305,55 @@ function normalizeOfferValue(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-/** Captures the SERVICE OFFER VALUE — the benefit only, not what it's for.
+// A service coupon only counts as a real offer if it represents real money.
+// Percentage discounts below this are noise ("10% off because you have a
+// pulse") — a quality bar, tune here. 20%+ stays; 10%/15% are dropped.
+const SERVICE_MIN_PERCENT = 20;
+
+/** Captures the SERVICE OFFER VALUE — but only when it's a real offer.
+ *
+ *  The bar (operator's rule): a service coupon counts only if it carries real
+ *  money — a concrete dollar figure, a percentage discount of at least
+ *  SERVICE_MIN_PERCENT, or a quantity bundle ("buy 3 get 1 free", "3 for 1").
+ *  Deliberately EXCLUDED as non-offers (return null so no row is produced):
+ *    - sub-threshold percentages (10%, 15%),
+ *    - standalone free / complimentary services ("free brake inspection"),
+ *    - price-match guarantees ("120% price match").
  *
  *  The "what" (Oil Change, Brake Service…) is the label, produced separately by
- *  buildServiceLabel(). This returns just the benefit: "$10 Off", "15% Off",
- *  "Complimentary", "Free". Deliberately narrow — we trigger on the discount,
- *  never on a stray dollar amount, and we never trail into the card's UI chrome
- *  ("CLAIM OFFER", "SCHEDULE SERVICE") or its description prose.
+ *  buildServiceLabel(). This returns just the benefit, normalized.
  *
- *  Free/complimentary collapse to a single canonical token so two windows over
- *  the same coupon can't survive as distinct rows ("Complimentary Expires…" vs
- *  "Complimentary Bring your…" were the same offer all along).
- *
- *  Returns null when there is no discount/free signal — i.e. not a real offer. */
+ *  Returns null when the text has no qualifying offer. */
 function extractServiceOfferText(text: string): string | null {
-  // The value is the discount itself — "10% Off", "$10 Off" — and nothing else.
-  // No trailing scope/qualifier: it only ever dragged in card prose ("…for
-  // Students and Teachers Offer val…") and the operator wants the bare discount.
-  // Percentage off — most specific.
-  let m = text.match(/\d+\s*%\s*off\b/i);
+  // Quantity bundle — real savings. Checked first so "buy 3 get 1 free" isn't
+  // mistaken for a standalone freebie (which would be dropped).
+  let m = text.match(
+    /buy\s+\d+\s+(?:get|and)\s+\d*\s*(?:free|half\s+off|\d+\s*%\s*off|\$[\d,]+\s*off)/i
+  );
+  if (m) return normalizeOfferValue(m[0]);
+  m = text.match(/\b\d+\s+for\s+\$?\d+\b/i); // "3 for 1", "4 for $99"
   if (m) return normalizeOfferValue(m[0]);
 
-  // Dollar off.
+  // Percentage discount — only SERVICE_MIN_PERCENT and up. A smaller one is NOT
+  // returned here; keep scanning for a dollar figure before giving up (a coupon
+  // could pair "10% off" with a real "$30 off").
+  const pct = text.match(/(\d+)\s*%\s*off\b/i);
+  if (pct && Number(pct[1]) >= SERVICE_MIN_PERCENT) return normalizeOfferValue(pct[0]);
+
+  // Dollar discount.
   m = text.match(/\$\s?[\d,]+(?:\.\d{2})?\s*off\b/i);
   if (m) return normalizeOfferValue(m[0]);
-
-  // Save $X.
   m = text.match(/save\s+(?:up\s+to\s+)?\$[\d,]+(?:\.\d{2})?/i);
   if (m) return normalizeOfferValue(m[0]);
 
-  // Free / complimentary — canonical token, NO trailing description. This is
-  // what killed "Complimentary Expires" / "Free with your…" garbage: the word
-  // after the benefit is the card's prose, not part of the offer.
-  if (/\bcomplimentary\b/i.test(text)) return "Complimentary";
-  if (/\bfree\b/i.test(text)) return "Free";
-
-  // Bundle offers — require a concrete benefit after the count so "buy 2" alone
-  // (no reward) isn't treated as an offer.
-  m = text.match(/buy\s+\d+\s+(?:get|and)\s+\d*\s*(?:free|half\s+off|\d+\s*%\s*off|\$[\d,]+\s*off)/i);
-  if (m) return normalizeOfferValue(m[0]);
-
-  // Price match.
-  m = text.match(/\d+\s*%\s*price\s+match/i);
-  if (m) return normalizeOfferValue(m[0]);
-  if (/price\s+match\s+guarantee/i.test(text)) return "Price Match Guarantee";
-
-  // Flat coupon price — decimal cents only ("$24.95"), which is how service
-  // coupons are priced. Bare integers ("$399") are excluded: that is the doc-fee
-  // / MSRP / tax-figure noise that must never be read as an offer.
+  // Flat coupon price — decimal cents only ("$24.95", "$299.95"), which is how
+  // service coupons are priced. Bare integers ("$399") stay excluded: that is
+  // doc-fee / MSRP / tax-figure noise that must never be read as an offer.
   m = text.match(/\$\s?[\d,]{1,5}\.\d{2}\b/);
   if (m) return normalizeOfferValue(m[0]);
 
+  // Everything else — sub-20% percentages, free/complimentary, price-match — is
+  // a nice-to-have, not a quality offer.
   return null;
 }
 
@@ -662,14 +660,19 @@ interface ServiceAnchor {
  *  picking up a different value that happens to appear earlier. */
 function serviceAnchors(text: string): ServiceAnchor[] {
   // Match the discount phrase ONLY — no trailing description. The anchor text
-  // becomes the offer value, so it must be clean ("15% Off", "$10 Off"), never
-  // "15% off CLAIM OFFER SCHEDULE SERVICE".
+  // becomes the offer value, so it must be clean ("$10 Off"), never
+  // "15% off CLAIM OFFER SCHEDULE SERVICE". Only keeper discounts anchor here:
+  // dollar-off (any) and percentage-off at/above the quality threshold. A
+  // sub-threshold "10% off" isn't an offer, so it doesn't seed a window.
   const discountRe = /\$\s?[\d,]{1,5}(?:\.\d{2})?\s*off\b/gi;
-  const percentRe = /\d+\s*%\s*off\b/gi;
+  const percentRe = /(\d+)\s*%\s*off\b/gi;
   const results: ServiceAnchor[] = [];
   let m: RegExpExecArray | null;
-  for (const re of [discountRe, percentRe]) {
-    while ((m = re.exec(text)) !== null) {
+  while ((m = discountRe.exec(text)) !== null) {
+    results.push({ pos: m.index, text: normalizeOfferValue(m[0]) });
+  }
+  while ((m = percentRe.exec(text)) !== null) {
+    if (Number(m[1]) >= SERVICE_MIN_PERCENT) {
       results.push({ pos: m.index, text: normalizeOfferValue(m[0]) });
     }
   }

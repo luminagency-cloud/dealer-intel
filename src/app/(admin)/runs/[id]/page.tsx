@@ -25,9 +25,11 @@ import { SnapshotSection } from "@/components/snapshot-section";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
   deleteRun,
+  deleteOffer,
   executeAllMissions,
   executeWorkItem,
   forceReCollect,
+  passOffer,
   pauseRun,
   publishSnapshot,
   resumePausedRun,
@@ -186,6 +188,8 @@ export default async function RunDetailPage({
         resumeAction={resumeRun.bind(null, run.id)}
         runAnalysisAction={runAnalysis.bind(null, run.id)}
         resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
+        passOfferAction={passOffer.bind(null, run.id)}
+        deleteOfferAction={deleteOffer.bind(null, run.id)}
         publishSnapshotAction={publishSnapshot.bind(null, run.id)}
         defaultSnapshotLabel={fmtSnapshotLabel(
           new Date(),

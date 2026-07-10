@@ -27,6 +27,7 @@ import {
   getDb,
   missionTypeEnum,
   missions,
+  offers,
   runGroupMembers,
   runGroups,
   type EvidenceType,
@@ -459,5 +460,32 @@ export async function resolveContentRemoved(path: string, resultId: string) {
 export async function deleteRunEvidence(runId: string, evidenceId: string) {
   await requireSession();
   await removeEvidence(evidenceId);
+  revalidatePath(`/runs/${runId}`);
+}
+
+/** "Pass" a flagged offer: mark it human-reviewed so its uncertainty badge
+ *  clears and it stops counting toward "N to check". The offer stays in the run
+ *  and in any published report. The mark lives in normalized_json (no schema
+ *  change) and, like the offer itself, is reset if analysis is re-run. */
+export async function passOffer(runId: string, offerId: string) {
+  await requireSession();
+  const db = getDb();
+  const [row] = await db
+    .select({ normalizedJson: offers.normalizedJson })
+    .from(offers)
+    .where(eq(offers.id, offerId));
+  const nj = (row?.normalizedJson ?? {}) as Record<string, unknown>;
+  await db
+    .update(offers)
+    .set({ normalizedJson: { ...nj, reviewed: true } })
+    .where(eq(offers.id, offerId));
+  revalidatePath(`/runs/${runId}`);
+}
+
+/** "Delete" an offer: hard-remove it so it can't reach a report. Re-running
+ *  analysis re-extracts from evidence, so a deleted offer reappears then. */
+export async function deleteOffer(runId: string, offerId: string) {
+  await requireSession();
+  await getDb().delete(offers).where(eq(offers.id, offerId));
   revalidatePath(`/runs/${runId}`);
 }

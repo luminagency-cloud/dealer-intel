@@ -21,7 +21,9 @@ function confidenceStyle(confidence: number | null): string {
 type CouponVerify = "ocr_only" | "alt_only" | "mismatch";
 
 function couponVerify(offer: Offer): CouponVerify | null {
-  const nj = offer.normalizedJson as { matches?: { verify?: string } } | null;
+  const nj = offer.normalizedJson as { matches?: { verify?: string }; reviewed?: boolean } | null;
+  // A "passed" (human-reviewed) offer no longer flags, even if uncertain.
+  if (nj?.reviewed) return null;
   const v = nj?.matches?.verify;
   return v === "ocr_only" || v === "alt_only" || v === "mismatch" ? v : null;
 }
@@ -72,6 +74,8 @@ export function AnalysisSection({
   pagesProcessed,
   runAnalysisAction,
   resumeAnalysisAction,
+  passOfferAction,
+  deleteOfferAction,
   canAnalyze,
 }: {
   offers: Offer[];
@@ -87,6 +91,8 @@ export function AnalysisSection({
   pagesProcessed: number | null;
   runAnalysisAction: () => Promise<void>;
   resumeAnalysisAction?: () => Promise<void>;
+  passOfferAction: (offerId: string) => Promise<void>;
+  deleteOfferAction: (offerId: string) => Promise<void>;
   canAnalyze: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -388,18 +394,45 @@ export function AnalysisSection({
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {offer.sourceEvidenceId ? (
-                            <a
-                              href={`/api/evidence/${offer.sourceEvidenceId}/file`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
-                            >
-                              View ad
-                            </a>
-                          ) : (
-                            <span className="text-xs text-zinc-400">—</span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {offer.sourceEvidenceId ? (
+                              <a
+                                href={`/api/evidence/${offer.sourceEvidenceId}/file`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
+                              >
+                                View ad
+                              </a>
+                            ) : (
+                              <span className="text-xs text-zinc-400">—</span>
+                            )}
+                            {/* Disposition a flagged coupon: Pass (looks good, keep
+                                it and clear the flag) or Delete (pull it from the
+                                data so it can't reach a report). */}
+                            {verify && (
+                              <>
+                                <form action={async () => { await passOfferAction(offer.id); }}>
+                                  <button
+                                    type="submit"
+                                    className="text-xs font-medium text-green-700 underline hover:text-green-600 dark:text-green-500"
+                                    title="Passed inspection — keep it in the report and stop flagging it"
+                                  >
+                                    Pass
+                                  </button>
+                                </form>
+                                <form action={async () => { await deleteOfferAction(offer.id); }}>
+                                  <button
+                                    type="submit"
+                                    className="text-xs font-medium text-red-700 underline hover:text-red-600 dark:text-red-500"
+                                    title="Delete this offer so it can't reach a report"
+                                  >
+                                    Delete
+                                  </button>
+                                </form>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

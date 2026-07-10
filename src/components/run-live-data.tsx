@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
 import { fmtDateTime } from "@/lib/fmt-date";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
@@ -18,8 +18,12 @@ interface LiveStatus {
     MissionResult,
     "id" | "siteId" | "missionId" | "status" | "pagesCaptured" | "successfulUrl" | "error"
   >[];
+  offers: Offer[];
+  grades: ComplianceGrade[];
   collectionStartedAt?: Date | null;
   collectionCompletedAt?: Date | null;
+  analysisStartedAt?: Date | null;
+  analysisCompletedAt?: Date | null;
 }
 
 export function RunLiveData({
@@ -53,6 +57,8 @@ export function RunLiveData({
   resumeAction,
   runAnalysisAction,
   resumeAnalysisAction,
+  passOfferAction,
+  deleteOfferAction,
   publishSnapshotAction,
   defaultSnapshotLabel,
   collectionStartedAt,
@@ -92,6 +98,8 @@ export function RunLiveData({
   resumeAction?: () => Promise<void>;
   runAnalysisAction: () => Promise<void>;
   resumeAnalysisAction?: () => Promise<void>;
+  passOfferAction: (offerId: string) => Promise<void>;
+  deleteOfferAction: (offerId: string) => Promise<void>;
   publishSnapshotAction: (formData: FormData) => Promise<void>;
   defaultSnapshotLabel?: string;
   collectionStartedAt?: Date | null;
@@ -108,8 +116,12 @@ export function RunLiveData({
     progress: initialProgress,
     partialAnalysisKeys: initialPartialAnalysisKeys,
     results: initialResults,
+    offers,
+    grades,
     collectionStartedAt,
     collectionCompletedAt,
+    analysisStartedAt,
+    analysisCompletedAt,
   });
 
   const active = live.executing || live.analyzing || live.partialAnalysisKeys.length > 0;
@@ -119,7 +131,16 @@ export function RunLiveData({
     const poll = async () => {
       try {
         const res = await fetch(`/api/runs/${runId}/status`);
-        if (res.ok) setLive(await res.json());
+        if (!res.ok) return;
+        const data = await res.json();
+        // JSON dates arrive as strings; rehydrate the ones rendered as dates.
+        setLive({
+          ...data,
+          collectionStartedAt: data.collectionStartedAt ? new Date(data.collectionStartedAt) : null,
+          collectionCompletedAt: data.collectionCompletedAt ? new Date(data.collectionCompletedAt) : null,
+          analysisStartedAt: data.analysisStartedAt ? new Date(data.analysisStartedAt) : null,
+          analysisCompletedAt: data.analysisCompletedAt ? new Date(data.analysisCompletedAt) : null,
+        });
       } catch {
         // ignore transient errors
       }
@@ -127,6 +148,18 @@ export function RunLiveData({
     const timer = setInterval(poll, 3000);
     return () => clearInterval(timer);
   }, [active, runId]);
+
+  // Sync freshly server-rendered data (offers/grades/analysis timestamps) into
+  // live state when the props actually change post-mount — i.e. a server-action
+  // revalidate (e.g. a single-site re-analysis). Guarded by identity so a poll
+  // updating `live` (props unchanged) can't get clobbered by stale mount props,
+  // and so the final poll result survives after polling stops.
+  const offersRef = useRef(offers);
+  useEffect(() => {
+    if (offers === offersRef.current) return;
+    offersRef.current = offers;
+    setLive((l) => ({ ...l, offers, grades, analysisStartedAt, analysisCompletedAt }));
+  }, [offers, grades, analysisStartedAt, analysisCompletedAt]);
 
   // Overlay live status/pagesCaptured/successfulUrl/error onto the full
   // MissionResult objects. Keyed on (site, mission) rather than id and
@@ -187,7 +220,7 @@ export function RunLiveData({
       <RunWorkflowStrip
         runResults={mergedArray}
         totalWorkItems={items.length}
-        offerCount={offers.length}
+        offerCount={live.offers.length}
         snapshots={snapshots}
         executing={live.executing}
         paused={live.paused}
@@ -236,17 +269,19 @@ export function RunLiveData({
 
       <div id="analysis" className="mb-8">
         <AnalysisSection
-          offers={offers}
-          grades={grades}
+          offers={live.offers}
+          grades={live.grades}
           siteNames={siteNames}
           siteOptions={siteOptions}
           analyzing={live.analyzing}
-          analysisStartedAt={analysisStartedAt}
-          analysisCompletedAt={analysisCompletedAt}
+          analysisStartedAt={live.analysisStartedAt}
+          analysisCompletedAt={live.analysisCompletedAt}
           evidencePageCount={live.progress?.total ?? evidencePageCount}
           pagesProcessed={live.progress?.processed ?? null}
           runAnalysisAction={runAnalysisAction}
           resumeAnalysisAction={resumeAnalysisAction}
+          passOfferAction={passOfferAction}
+          deleteOfferAction={deleteOfferAction}
           canAnalyze={canAnalyze}
         />
       </div>
