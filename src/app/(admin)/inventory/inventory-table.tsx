@@ -40,13 +40,14 @@ type BatchStatusPayload = {
   startedAt: string | null;
   results: Record<
     string,
-    {
-      status: "ok" | "failed";
-      totals?: { inStock: number; inTransit: number; displayValue: string };
-      makeSubtotals?: MakeSubtotal[];
-      models?: ModelRow[];
-      error?: { message: string; code: string; statusCode?: number };
-    }
+    | { status: "queued" | "running" }
+    | {
+        status: "ok" | "failed";
+        totals?: { inStock: number; inTransit: number; displayValue: string };
+        makeSubtotals?: MakeSubtotal[];
+        models?: ModelRow[];
+        error?: { message: string; code: string; statusCode?: number };
+      }
   >;
 };
 
@@ -64,6 +65,7 @@ export function InventoryTable({
   const router = useRouter();
   const [phases, setPhases] = useState<Record<string, RowPhase>>({});
   const [activeBatchId, setActiveBatchId] = useState<string | null>(initialActiveBatch?.batchId ?? null);
+  const [batchSiteIds, setBatchSiteIds] = useState<string[]>(initialActiveBatch?.siteIds ?? []);
   const [batchTotal, setBatchTotal] = useState<number | null>(initialActiveBatch?.siteIds.length ?? null);
   const [batchStartedAt, setBatchStartedAt] = useState<Date | null>(initialActiveBatch?.startedAt ?? null);
   const [batchEndedAt, setBatchEndedAt] = useState<Date | null>(null);
@@ -84,7 +86,9 @@ export function InventoryTable({
 
     async function poll() {
       try {
-        const res = await fetch(`/api/inventory/batch/${activeBatchId}/status`);
+        const res = await fetch(`/api/inventory/batch/${activeBatchId}/status`, {
+          cache: "no-store",
+        });
         if (!res.ok || cancelled) return;
         const data: BatchStatusPayload = await res.json();
         if (cancelled) return;
@@ -93,19 +97,35 @@ export function InventoryTable({
           const next = { ...prev };
           for (const id of data.siteIds) {
             const result = data.results[id];
-            if (result) {
-              next[id] =
-                result.status === "ok"
-                  ? { kind: "ok", totals: result.totals, makeSubtotals: result.makeSubtotals, models: result.models }
-                  : { kind: "failed", error: result.error ?? { message: "Unknown error", code: "unknown" } };
-            } else if (id === data.current) {
-              next[id] = { kind: "running" };
-            } else if (data.active) {
+            if (!result) {
+              if (id === data.current) next[id] = { kind: "running" };
+              else if (data.active) next[id] = { kind: "queued" };
+              continue;
+            }
+
+            if (result.status === "queued") {
               next[id] = { kind: "queued" };
+            } else if (result.status === "running") {
+              next[id] = { kind: "running" };
+            } else if (result.status === "ok") {
+              next[id] = {
+                kind: "ok",
+                totals: result.totals,
+                makeSubtotals: result.makeSubtotals,
+                models: result.models,
+              };
+            } else {
+              next[id] = {
+                kind: "failed",
+                error:
+                  ("error" in result ? result.error : undefined) ??
+                  { message: "Unknown error", code: "unknown" },
+              };
             }
           }
           return next;
         });
+        setBatchSiteIds(data.siteIds);
         setBatchTotal(data.siteIds.length);
         if (data.startedAt) setBatchStartedAt((prev) => prev ?? new Date(data.startedAt!));
 
@@ -129,6 +149,11 @@ export function InventoryTable({
 
   async function runBatchFor(ids: string[]) {
     if (ids.length === 0) return;
+    setBatchSiteIds((prev) => {
+      const next = [...new Set([...prev, ...ids])];
+      setBatchTotal(next.length);
+      return next;
+    });
     setPhases((prev) => {
       const next = { ...prev };
       for (const id of ids) {
@@ -159,16 +184,25 @@ export function InventoryTable({
   const anyActive = Object.values(phases).some((p) => p.kind === "running" || p.kind === "queued");
 
   // Batch progress derived from phases
-  const batchPhaseValues = batchTotal !== null ? Object.values(phases) : [];
+  const batchPhaseValues = batchTotal !== null ? batchSiteIds.map((id) => phases[id] ?? { kind: "queued" as const }) : [];
   const batchDone = batchPhaseValues.filter((p) => p.kind === "ok" || p.kind === "failed").length;
   const batchFailed = batchPhaseValues.filter((p) => p.kind === "failed").length;
-  const batchRunning = batchPhaseValues.filter((p) => p.kind === "running").length;
   const runLabel = scope === "all" ? "Run All" : scope === "groups" ? "Run Groups" : "Run Selected";
 
   const toggleGroup = (id: string) =>
-    setCheckedGroups((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setCheckedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const toggleSite = (id: string) =>
-    setCheckedSites((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setCheckedSites((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   return (
     <div>
@@ -350,6 +384,7 @@ function rowAgeTier(site: InventorySiteRow, phase: RowPhase): AgeTier {
   else if (phase.kind === "ok") return "green";
   // Idle — use persisted last result
   if (!site.lastResult) return "none";
+  if (site.lastResult.status === "running") return "blue";
   if (site.lastResult.status !== "ok") return "red";
   const ageMs = Date.now() - new Date(site.lastResult.collectedAt).getTime();
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
@@ -463,6 +498,20 @@ function SiteRow({
     if (phase.kind === "failed")
       return <ErrorBadge error={phase.error} />;
     if (!site.lastResult) return <span className="text-xs text-zinc-700">—</span>;
+    if (site.lastResult.status === "queued")
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+          Queued
+        </span>
+      );
+    if (site.lastResult.status === "running")
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+          Running…
+        </span>
+      );
     if (site.lastResult.status === "ok")
       return <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">ok</span>;
     if (site.lastResult.error)

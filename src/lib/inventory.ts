@@ -144,6 +144,37 @@ export type CollectAndStoreResult = {
   error?: { message: string; code: string; statusCode?: number; isRateLimited?: boolean };
 };
 
+async function upsertBatchRow(
+  values: Partial<typeof inventoryResults.$inferInsert> &
+    Pick<typeof inventoryResults.$inferInsert, "siteId" | "batchId" | "weekKey" | "status">
+) {
+  const db = getDb();
+  const where = and(
+    eq(inventoryResults.siteId, values.siteId),
+    eq(inventoryResults.batchId, values.batchId)
+  );
+
+  const [existing] = await db
+    .select({ id: inventoryResults.id })
+    .from(inventoryResults)
+    .where(where);
+
+  if (existing) {
+    const [row] = await db
+      .update(inventoryResults)
+      .set({ collectedAt: new Date(), ...values })
+      .where(eq(inventoryResults.id, existing.id))
+      .returning({ id: inventoryResults.id });
+    return row;
+  }
+
+  const [row] = await db
+    .insert(inventoryResults)
+    .values(values)
+    .returning({ id: inventoryResults.id });
+  return row;
+}
+
 /** Collect inventory for a site and store the result. */
 export async function collectAndStore(
   site: { id: string; url: string; brand: string | null; platform: string | null; name: string; inventoryPath?: string | null },
@@ -161,28 +192,46 @@ export async function collectAndStore(
     inventoryPath: site.inventoryPath ?? undefined,
   });
 
-  const db = getDb();
-
   if (!apiResult) {
     const err = { message: "Network error — no response from inventory API", code: "network_error" };
-    const [row] = await db
-      .insert(inventoryResults)
-      .values({ siteId: site.id, batchId, weekKey, status: "failed", error: err })
-      .returning({ id: inventoryResults.id });
+    const row = await upsertBatchRow({
+      siteId: site.id,
+      batchId,
+      weekKey,
+      status: "failed",
+      error: err,
+      detectedPlatform: null,
+      accessRoute: null,
+      attempts: null,
+      sourceUrl: null,
+      totals: null,
+      makeSubtotals: null,
+      models: null,
+      warnings: [],
+    });
     return { id: row.id, status: "failed", error: err };
   }
 
   if (!apiResult.ok) {
-    const [row] = await db
-      .insert(inventoryResults)
-      .values({ siteId: site.id, batchId, weekKey, status: "failed", error: apiResult.error })
-      .returning({ id: inventoryResults.id });
+    const row = await upsertBatchRow({
+      siteId: site.id,
+      batchId,
+      weekKey,
+      status: "failed",
+      error: apiResult.error,
+      detectedPlatform: null,
+      accessRoute: null,
+      attempts: null,
+      sourceUrl: null,
+      totals: null,
+      makeSubtotals: null,
+      models: null,
+      warnings: [],
+    });
     return { id: row.id, status: "failed", error: apiResult.error };
   }
 
-  const [row] = await db
-    .insert(inventoryResults)
-    .values({
+  const row = await upsertBatchRow({
       siteId: site.id,
       batchId,
       weekKey,
@@ -195,8 +244,8 @@ export async function collectAndStore(
       makeSubtotals: apiResult.makeSubtotals,
       models: apiResult.models,
       warnings: apiResult.warnings ?? [],
-    })
-    .returning({ id: inventoryResults.id });
+      error: null,
+    });
   return { id: row.id, status: "ok", totals: apiResult.totals, makeSubtotals: apiResult.makeSubtotals, models: apiResult.models };
 }
 
@@ -278,7 +327,8 @@ export async function getInventoryFreshnessStatus(): Promise<InventoryFreshnessS
   let okCount = 0, failedCount = 0, lastRunAt: Date | null = null;
   for (const { status, collectedAt } of latestBySite.values()) {
     if (status === "ok") okCount++;
-    else failedCount++;
+    else if (status === "failed") failedCount++;
+    else continue;
     if (!lastRunAt || collectedAt > lastRunAt) lastRunAt = collectedAt;
   }
 

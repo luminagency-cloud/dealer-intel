@@ -9,12 +9,11 @@
  * Accepts a full uuid, the short id the UI shows (e.g. "f1a32685"), or nothing
  * (defaults to the most recently created run).
  */
-import { and, desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import {
   getDb,
   collectionRuns,
   sites,
-  evidence,
   offers,
   complianceGrades,
 } from "../src/lib/db";
@@ -98,7 +97,7 @@ async function main() {
   console.log(`=== OFFERS BY TYPE (${rows.length} total) ===`);
   console.log(
     "  " +
-      ["lease", "finance", "cash", "service", "promotional"]
+      ["service", "lease", "finance", "cash"]
         .map((t) => `${t}:${byType[t] ?? 0}`)
         .join("  ")
   );
@@ -106,31 +105,22 @@ async function main() {
   console.log(`  AI-assisted: ${aiCount}`);
 
   // ===========================================================================
-  // SERVICE
+  // BY DEALER — same type breakdown as the top line, one row per dealer.
   // ===========================================================================
-  const svc = rows.filter((r) => r.type === "service");
-  console.log(`\n=== SERVICE (${svc.length}) ===`);
-  const svcBySite = new Map<string, typeof svc>();
-  for (const r of svc) {
-    const key = `${r.site} ${r.platform ?? "?"}`;
-    (svcBySite.get(key) ?? svcBySite.set(key, []).get(key)!).push(r);
+  console.log(`\n=== BY DEALER ===`);
+  const byDealer = new Map<string, { platform: string | null; counts: Record<string, number> }>();
+  for (const r of rows) {
+    const cur = byDealer.get(r.site) ?? { platform: r.platform, counts: {} };
+    cur.counts[r.type] = (cur.counts[r.type] ?? 0) + 1;
+    byDealer.set(r.site, cur);
   }
-  for (const [key, rs] of [...svcBySite.entries()].sort()) {
-    const [name, platform] = key.split(" ");
-    const mix: Record<string, number> = {};
-    for (const r of rs) mix[verifyOf(njOf(r))] = (mix[verifyOf(njOf(r))] ?? 0) + 1;
-    console.log(`  ${name} [${platform}]  ${rs.length}  { ${Object.entries(mix).map(([k, v]) => `${k}:${v}`).join(", ")} }`);
+  const nameWidth = Math.max(0, ...[...byDealer.keys()].map((n) => n.length));
+  for (const [name, { platform, counts }] of [...byDealer.entries()].sort()) {
+    const line = ["service", "lease", "finance", "cash"].map((t) => `${t}:${String(counts[t] ?? 0).padEnd(3)}`).join(" ");
+    console.log(`  ${name.padEnd(nameWidth)}  ${line} (${platform ?? "?"})`);
   }
 
-  const svcPages = await db
-    .select({ name: sites.name, platform: sites.platform })
-    .from(evidence)
-    .innerJoin(sites, eq(sites.id, evidence.siteId))
-    .where(and(eq(evidence.collectionRunId, runId), eq(evidence.evidenceType, "html_snapshot"), eq(evidence.missionType, "service_specials")))
-    .groupBy(sites.name, sites.platform);
-  const svcSites = new Set(svc.map((r) => r.site));
-  const zeroSvc = svcPages.filter((p) => !svcSites.has(p.name));
-  console.log(`  zero-offer service pages: ${zeroSvc.length ? zeroSvc.map((z) => `${z.name}[${z.platform ?? "?"}]`).join(", ") : "none"}`);
+  const svc = rows.filter((r) => r.type === "service");
 
   // ===========================================================================
   // VEHICLE OFFERS (lease / finance / cash)

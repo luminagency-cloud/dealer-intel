@@ -19,6 +19,7 @@ const NAVIGATION_TIMEOUT_MS = 45_000;
 const SETTLE_MS = 1_500;
 const SCROLL_STEP_PX = 700;
 const MAX_SCROLL_STEPS = 25;
+const LOADING_SETTLE_TIMEOUT_MS = 10_000;
 
 export interface ExploreOptions {
   carousels?: boolean;
@@ -59,6 +60,42 @@ export class CollectionError extends Error {
   }
 }
 
+/** Dealer platforms (notably Dealer.com service/coupon pages) ship a short
+ *  "Loading…" placeholder document and inject the real offer content over XHR a
+ *  beat later. Because that placeholder is short, `scrollThroughPage` no-ops on
+ *  it, and if `networkidle` happens to resolve early the capture can land on the
+ *  spinner instead of the coupons. Wait for any visible "Loading"-only element
+ *  to clear before we scroll and capture.
+ *
+ *  Best-effort and bounded: the predicate matches only elements whose *own* text
+ *  is a short spinner label starting with "Loading" (e.g. "Loading specials...",
+ *  "Loading…"), so page prose isn't a false positive, and a perpetual
+ *  below-the-fold spinner just hits the timeout rather than blocking the
+ *  capture. */
+async function waitForLoadingToClear(page: Page): Promise<void> {
+  await page
+    .waitForFunction(
+      () => {
+        for (const el of document.querySelectorAll("body *")) {
+          if (!(el instanceof HTMLElement)) continue;
+          if (el.offsetParent === null) continue; // not visible
+          const ownText = Array.from(el.childNodes)
+            .filter((n) => n.nodeType === Node.TEXT_NODE)
+            .map((n) => n.textContent ?? "")
+            .join("")
+            .trim();
+          // Short "Loading…" / "Loading specials..." label — a spinner, not
+          // prose (the length cap keeps sentences that merely start with
+          // "loading" from matching).
+          if (/^loading\b/i.test(ownText) && ownText.length <= 25) return false;
+        }
+        return true;
+      },
+      { timeout: LOADING_SETTLE_TIMEOUT_MS, polling: 250 }
+    )
+    .catch(() => {});
+}
+
 /** Roadmap "Page Scroller": controlled full-page pass so lazy-loaded
  *  content renders before capture, then back to the top. */
 async function scrollThroughPage(page: Page): Promise<void> {
@@ -96,6 +133,10 @@ async function capturePageInContext(
       .catch(() => {});
 
     await suppressOverlays(page);
+    // Let client-injected "Loading…" placeholders resolve to real content
+    // before scrolling — otherwise the page is still a short spinner and the
+    // scroll pass no-ops on it.
+    await waitForLoadingToClear(page);
     await scrollThroughPage(page);
     // Overlays can re-open after scrolling (exit-intent, delayed consent).
     await suppressOverlays(page);

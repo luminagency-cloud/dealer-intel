@@ -1,4 +1,4 @@
-﻿import { asc, desc, eq, inArray } from "drizzle-orm";
+import { asc, desc, inArray } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, runGroupMembers, runGroups, sites } from "@/lib/db";
 import { inventoryResults } from "@/lib/db/schema";
 import { isInventoryConfigured, brandsToMakeAllowList, getInventoryFreshnessStatus, runningLocally } from "@/lib/inventory";
@@ -35,7 +35,7 @@ export default async function InventoryPage() {
 
   const activeSites = allSites.filter((s) => s.active);
 
-  // Build group → siteIds map
+  // Build group -> siteIds map.
   const groupSiteMap = new Map<string, string[]>();
   for (const m of allMembers) {
     const list = groupSiteMap.get(m.groupId) ?? [];
@@ -48,7 +48,7 @@ export default async function InventoryPage() {
     siteIds: (groupSiteMap.get(g.id) ?? []).filter((id) => activeSites.some((s) => s.id === id)),
   }));
 
-  // Latest inventory result per active site
+  // Latest inventory result per active site.
   const latestBySite = new Map<string, typeof inventoryResults.$inferSelect>();
   if (activeSites.length > 0) {
     const rows = await db
@@ -142,7 +142,7 @@ export default async function InventoryPage() {
           sites={tableRows}
           groups={groups}
           configured={configured}
-          initialActiveBatch={getActiveInventoryBatch()}
+          initialActiveBatch={await getActiveInventoryBatch()}
         />
       )}
     </div>

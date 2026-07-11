@@ -91,7 +91,7 @@ function Step({
 
 // ── exception list ────────────────────────────────────────────────────────────
 
-function Exceptions({ groups, weekLabel }: { groups: GroupCycleStatus[]; weekLabel: string }) {
+function Exceptions({ groups }: { groups: GroupCycleStatus[]; weekLabel: string }) {
   const issues: { groupId: string; groupName: string; reason: string; href: string }[] = [];
 
   for (const g of groups) {
@@ -167,7 +167,7 @@ function PrimaryCTA({
         href="/runs"
         className="block rounded-xl bg-zinc-900 px-6 py-4 text-center text-base font-medium text-white hover:bg-zinc-700"
       >
-        Start this week's collection →
+        Start this week&apos;s collection →
       </Link>
     );
   }
@@ -252,15 +252,15 @@ export default async function HomePage() {
     getWeekAggregate(priorCycle, total),
     isNewsConfigured() ? getLocalNewsPullStatus() : Promise.resolve(null),
     isInventoryConfigured() ? getInventoryFreshnessStatus() : Promise.resolve(null),
-    isInventoryConfigured() ? Promise.resolve(getActiveInventoryBatch()) : Promise.resolve(null),
+    isInventoryConfigured() ? getActiveInventoryBatch() : Promise.resolve(null),
   ]);
 
   // Inventory batches run in the background independent of the weekly
   // collect/analyze pipeline (see inventory-batch.ts), so their live progress
-  // comes from the in-memory batch registry, not `currentAgg`.
+  // comes from the inventory batch status endpoint, not `currentAgg`.
   const inventoryProgress = activeInventoryBatch
     ? await getInventoryBatchStatus(activeInventoryBatch.batchId).then((s) => ({
-        done: Object.keys(s.results).length,
+        done: Object.values(s.results).filter((r) => r.status === "ok" || r.status === "failed").length,
         total: s.siteIds.length,
       }))
     : null;

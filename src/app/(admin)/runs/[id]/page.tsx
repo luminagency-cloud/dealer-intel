@@ -21,6 +21,7 @@ import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { RunLiveData } from "@/components/run-live-data";
+import { RunOfferBreakdown } from "@/components/run-offer-breakdown";
 import { SnapshotSection } from "@/components/snapshot-section";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
@@ -70,7 +71,7 @@ export default async function RunDetailPage({
     listComplianceGradesForRun(run.id),
     listSnapshotsForRun(run.id),
     getDb()
-      .select({ id: sites.id, name: sites.name })
+      .select({ id: sites.id, name: sites.name, platform: sites.platform })
       .from(sites)
       .orderBy(asc(sites.name)),
     listWorkItemsForRun(run),
@@ -90,6 +91,9 @@ export default async function RunDetailPage({
       ? resolvedGroups.map((g) => g.name).join(" + ")
       : null;
   const siteNames = Object.fromEntries(siteOptions.map((s) => [s.id, s.name]));
+  const siteMeta = Object.fromEntries(
+    siteOptions.map((s) => [s.id, { name: s.name, platform: s.platform ?? null }])
+  );
   const nextStatuses = RUN_TRANSITIONS[run.status].filter(
     (s) => !(run.status === "pending" && s === "running")
   );
@@ -202,6 +206,16 @@ export default async function RunDetailPage({
         createdLabel={fmtDateTime(run.createdAt)}
         error={error}
       />
+
+      {/* Offer breakdown — pre-publish gut check, same view as verify-offers.ts */}
+      {runOffers.length > 0 && (
+        <div className="mb-8">
+          <h2 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            Offer breakdown
+          </h2>
+          <RunOfferBreakdown offers={runOffers} siteMeta={siteMeta} />
+        </div>
+      )}
 
       {/* Snapshot section — static, only changes after a publish action */}
       <div id="snapshot" className="mb-8">

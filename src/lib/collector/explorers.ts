@@ -96,6 +96,46 @@ async function ancestorAdAnchor(
   }
 }
 
+/** Raw (whitespace-normalized) text of the disclaimer trigger's ancestor offer
+ *  card — same climb as `ancestorAdAnchor`, but returns the whole card so
+ *  callers can decide what kind of offer it is. "" when nothing is readable. */
+async function adCardText(
+  page: Page,
+  selector: string,
+  index: number
+): Promise<string> {
+  try {
+    return await page.locator(selector).nth(index).evaluate((el) => {
+      const priceRe = /\$\s?[\d,]+(?:\.\d{2})?/i;
+      let node: HTMLElement = el as HTMLElement;
+      for (let depth = 0; depth < 8 && node.parentElement; depth++) {
+        const parent: HTMLElement = node.parentElement;
+        if (priceRe.test(parent.innerText || "") || parent.querySelector("h1,h2,h3,h4")) {
+          node = parent;
+          break;
+        }
+        node = parent;
+      }
+      return (node.innerText || "").replace(/\s+/g, " ").trim();
+    });
+  } catch {
+    return "";
+  }
+}
+
+// A hero/promo card whose only offer content is the bare word "Rebate" is a
+// generic manufacturer program (College Grad, Military, etc.) — the real value,
+// if any, lives behind the modal and applies to "any new Toyota", not an
+// advertised price. Nothing to grade and nothing worth storing. We drop it only
+// when the card advertises NO value: an explicit "$2,000 rebate" cash offer
+// carries a price on the card and is kept. Bare vehicle-name digits (years,
+// "View 6 Qualifying Vehicles") are not values, so they don't rescue the card.
+const REBATE_WORD = /\brebates?\b/i;
+const CARD_HAS_VALUE = /\$|\d+\s*%|\d+\s*(?:\/\s*)?(?:mo|month|apr)\b|\bapr\b/i;
+function isValuelessRebate(cardText: string): boolean {
+  return REBATE_WORD.test(cardText) && !CARD_HAS_VALUE.test(cardText);
+}
+
 /** Reads the disclaimer modal that opened on click. Dealer promo widgets
  *  render the offer (vehicle + price) and the disclaimer fine print together in
  *  a dialog — e.g. "Lease a 2026 Jeep Grand Cherokee … $299/mo … DISCLAIMER
@@ -150,6 +190,10 @@ export async function captureDisclaimers(page: Page): Promise<ExtraShot[]> {
           const button = buttons.nth(i);
           if (!(await button.isVisible({ timeout: 100 }))) continue;
           await button.scrollIntoViewIfNeeded({ timeout: 500 });
+          // Skip generic "Rebate" programs (College Grad / Military) before we
+          // spend a click + screenshot on them — they clutter evidence and carry
+          // no advertised value. See isValuelessRebate.
+          if (isValuelessRebate(await adCardText(page, selector, i))) continue;
           // Inline offers carry text in the ancestor card; image promos don't —
           // for those the offer text appears in the modal after the click.
           const preAnchor = await ancestorAdAnchor(page, selector, i);
