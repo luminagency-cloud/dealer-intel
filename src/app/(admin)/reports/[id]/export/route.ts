@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/lib/session";
 import { OFFER_TYPE_LABELS, MISSION_TYPE_LABELS } from "@/lib/db";
 import {
   getReportSnapshot,
@@ -19,7 +19,7 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
+  const session = await getSession();
   if (!session?.user) {
     return new Response("Unauthorized", { status: 401 });
   }

@@ -630,7 +630,7 @@ export function ReportContent({
               <a href="#lease" className="font-semibold text-[#1b3a6b] hover:underline">
                 Lease Specials →
               </a>{" "}
-              {leaseGrid.length} model{leaseGrid.length !== 1 ? "s" : ""} advertised across the group.
+              {leaseNote}
             </li>
           )}
           {financeGrid.length > 0 && (

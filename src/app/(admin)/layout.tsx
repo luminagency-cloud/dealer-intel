@@ -1,7 +1,7 @@
 ﻿import Link from "next/link";
 import packageJson from "../../../package.json";
 import { signOut } from "@/auth";
-import { requireSession } from "@/lib/session";
+import { AUTH_DISABLED, requireSession } from "@/lib/session";
 import { SettingsDropdown } from "@/components/settings-dropdown";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { and, eq, inArray, ne } from "drizzle-orm";
@@ -64,17 +64,21 @@ export default async function AdminLayout({
           </div>
           <div className="flex items-center gap-3">
             <ThemeToggle />
-            <Link href="/account" className="text-sm text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
-              {session.user?.email}
-            </Link>
-            <form action={logout}>
-              <button
-                type="submit"
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                Sign out
-              </button>
-            </form>
+            {!AUTH_DISABLED && (
+              <>
+                <Link href="/account" className="text-sm text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
+                  {session.user?.email}
+                </Link>
+                <form action={logout}>
+                  <button
+                    type="submit"
+                    className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Sign out
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         </div>
       </header>

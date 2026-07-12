@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { getSession } from "@/lib/session";
 import { eq } from "drizzle-orm";
 import { getDb, missionResults, collectionRuns } from "@/lib/db";
 import { listOffersForRun, listComplianceGradesForRun } from "@/lib/db/repository";
@@ -14,7 +14,7 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
+  const session = await getSession();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;

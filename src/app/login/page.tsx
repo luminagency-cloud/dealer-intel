@@ -2,6 +2,7 @@
 import { AuthError } from "next-auth";
 import { auth, signIn } from "@/auth";
 import { isAuthConfigured } from "@/lib/env";
+import { AUTH_DISABLED } from "@/lib/session";
 
 async function login(formData: FormData) {
   "use server";
@@ -24,6 +25,8 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
+  if (AUTH_DISABLED) redirect("/");
+
   const session = await auth();
   if (session?.user) redirect("/");
 

@@ -133,7 +133,10 @@ async function main() {
   console.log(`  missing disclaimer (needed for compliance): ${noDisclaimer.length}`);
 
   // Classification sanity — the fingerprint each type should carry.
-  const badLease = veh.filter((r) => r.type === "lease" && (r.pay == null || r.due == null));
+  // A lease must carry a monthly payment. Due-at-signing is NOT required — most
+  // dealers keep it in the disclaimer fine print; the lease keyword or a mileage
+  // allowance is enough to classify. Only a payment-less lease is broken.
+  const badLease = veh.filter((r) => r.type === "lease" && r.pay == null);
   const badFinance = veh.filter((r) => r.type === "finance" && r.apr == null && !(r.pay != null && r.term != null));
   const badCash = veh.filter((r) => r.type === "cash" && r.cash == null && r.sale == null);
 
@@ -158,7 +161,7 @@ async function main() {
     ["service w/ disclaimer", svcDisc],
     ["service w/ UI-chrome/wildcard", svcChrome],
     ["vehicle value out of range", outRange],
-    ["lease missing payment/due-at-signing", badLease],
+    ["lease missing payment", badLease],
     ["finance missing APR and term", badFinance],
     ["cash missing incentive and price", badCash],
   ];

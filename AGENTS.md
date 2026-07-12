@@ -57,6 +57,10 @@ Never print secret values.
 - **Runtime:** the admin app requires a persistent Node server. Playwright runs
   in-process, and background run execution lives in server memory. Do not
   target serverless for the admin app.
+- **Local dev server:** the app is ALWAYS already running on
+  `http://localhost:3000` (the operator keeps it up). Do NOT start your own
+  (`npm run dev` / preview) — use the running one. Only start a server if you
+  have confirmed none is running. Dev logs: `.next/dev/logs/next-development.log`.
 - **Docs:** keep `Docs/Implementation Roadmap.md` and
   `Docs/Implementation Notes.md` readable for humans when major behavior
   changes.

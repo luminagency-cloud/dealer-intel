@@ -100,9 +100,12 @@ const CASH_MIN = 250;
 const CASH_MAX = 25_000;
 
 // Text window cut around each payment anchor for multi-offer segmentation.
-// 350 chars before captures vehicle name; 650 after captures term + disclaimer.
+// 350 chars before captures vehicle name; after must cover term + the full
+// disclaimer reach (extractDisclaimerNear's DISCLAIMER_WINDOW) — a shorter
+// value here silently truncates disclaimers before that function ever sees
+// them, producing false "no disclaimer" reads on offers with long fine print.
 const WINDOW_BEFORE = 350;
-const WINDOW_AFTER = 650;
+const WINDOW_AFTER = 900;
 
 /** Strip scripts/styles, drop tags, decode the common entities, collapse
  *  whitespace — enough to regex visible offer copy out of a snapshot. */
@@ -411,8 +414,11 @@ function extractDisclaimerNear(
   anchorIndex: number
 ): string | null {
   if (anchorIndex < 0) return null;
-  const WINDOW = 900;
-  const window = text.slice(anchorIndex, anchorIndex + WINDOW);
+  // Must not exceed WINDOW_AFTER — the caller's per-offer chunk only has that
+  // many chars past the anchor in the first place, so a larger value here
+  // would just silently truncate at the chunk boundary instead of raising an
+  // out-of-bounds error, hiding a future drift between the two constants.
+  const window = text.slice(anchorIndex, anchorIndex + WINDOW_AFTER);
   const lower = window.toLowerCase();
 
   let kwIndex = -1;
@@ -488,6 +494,22 @@ function extractVehicle(
 
 // --- Classification ------------------------------------------------------
 
+/** True when "lease" appears right next to the monthly-payment anchor. A
+ *  payment described as a lease IS a lease even when the "$X due at signing"
+ *  figure lives only in the disclaimer fine print (or is omitted from the ad) —
+ *  which is how most dealers write lease ads. Scoped tightly to the payment so a
+ *  stray "lease" elsewhere on the page can't reclassify a finance offer. */
+function hasLeaseKeywordNear(text: string, paymentMatch: string | null): boolean {
+  if (!paymentMatch) return false;
+  const idx = text.indexOf(paymentMatch);
+  if (idx < 0) return false;
+  const window = text.slice(
+    Math.max(0, idx - 160),
+    idx + paymentMatch.length + 160
+  );
+  return /\blease/i.test(window);
+}
+
 function classify(
   fields: {
     monthlyPayment: number | null;
@@ -497,11 +519,20 @@ function classify(
     termMonths: number | null;
     dueAtSigning: number | null;
   },
-  hints: ExtractHints
+  hints: ExtractHints,
+  // A monthly-payment offer that carries a lease marker — the literal word
+  // "lease" beside the payment, or an annual mileage allowance (finance deals
+  // never cap mileage). Lets us catch leases that don't spell out due-at-signing.
+  leaseSignal: boolean
 ): OfferType {
   if (hints.missionType === "service_specials") return "service";
-  // A monthly payment with due-at-signing is the lease fingerprint.
-  if (fields.monthlyPayment !== null && fields.dueAtSigning !== null) {
+  // A monthly payment is a lease when it carries due-at-signing OR any other
+  // lease marker. Without this, leases that keep due-at-signing in the fine
+  // print fall through to finance (payment+term) or promotional (payment only).
+  if (
+    fields.monthlyPayment !== null &&
+    (fields.dueAtSigning !== null || leaseSignal)
+  ) {
     return "lease";
   }
   if (fields.apr !== null) return "finance";
@@ -568,7 +599,15 @@ function extractOfferFromText(
   // filler slots, not advertised services. Only applies to the service path.
   if (isService && isPlaceholderServiceOffer(text)) return null;
 
-  const offerType = classify(fields, hints);
+  // A payment offer is a lease when the ad calls it one or caps annual mileage —
+  // both are lease-only markers, so classify treats them like an explicit
+  // due-at-signing figure.
+  const leaseSignal =
+    !isService &&
+    fields.monthlyPayment !== null &&
+    (mileageAllowance !== null || hasLeaseKeywordNear(text, payment?.match ?? null));
+
+  const offerType = classify(fields, hints, leaseSignal);
 
   // For service, use the offer text itself as the anchor so anchorIndex points
   // near the coupon value (used by extractDisclaimerNear).
@@ -917,7 +956,12 @@ function splitComboOffer(offer: ExtractedOffer): ExtractedOffer[] {
 
   const paymentOffer: ExtractedOffer = {
     ...offer,
-    offerType: offer.dueAtSigning !== null ? "lease" : "finance",
+    // Keep the lease call the combo chunk already earned (due-at-signing, a
+    // lease keyword, or a mileage allowance); only a bare payment is finance.
+    offerType:
+      offer.offerType === "lease" || offer.dueAtSigning !== null
+        ? "lease"
+        : "finance",
     apr: null,
     matches: Object.fromEntries(
       Object.entries(offer.matches).filter(([k]) => k !== "apr")

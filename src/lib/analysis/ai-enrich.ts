@@ -93,7 +93,7 @@ const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER f
 
 Rules:
 - Identify the ONE offer the rule-based guess is anchored on (matched by its monthly payment / price), not every offer on the page. Multi-offer pages are why this is hard — keep the vehicle, payment, term, APR, cash, and due-at-signing consistent with that single ad.
-- offerType: "lease" (monthly payment + due at signing), "finance" (APR or payment+term), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
+- offerType: "lease" (a monthly payment the ad calls a lease — the word "lease" by the payment, or a due-at-signing figure, or an annual mileage allowance; due-at-signing is often only in the fine print, so its absence does NOT make it finance), "finance" (APR, or a monthly payment + term with no lease markers), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
 - Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. The rule-based guess's vehicleModel may already be resolved from an OCR'd ad image (image-only platforms bake the vehicle name into the image rather than the DOM) — trust it unless the page text clearly contradicts it.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
 - cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 cash back", "$500 off"). salePrice: the raw advertised sale or cash price of the vehicle (e.g. "Sale Price $28,999"). Use null when not present.

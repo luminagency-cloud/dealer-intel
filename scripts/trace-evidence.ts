@@ -5,7 +5,7 @@
  *
  *   npx tsx --env-file=.env scripts/trace-evidence.ts "langway"
  */
-import { desc, eq, ilike, sql } from "drizzle-orm";
+import { desc, ilike, sql } from "drizzle-orm";
 import { getDb, collectionRuns, sites, evidence } from "../src/lib/db";
 
 const needle = process.argv[2] ?? "langway";

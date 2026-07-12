@@ -1,26 +1,45 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+
+type Theme = "light" | "dark";
+
+/** The persisted theme is an external store (localStorage, with a
+ *  prefers-color-scheme fallback). Reading it via useSyncExternalStore is
+ *  React's sanctioned pattern: it hydrates from the server snapshot ("light",
+ *  matching the SSR HTML) and then swaps to the real client value — no
+ *  set-state-in-effect and no hydration-mismatch warning. */
+function readTheme(): Theme {
+  const stored = localStorage.getItem("theme");
+  if (stored === "dark" || stored === "light") return stored;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function subscribe(onChange: () => void): () => void {
+  // "theme-change" fires from toggle() in this tab; "storage" fires when
+  // another tab changes the theme.
+  window.addEventListener("theme-change", onChange);
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener("theme-change", onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    const stored = localStorage.getItem("theme");
-    const initial =
-      stored === "dark" || stored === "light"
-        ? stored
-        : window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
-    setTheme(initial);
-  }, []);
+  const theme = useSyncExternalStore(
+    subscribe,
+    readTheme,
+    () => "light" as Theme
+  );
 
   function toggle() {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
+    const next: Theme = theme === "dark" ? "light" : "dark";
     localStorage.setItem("theme", next);
     document.documentElement.setAttribute("data-theme", next);
+    window.dispatchEvent(new Event("theme-change"));
   }
 
   return (

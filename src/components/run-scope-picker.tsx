@@ -26,7 +26,8 @@ export function RunScopePicker({
   const toggleMission = (id: string) => {
     setCheckedMissions((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -34,7 +35,8 @@ export function RunScopePicker({
   const toggleGroup = (id: string) => {
     setCheckedGroups((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -42,7 +44,8 @@ export function RunScopePicker({
   const toggleSite = (id: string) => {
     setCheckedSites((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };

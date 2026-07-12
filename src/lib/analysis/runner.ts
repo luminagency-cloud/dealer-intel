@@ -274,22 +274,30 @@ function disclaimerPortion(modalText: string): string {
 }
 
 function matchCapturedDisclaimer(
-  offer: { monthlyPayment: number | null },
+  offer: { monthlyPayment: number | null; vehicleModel: string | null },
   siteId: string,
   disclaimers: CapturedDisclaimer[]
 ): { text: string; model: string | null } | null {
   if (offer.monthlyPayment == null) return null;
   const amountRe = new RegExp(`\\$\\s?${offer.monthlyPayment}(?![\\d,])`);
-  for (const d of disclaimers) {
-    if (d.siteId !== siteId) continue;
-    if (amountRe.test(d.text)) {
-      return {
-        text: disclaimerPortion(d.text).slice(0, 1000),
-        model: findKnownModel(d.text),
-      };
-    }
-  }
-  return null;
+  const candidates = disclaimers.filter(
+    (d) => d.siteId === siteId && amountRe.test(d.text)
+  );
+  if (candidates.length === 0) return null;
+  // Two different vehicles can share the same monthly payment (e.g. two
+  // $399/mo leases on the same site), so a bare payment match is ambiguous
+  // when there's more than one candidate. Prefer the one whose own text names
+  // the vehicle model the rule-based/AI pass already settled on — that beats
+  // an arbitrary "first in DB order" pick, which would silently attach the
+  // wrong disclaimer (and overwrite a correct model with a wrong one).
+  const corroborated = offer.vehicleModel
+    ? candidates.find((d) => findKnownModel(d.text) === offer.vehicleModel)
+    : null;
+  const chosen = corroborated ?? candidates[0];
+  return {
+    text: disclaimerPortion(chosen.text).slice(0, 1000),
+    model: findKnownModel(chosen.text),
+  };
 }
 
 /** OCRs a screenshot with Mistral, caching per evidence id within a single
@@ -341,6 +349,17 @@ async function getOcrArtifact(
 }
 
 const MAX_COUPON_IMAGES = 12;
+
+/** Cap on ad-card images OCR'd per page in the image pass. */
+const MAX_AD_IMAGES = 15;
+
+/** A page whose DOM + disclaimer text yielded more offers than this is treated
+ *  as adequately covered by text and skips the (expensive) per-image OCR pass.
+ *  Keeps the pass targeted at image-rendered platforms (DDC/Dealer.com) rather
+ *  than OCR-storming text-rendered pages across a full run. Two is enough to
+ *  catch the failure mode where one stray DOM offer (e.g. a finance banner)
+ *  masks several image-rendered offer cards on the same page. */
+const MAX_DOM_OFFERS_FOR_IMAGE_PASS = 2;
 
 /** Image-coupon service pass: for pages whose coupons are graphics (DDC/
  *  Dealer.com), OCR each coupon image (primary — it's what customers see) and
@@ -453,9 +472,15 @@ async function processAnalysis(
     const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
 
     const seen = new Set<string>();
-    // Track which sites produced at least one offer (text or disclaimer passes).
-    // Sites with zero offers after both passes are candidates for the image pass.
-    const siteOfferInserted = new Set<string>();
+    // Per-page text yield, used to gate the image pass PER PAGE (not per site).
+    // DOM offers are keyed by the html evidence row id; disclaimer-modal offers
+    // attach to a page's mission, so they're keyed by "siteId:missionType". A
+    // page whose own yield is smaller than its ad-card image count still gets the
+    // OCR pass even if OTHER pages on the same site produced offers — the old
+    // all-or-nothing site gate suppressed exactly that (a lone finance banner on
+    // one page hid the image-rendered offer cards on the specials page).
+    const domOffersByEvidence = new Map<string, number>();
+    const disclaimerOffersByMission = new Map<string, number>();
 
     for (const { evidence: row, site } of rows) {
       console.log(`[analysis] processing evidence id=${row.id} site="${site.name}" missionType=${row.missionType} htmlUrl=${row.htmlUrl}`);
@@ -543,7 +568,11 @@ async function processAnalysis(
             current: effective,
             ocrModelHint,
           });
-          if (enrichment) {
+          // Only take the AI's correction when it's at least as confident as
+          // the rule-based guess it's replacing — a low-confidence AI answer
+          // ("I don't know either") shouldn't silently overwrite offer fields
+          // just because it was asked to look.
+          if (enrichment && enrichment.confidence >= effective.confidence) {
             effective = { ...effective, ...enrichment };
             aiAssisted = true;
           }
@@ -589,7 +618,7 @@ async function processAnalysis(
           disclaimerText,
           confidence: effective.confidence,
         });
-        siteOfferInserted.add(row.siteId);
+        domOffersByEvidence.set(row.id, (domOffersByEvidence.get(row.id) ?? 0) + 1);
 
         // Compliance only applies to priced offers (lease / finance / cash).
         // Service and promotional offers are skipped — no API call, grade = n/a.
@@ -695,7 +724,7 @@ async function processAnalysis(
             current: effective,
             ocrModelHint,
           });
-          if (enrichment) {
+          if (enrichment && enrichment.confidence >= effective.confidence) {
             effective = { ...effective, ...enrichment };
             aiAssisted = true;
           }
@@ -735,7 +764,10 @@ async function processAnalysis(
           disclaimerText,
           confidence: effective.confidence,
         });
-        siteOfferInserted.add(row.siteId);
+        disclaimerOffersByMission.set(
+          `${row.siteId}:${row.missionType}`,
+          (disclaimerOffersByMission.get(`${row.siteId}:${row.missionType}`) ?? 0) + 1
+        );
 
         const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
         const result = COMPLIANCE_TYPES.includes(effective.offerType)
@@ -768,209 +800,186 @@ async function processAnalysis(
       }
     }
 
-    // Image pass: sites that produced zero text-extractable offers may have
-    // image-only content (e.g. carousel slides on platforms that render offers
-    // as graphics). OCR each screenshot evidence row with Mistral, then run
-    // the same deterministic extractor used for DOM text over the OCR'd text.
-    // No-op when Mistral is not configured.
-    const imagePassSiteIds = siteIdsInRun.filter((id) => !siteOfferInserted.has(id));
-    if (imagePassSiteIds.length > 0) {
-      const ocrActive = isMistralConfigured();
-      const zeroSiteNames = imagePassSiteIds.map((id) => {
-        const r = rows.find((r) => r.evidence.siteId === id);
-        return r?.site.name ?? id;
-      });
-      if (!ocrActive) {
-        console.warn(
-          `[analysis] WARNING: ${imagePassSiteIds.length} site(s) produced zero text offers and appear image-only, ` +
-          `but MISTRAL_API_KEY is not set so the image pass is disabled. ` +
-          `These sites will have no offers: ${zeroSiteNames.join(", ")}. ` +
-          `Set MISTRAL_API_KEY in .env to enable OCR extraction for image-only platforms.`
-        );
-      } else {
-        console.log(`[analysis] image pass: ${imagePassSiteIds.length} sites with zero text offers: ${zeroSiteNames.join(", ")}`);
+    // Image pass (per page): a page whose DOM + disclaimer text yielded very few
+    // offers relative to its ad-card images likely renders offers as graphics
+    // (DDC/Dealer.com). OCR that page's ad images and, as a fallback, its full
+    // screenshot. The gate is PER html evidence row, not per site — a single
+    // weak text offer on one page no longer suppresses OCR recovery for the rest
+    // of the site (the old all-or-nothing site gate did exactly that).
+    const mistralOn = isMistralConfigured();
+    const imageOnlyBlocked: string[] = [];
+
+    for (const { evidence: htmlRow, site } of rows) {
+      // Service specials have their own OCR-coupon pass (serviceCouponOffers).
+      if (htmlRow.missionType === "service_specials") continue;
+
+      const coveredCount =
+        (domOffersByEvidence.get(htmlRow.id) ?? 0) +
+        (disclaimerOffersByMission.get(`${htmlRow.siteId}:${htmlRow.missionType}`) ?? 0);
+      // Already well-covered by text — skip before any R2 fetch or OCR.
+      if (coveredCount > MAX_DOM_OFFERS_FOR_IMAGE_PASS) continue;
+
+      const html = await getEvidenceText(htmlRow);
+      if (!html) continue;
+      const pageUrl = pageUrlFromLabel(htmlRow.label);
+      const adImageUrls = extractAdImageUrls(html, pageUrl);
+
+      // Run the pass when the page has more ad-card images than offers we found
+      // (image-rendered offers we missed), or produced nothing at all.
+      const wantImagePass = coveredCount === 0 || adImageUrls.length > coveredCount;
+      if (!wantImagePass) continue;
+
+      if (!mistralOn) {
+        imageOnlyBlocked.push(`${site.name} [${htmlRow.missionType}]`);
+        continue;
       }
-      const imageSiteSet = new Set(imagePassSiteIds);
-      // Group screenshot evidence by siteId from the already-loaded index.
-      const screenshotsBySite = new Map<string, Evidence[]>();
-      for (const screenshotRow of screenshotIndex.values()) {
-        if (!imageSiteSet.has(screenshotRow.siteId)) continue;
-        const arr = screenshotsBySite.get(screenshotRow.siteId) ?? [];
-        arr.push(screenshotRow);
-        screenshotsBySite.set(screenshotRow.siteId, arr);
-      }
-      // Update progress total to include these images.
-      const imageTotal = [...screenshotsBySite.values()].reduce((s, a) => s + a.length, 0);
-      const iprog = analysisProgress.get(runId);
-      if (iprog) iprog.total += imageTotal;
 
-      const siteInfoMap = new Map(rows.map((r) => [r.evidence.siteId, r.site]));
+      const marketStates = [site.state, ...(site.otherStates ?? [])].filter(
+        (s): s is string => Boolean(s)
+      );
+      console.log(
+        `[analysis] image pass site="${site.name}" mission=${htmlRow.missionType}: text offers=${coveredCount}, ad images=${adImageUrls.length}`
+      );
 
-      for (const siteId of imagePassSiteIds) {
-        const shots = screenshotsBySite.get(siteId) ?? [];
-        const site = siteInfoMap.get(siteId);
-        if (!site) continue;
-        const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
+      let pageFoundOffer = false;
 
-        let siteFoundOffer = false;
-
-        // Sub-pass B: individual ad-card images fetched from HTML snapshot img
-        // src URLs. Primary path for image-only platforms (e.g. Dealer.com) —
-        // each CDN image is OCR'd in isolation so disclaimers can't bleed
-        // between ads. header/footer/nav are stripped before URL parsing.
-        if (isMistralConfigured()) {
-          const htmlRowsForSite = rows.filter((r) => r.evidence.siteId === siteId);
-          for (const { evidence: htmlRow } of htmlRowsForSite) {
-            if (siteFoundOffer) break;
-            if (htmlRow.missionType === "service_specials") continue;
-            const html = await getEvidenceText(htmlRow);
-            if (!html) continue;
-            const pageUrl = pageUrlFromLabel(htmlRow.label);
-            const adImageUrls = extractAdImageUrls(html, pageUrl);
-            console.log(`[analysis] img-src pass site=${site.name} mission=${htmlRow.missionType} found ${adImageUrls.length} candidate image URL(s)`);
-            const MAX_AD_IMAGES = 15;
-            let tried = 0;
-            for (const url of adImageUrls) {
-              if (tried >= MAX_AD_IMAGES) break;
-              tried++;
-              let imageBuf: Buffer | null = null;
-              try {
-                const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-                if (!resp.ok) continue;
-                imageBuf = Buffer.from(await resp.arrayBuffer());
-              } catch { continue; }
-              const artifact = await runMistralOcr(imageBuf);
-              if (!artifact || !artifact.imageText.trim()) continue;
-              const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
-              console.log(`[analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
-              for (const offer of extracted) {
-                if (offer.confidence < 0.3) continue;
-                const sig = [siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? ""].join("|");
-                if (seen.has(sig)) continue;
-                seen.add(sig);
-                siteFoundOffer = true;
-                await db.insert(offers).values({
-                  collectionRunId: runId,
-                  siteId,
-                  sourceEvidenceId: htmlRow.id,
-                  offerType: offer.offerType,
-                  vehicleMake: offer.vehicleMake,
-                  vehicleModel: offer.vehicleModel,
-                  vehicleTrim: offer.vehicleTrim,
-                  monthlyPayment: offer.monthlyPayment,
-                  apr: offer.apr,
-                  cashIncentive: offer.cashIncentive,
-                  salePrice: offer.salePrice,
-                  termMonths: offer.termMonths,
-                  dueAtSigning: offer.dueAtSigning,
-                  mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null,
-                  rawText: offer.rawText,
-                  normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
-                  disclaimerText: offer.disclaimerText,
-                  confidence: offer.confidence,
-                });
-                const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
-                const result = COMPLIANCE_TYPES.includes(offer.offerType)
-                  ? await grader.grade({
-                      evidenceId: htmlRow.id,
-                      offerType: offer.offerType,
-                      disclaimerText: offer.disclaimerText,
-                      adText: offer.rawText,
-                      dealerName: site.name,
-                      marketStates,
-                      screenshotBuffer: imageBuf,
-                    })
-                  : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
-                await db.insert(complianceGrades)
-                  .values({ evidenceId: htmlRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
-                  .onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
-              }
-            }
-          }
+      // Sub-pass B: OCR each ad-card image in isolation (no cross-ad disclaimer
+      // bleed). Collect ALL distinct offers on the page — never stop at the
+      // first, or a 5-card page would yield a single offer.
+      let tried = 0;
+      for (const url of adImageUrls) {
+        if (tried >= MAX_AD_IMAGES) break;
+        tried++;
+        let imageBuf: Buffer | null = null;
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+          if (!resp.ok) continue;
+          imageBuf = Buffer.from(await resp.arrayBuffer());
+        } catch { continue; }
+        const artifact = await runMistralOcr(imageBuf);
+        if (!artifact || !artifact.imageText.trim()) continue;
+        const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
+        console.log(`[analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
+        for (const offer of extracted) {
+          if (offer.confidence < 0.3) continue;
+          const sig = [htmlRow.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
+          if (seen.has(sig)) continue;
+          seen.add(sig);
+          pageFoundOffer = true;
+          await db.insert(offers).values({
+            collectionRunId: runId,
+            siteId: htmlRow.siteId,
+            sourceEvidenceId: htmlRow.id,
+            offerType: offer.offerType,
+            vehicleMake: offer.vehicleMake,
+            vehicleModel: offer.vehicleModel,
+            vehicleTrim: offer.vehicleTrim,
+            monthlyPayment: offer.monthlyPayment,
+            apr: offer.apr,
+            cashIncentive: offer.cashIncentive,
+            salePrice: offer.salePrice,
+            termMonths: offer.termMonths,
+            dueAtSigning: offer.dueAtSigning,
+            mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null,
+            rawText: offer.rawText,
+            normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
+            disclaimerText: offer.disclaimerText,
+            confidence: offer.confidence,
+          });
+          const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
+          const result = COMPLIANCE_TYPES.includes(offer.offerType)
+            ? await grader.grade({
+                evidenceId: htmlRow.id,
+                offerType: offer.offerType,
+                disclaimerText: offer.disclaimerText,
+                adText: offer.rawText,
+                dealerName: site.name,
+                marketStates,
+                screenshotBuffer: imageBuf,
+              })
+            : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
+          await db.insert(complianceGrades)
+            .values({ evidenceId: htmlRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
+            .onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
         }
+      }
 
-        // Sub-pass A: full-page screenshot OCR — fallback when per-image CDN
-        // extraction found nothing (e.g. JS-loaded images absent from the HTML
-        // snapshot). On typical image-only platforms Mistral treats embedded ad
-        // images as placeholders and finds no offer text, so this rarely fires
-        // for those sites; it exists as a safety net for pages where the full
-        // screenshot IS text-readable by Mistral.
-        if (!siteFoundOffer) {
-          for (const screenshotRow of shots) {
-            const buf = await getEvidenceBody(screenshotRow);
-            if (buf) {
-              const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
-              const extracted = artifact && artifact.imageText.trim()
-                ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: site.brand })
-                : [];
-              console.log(`[analysis] screenshot OCR fallback site=${site.name} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
-              for (const offer of extracted) {
-                if (offer.confidence < 0.3) continue;
-                const sig = [
-                  siteId,
-                  offer.offerType,
-                  offer.vehicleModel ?? "",
-                  offer.monthlyPayment ?? "",
-                  offer.apr ?? "",
-                  offer.termMonths ?? "",
-                  offer.cashIncentive ?? "",
-                  offer.salePrice ?? "",
-                  offer.dueAtSigning ?? "",
-                  offer.mileageAllowance ?? "",
-                ].join("|");
-                if (!seen.has(sig)) {
-                  seen.add(sig);
-                  siteFoundOffer = true;
-                  await db.insert(offers).values({
-                    collectionRunId: runId,
-                    siteId,
-                    sourceEvidenceId: screenshotRow.id,
+      // Sub-pass A: full-page screenshot OCR — fallback when per-image OCR found
+      // nothing (e.g. JS-loaded images absent from the HTML snapshot). Uses the
+      // screenshot captured alongside THIS html row.
+      if (!pageFoundOffer) {
+        const screenshotKey = `${htmlRow.siteId}:${htmlRow.missionType}:${htmlRow.label ?? ""}`;
+        const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
+        if (screenshotRow) {
+          if (!screenshotCache.has(screenshotRow.id)) {
+            screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
+          }
+          const buf = screenshotCache.get(screenshotRow.id) ?? null;
+          if (buf) {
+            const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
+            const extracted = artifact && artifact.imageText.trim()
+              ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: site.brand })
+              : [];
+            console.log(`[analysis] screenshot OCR fallback site=${site.name} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
+            for (const offer of extracted) {
+              if (offer.confidence < 0.3) continue;
+              const sig = [htmlRow.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
+              if (seen.has(sig)) continue;
+              seen.add(sig);
+              await db.insert(offers).values({
+                collectionRunId: runId,
+                siteId: htmlRow.siteId,
+                sourceEvidenceId: screenshotRow.id,
+                offerType: offer.offerType,
+                vehicleMake: offer.vehicleMake,
+                vehicleModel: offer.vehicleModel,
+                vehicleTrim: offer.vehicleTrim,
+                monthlyPayment: offer.monthlyPayment,
+                apr: offer.apr,
+                cashIncentive: offer.cashIncentive,
+                salePrice: offer.salePrice,
+                termMonths: offer.termMonths,
+                dueAtSigning: offer.dueAtSigning,
+                mileageAllowance:
+                  offer.offerType === "lease"
+                    ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText)
+                    : null,
+                rawText: offer.rawText,
+                normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
+                disclaimerText: offer.disclaimerText,
+                confidence: offer.confidence,
+              });
+              const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
+              const result = COMPLIANCE_TYPES.includes(offer.offerType)
+                ? await grader.grade({
+                    evidenceId: screenshotRow.id,
                     offerType: offer.offerType,
-                    vehicleMake: offer.vehicleMake,
-                    vehicleModel: offer.vehicleModel,
-                    vehicleTrim: offer.vehicleTrim,
-                    monthlyPayment: offer.monthlyPayment,
-                    apr: offer.apr,
-                    cashIncentive: offer.cashIncentive,
-                    salePrice: offer.salePrice,
-                    termMonths: offer.termMonths,
-                    dueAtSigning: offer.dueAtSigning,
-                    mileageAllowance:
-                      offer.offerType === "lease"
-                        ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText)
-                        : null,
-                    rawText: offer.rawText,
-                    normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
                     disclaimerText: offer.disclaimerText,
-                    confidence: offer.confidence,
-                  });
-                  const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
-                  const result = COMPLIANCE_TYPES.includes(offer.offerType)
-                    ? await grader.grade({
-                        evidenceId: screenshotRow.id,
-                        offerType: offer.offerType,
-                        disclaimerText: offer.disclaimerText,
-                        adText: offer.rawText,
-                        dealerName: site.name,
-                        marketStates,
-                        screenshotBuffer: buf,
-                      })
-                    : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
-                  await db
-                    .insert(complianceGrades)
-                    .values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
-                    .onConflictDoUpdate({
-                      target: complianceGrades.evidenceId,
-                      set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() },
-                    });
-                }
-              }
+                    adText: offer.rawText,
+                    dealerName: site.name,
+                    marketStates,
+                    screenshotBuffer: buf,
+                  })
+                : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
+              await db
+                .insert(complianceGrades)
+                .values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
+                .onConflictDoUpdate({
+                  target: complianceGrades.evidenceId,
+                  set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() },
+                });
             }
-            const iprog2 = analysisProgress.get(runId);
-            if (iprog2) iprog2.processed += 1;
           }
         }
       }
+    }
+
+    if (imageOnlyBlocked.length > 0) {
+      console.warn(
+        `[analysis] WARNING: ${imageOnlyBlocked.length} page(s) look image-rendered but MISTRAL_API_KEY is not set, ` +
+        `so the image pass is disabled and they get no image-based offers: ${imageOnlyBlocked.join(", ")}. ` +
+        `Set MISTRAL_API_KEY in .env to enable OCR extraction for image-only platforms.`
+      );
     }
 
     await db
@@ -1131,7 +1140,9 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       const screenshotCache = new Map<string, Buffer | null>();
       const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
       const seen = new Set<string>();
-      let offersInserted = 0;
+      // Per-page text yield, to gate the image pass per page (see processAnalysis).
+      const domOffersByEvidence = new Map<string, number>();
+      const disclaimerOffersByMission = new Map<string, number>();
 
       for (const { evidence: row, site } of htmlRows) {
         const html = await getEvidenceText(row);
@@ -1164,14 +1175,14 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
               if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
             }
             const enrichment = await enricher.enrich({ pageText, brand: site.brand, current: effective, ocrModelHint });
-            if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
+            if (enrichment && enrichment.confidence >= effective.confidence) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
           const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
           const vehicleModel = matched?.model ?? effective.vehicleModel;
           const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(effective.rawText) : null;
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
-          offersInserted++;
+          domOffersByEvidence.set(row.id, (domOffersByEvidence.get(row.id) ?? 0) + 1);
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
             ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
@@ -1204,12 +1215,12 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
               if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
             }
             const enrichment = await enricher.enrich({ pageText: text, brand: site.brand, current: effective, ocrModelHint });
-            if (enrichment) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
+            if (enrichment && enrichment.confidence >= effective.confidence) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
           const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(text) : null;
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
-          offersInserted++;
+          disclaimerOffersByMission.set(`${row.siteId}:${row.missionType}`, (disclaimerOffersByMission.get(`${row.siteId}:${row.missionType}`) ?? 0) + 1);
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
             ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
@@ -1218,91 +1229,82 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         }
       }
 
-      // Image pass: if HTML and disclaimer extraction found nothing, this site is
-      // likely image-only (e.g. DDC/Dealer.com). Try two sub-passes:
-      // A) full-page screenshot OCR; B) individual ad-card images from HTML img srcs.
-      if (offersInserted === 0 && isMistralConfigured()) {
-        const siteInfo = htmlRows[0]?.site ?? disclaimerRows[0]?.site;
-        if (siteInfo) {
-          const marketStates = [siteInfo.state, ...(siteInfo.otherStates ?? [])].filter((s): s is string => Boolean(s));
-          const screenshotKey = `${siteId}:${missionType}:`;
-          const shots = [...screenshotIndex.entries()]
-            .filter(([k]) => k.startsWith(screenshotKey))
-            .map(([, v]) => v);
+      // Image pass (per page): mirror of processAnalysis. A page whose text yield
+      // is smaller than its ad-card image count likely renders offers as graphics
+      // (DDC/Dealer.com). Gate per html row so one weak text offer no longer
+      // suppresses OCR recovery for this site+mission's other pages.
+      if (isMistralConfigured()) {
+        for (const { evidence: htmlRow, site } of htmlRows) {
+          if (htmlRow.missionType === "service_specials") continue;
+          const coveredCount =
+            (domOffersByEvidence.get(htmlRow.id) ?? 0) +
+            (disclaimerOffersByMission.get(`${htmlRow.siteId}:${htmlRow.missionType}`) ?? 0);
+          if (coveredCount > MAX_DOM_OFFERS_FOR_IMAGE_PASS) continue;
+          const html = await getEvidenceText(htmlRow);
+          if (!html) continue;
+          const pageUrl = pageUrlFromLabel(htmlRow.label);
+          const adImageUrls = extractAdImageUrls(html, pageUrl);
+          const wantImagePass = coveredCount === 0 || adImageUrls.length > coveredCount;
+          if (!wantImagePass) continue;
+          const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
+          console.log(`[partial-analysis] image pass site="${site.name}" mission=${htmlRow.missionType}: text offers=${coveredCount}, ad images=${adImageUrls.length}`);
 
-          // Sub-pass B: individual ad-card images from HTML snapshot img srcs.
-          // Primary path — each CDN image is isolated, no cross-ad bleed.
-          // header/footer/nav stripped before parsing.
-          let foundOfferInPass = false;
-          if (missionType !== "service_specials") {
-            for (const { evidence: htmlRow } of htmlRows) {
-              if (foundOfferInPass) break;
-              const html = await getEvidenceText(htmlRow);
-              if (!html) continue;
-              const pageUrl = pageUrlFromLabel(htmlRow.label);
-              const adImageUrls = extractAdImageUrls(html, pageUrl);
-              console.log(`[partial-analysis] img-src pass site=${siteInfo.name} mission=${missionType} found ${adImageUrls.length} candidate image URL(s)`);
-              const MAX_AD_IMAGES = 15;
-              let tried = 0;
-              for (const url of adImageUrls) {
-                if (tried >= MAX_AD_IMAGES) break;
-                tried++;
-                let imageBuf: Buffer | null = null;
-                try {
-                  const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-                  if (!resp.ok) continue;
-                  imageBuf = Buffer.from(await resp.arrayBuffer());
-                } catch { continue; }
-                const artifact = await runMistralOcr(imageBuf);
-                if (!artifact || !artifact.imageText.trim()) continue;
-                const extracted = extractOffers(artifact.imageText, { missionType, brand: siteInfo.brand });
-                console.log(`[partial-analysis] img-src OCR site=${siteInfo.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
-                for (const offer of extracted) {
-                  if (offer.confidence < 0.3) continue;
-                  const sig = [siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? ""].join("|");
-                  if (seen.has(sig)) continue;
-                  seen.add(sig);
-                  foundOfferInPass = true;
-                  await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: htmlRow.id, offerType: offer.offerType, vehicleMake: offer.vehicleMake, vehicleModel: offer.vehicleModel, vehicleTrim: offer.vehicleTrim, monthlyPayment: offer.monthlyPayment, apr: offer.apr, cashIncentive: offer.cashIncentive, salePrice: offer.salePrice, termMonths: offer.termMonths, dueAtSigning: offer.dueAtSigning, mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null, rawText: offer.rawText, normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" }, disclaimerText: offer.disclaimerText, confidence: offer.confidence });
-                  const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
-                  const result = COMPLIANCE_TYPES.includes(offer.offerType)
-                    ? await grader.grade({ evidenceId: htmlRow.id, offerType: offer.offerType, disclaimerText: offer.disclaimerText, adText: offer.rawText, dealerName: siteInfo.name, marketStates, screenshotBuffer: imageBuf })
-                    : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
-                  await db.insert(complianceGrades).values({ evidenceId: htmlRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
-                }
-              }
+          let pageFoundOffer = false;
+          let tried = 0;
+          for (const url of adImageUrls) {
+            if (tried >= MAX_AD_IMAGES) break;
+            tried++;
+            let imageBuf: Buffer | null = null;
+            try {
+              const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+              if (!resp.ok) continue;
+              imageBuf = Buffer.from(await resp.arrayBuffer());
+            } catch { continue; }
+            const artifact = await runMistralOcr(imageBuf);
+            if (!artifact || !artifact.imageText.trim()) continue;
+            const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
+            console.log(`[partial-analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
+            for (const offer of extracted) {
+              if (offer.confidence < 0.3) continue;
+              const sig = [htmlRow.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
+              if (seen.has(sig)) continue;
+              seen.add(sig);
+              pageFoundOffer = true;
+              await db.insert(offers).values({ collectionRunId: runId, siteId: htmlRow.siteId, sourceEvidenceId: htmlRow.id, offerType: offer.offerType, vehicleMake: offer.vehicleMake, vehicleModel: offer.vehicleModel, vehicleTrim: offer.vehicleTrim, monthlyPayment: offer.monthlyPayment, apr: offer.apr, cashIncentive: offer.cashIncentive, salePrice: offer.salePrice, termMonths: offer.termMonths, dueAtSigning: offer.dueAtSigning, mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null, rawText: offer.rawText, normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" }, disclaimerText: offer.disclaimerText, confidence: offer.confidence });
+              const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
+              const result = COMPLIANCE_TYPES.includes(offer.offerType)
+                ? await grader.grade({ evidenceId: htmlRow.id, offerType: offer.offerType, disclaimerText: offer.disclaimerText, adText: offer.rawText, dealerName: site.name, marketStates, screenshotBuffer: imageBuf })
+                : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
+              await db.insert(complianceGrades).values({ evidenceId: htmlRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
             }
           }
 
-          // Sub-pass A: full-page screenshot OCR — fallback when per-image CDN
-          // extraction found nothing (e.g. JS-loaded images absent from the HTML
-          // snapshot). Rarely succeeds on typical image-only platforms since
-          // Mistral treats nested ad images as placeholders, but kept as a
-          // safety net for pages where the screenshot IS text-readable.
-          if (!foundOfferInPass) {
-            for (const screenshotRow of shots) {
+          if (!pageFoundOffer) {
+            const screenshotKey = `${htmlRow.siteId}:${htmlRow.missionType}:${htmlRow.label ?? ""}`;
+            const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
+            if (screenshotRow) {
               if (!screenshotCache.has(screenshotRow.id)) {
                 screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
               }
               const buf = screenshotCache.get(screenshotRow.id) ?? null;
-              if (!buf) continue;
-              const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
-              const extracted = artifact && artifact.imageText.trim()
-                ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: siteInfo.brand })
-                : [];
-              console.log(`[partial-analysis] screenshot OCR fallback site=${siteInfo.name} mission=${missionType} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
-              for (const offer of extracted) {
-                if (offer.confidence < 0.3) continue;
-                const sig = [siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? ""].join("|");
-                if (seen.has(sig)) continue;
-                seen.add(sig);
-                foundOfferInPass = true;
-                await db.insert(offers).values({ collectionRunId: runId, siteId, sourceEvidenceId: screenshotRow.id, offerType: offer.offerType, vehicleMake: offer.vehicleMake, vehicleModel: offer.vehicleModel, vehicleTrim: offer.vehicleTrim, monthlyPayment: offer.monthlyPayment, apr: offer.apr, cashIncentive: offer.cashIncentive, salePrice: offer.salePrice, termMonths: offer.termMonths, dueAtSigning: offer.dueAtSigning, mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null, rawText: offer.rawText, normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" }, disclaimerText: offer.disclaimerText, confidence: offer.confidence });
-                const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
-                const result = COMPLIANCE_TYPES.includes(offer.offerType)
-                  ? await grader.grade({ evidenceId: screenshotRow.id, offerType: offer.offerType, disclaimerText: offer.disclaimerText, adText: offer.rawText, dealerName: siteInfo.name, marketStates, screenshotBuffer: buf })
-                  : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
-                await db.insert(complianceGrades).values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+              if (buf) {
+                const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
+                const extracted = artifact && artifact.imageText.trim()
+                  ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: site.brand })
+                  : [];
+                console.log(`[partial-analysis] screenshot OCR fallback site=${site.name} mission=${htmlRow.missionType} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
+                for (const offer of extracted) {
+                  if (offer.confidence < 0.3) continue;
+                  const sig = [htmlRow.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
+                  if (seen.has(sig)) continue;
+                  seen.add(sig);
+                  await db.insert(offers).values({ collectionRunId: runId, siteId: htmlRow.siteId, sourceEvidenceId: screenshotRow.id, offerType: offer.offerType, vehicleMake: offer.vehicleMake, vehicleModel: offer.vehicleModel, vehicleTrim: offer.vehicleTrim, monthlyPayment: offer.monthlyPayment, apr: offer.apr, cashIncentive: offer.cashIncentive, salePrice: offer.salePrice, termMonths: offer.termMonths, dueAtSigning: offer.dueAtSigning, mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null, rawText: offer.rawText, normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" }, disclaimerText: offer.disclaimerText, confidence: offer.confidence });
+                  const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
+                  const result = COMPLIANCE_TYPES.includes(offer.offerType)
+                    ? await grader.grade({ evidenceId: screenshotRow.id, offerType: offer.offerType, disclaimerText: offer.disclaimerText, adText: offer.rawText, dealerName: site.name, marketStates, screenshotBuffer: buf })
+                    : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
+                  await db.insert(complianceGrades).values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details }).onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+                }
               }
             }
           }

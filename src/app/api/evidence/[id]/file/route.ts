@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { notFound } from "next/navigation";
-import { auth } from "@/auth";
+import { getSession } from "@/lib/session";
 import { getEvidence } from "@/lib/db/repository";
 import { getEvidenceDownloadUrl } from "@/lib/evidence";
 
@@ -10,7 +10,7 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
+  const session = await getSession();
   if (!session?.user) {
     return new Response("Unauthorized", { status: 401 });
   }
