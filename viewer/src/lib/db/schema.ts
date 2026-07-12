@@ -77,6 +77,7 @@ export const reportSnapshots = pgTable("report_snapshots", {
   offerCount: integer("offer_count").notNull().default(0),
   siteCount: integer("site_count").notNull().default(0),
   clientVisible: boolean("client_visible").notNull().default(false),
+  shareToken: text("share_token").unique(),
   approvedAt: timestamp("approved_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

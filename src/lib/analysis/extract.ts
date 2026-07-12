@@ -1,5 +1,5 @@
 import type { MissionType, OfferType } from "@/lib/db";
-import { parseMileage } from "@/lib/report";
+import { parseMileage, deriveAnnualMileage } from "@/lib/report";
 
 /**
  * Rule-based offer extraction (Phase 9 classification + normalization). Reads
@@ -571,7 +571,13 @@ function extractOfferFromText(
   // Mileage allowance is a lease-specific supplement, not a classification
   // signal — a stray "X miles per year" shouldn't itself make a chunk look
   // like a priced offer, so it's kept out of `fields`/signalCount below.
-  const mileageAllowance = isService ? null : parseMileage(text);
+  // Explicit "X per year" first; then, as a fallback, derive the annual cap
+  // from a whole-term total ("36 months, 22,500 miles" → 7,500/yr). The
+  // derivation only divides figures above 15k/yr, so a bare annual like
+  // "10k miles" is never touched — see deriveAnnualMileage.
+  const mileageAllowance = isService
+    ? null
+    : parseMileage(text) ?? deriveAnnualMileage(text, term?.value ?? null);
   // Service offer text is captured as a human-readable string (e.g. "$25 Off",
   // "25% Off", "Complimentary") — no numeric parse, so a percentage isn't
   // stored as a dollar amount and free/complimentary offers round-trip cleanly.

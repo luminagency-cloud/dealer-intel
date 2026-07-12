@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import {
-  getSnapshot,
+  getSnapshotByShareToken,
   getPrimarySiteIds,
   listSnapshotOffers,
   listSnapshotsForGroup,
@@ -14,8 +14,10 @@ export default async function PublicReportPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  // The `[id]` path segment is a revocable share token, not the snapshot UUID.
+  // Unknown, revoked, or unpublished tokens resolve to null → 404.
   const { id } = await params;
-  const snapshot = await getSnapshot(id);
+  const snapshot = await getSnapshotByShareToken(id);
   if (!snapshot) notFound();
 
   const [offers, primarySiteIds, groupSnapshots] = await Promise.all([

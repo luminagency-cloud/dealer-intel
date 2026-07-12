@@ -2,7 +2,7 @@
 import { isDatabaseConfigured } from "@/lib/db";
 import { listReportSnapshots } from "@/lib/db/repository";
 import { DbNotConfigured } from "@/components/db-not-configured";
-import { toggleClientVisible } from "./actions";
+import { regenerateShareLink, toggleClientVisible } from "./actions";
 import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
@@ -78,24 +78,37 @@ export default async function SnapshotsPage() {
                     {formatDate(snap.approvedAt)}
                   </td>
                   <td className="px-4 py-3">
-                    <form
-                      action={toggleClientVisible.bind(
-                        null,
-                        snap.id,
-                        !snap.clientVisible
-                      )}
-                    >
-                      <button
-                        type="submit"
-                        className={
-                          snap.clientVisible
-                            ? "rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900 dark:text-emerald-200 dark:hover:bg-emerald-800"
-                            : "rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-                        }
+                    <div className="flex items-center gap-2">
+                      <form
+                        action={toggleClientVisible.bind(
+                          null,
+                          snap.id,
+                          !snap.clientVisible
+                        )}
                       >
-                        {snap.clientVisible ? "Released" : "Draft"}
-                      </button>
-                    </form>
+                        <button
+                          type="submit"
+                          className={
+                            snap.clientVisible
+                              ? "rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900 dark:text-emerald-200 dark:hover:bg-emerald-800"
+                              : "rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                          }
+                        >
+                          {snap.clientVisible ? "Released" : "Draft"}
+                        </button>
+                      </form>
+                      {snap.clientVisible && (
+                        <form action={regenerateShareLink.bind(null, snap.id)}>
+                          <button
+                            type="submit"
+                            title="Rotate the share token — invalidates any previously shared link"
+                            className="rounded-full border border-zinc-300 px-2.5 py-0.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          >
+                            Regenerate link
+                          </button>
+                        </form>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                     <Link

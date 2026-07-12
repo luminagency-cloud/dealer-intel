@@ -71,6 +71,44 @@ export function parseMileage(text: string | null): number | null {
   return null;
 }
 
+/** Derive an ANNUAL lease mileage cap from a whole-TERM total, for ads that
+ *  only print the total (e.g. "36 months, 22,500 miles" → 22,500 ÷ 3 yr =
+ *  7,500/yr). Use ONLY as a fallback after parseMileage — i.e. when no explicit
+ *  "per year" figure was stated.
+ *
+ *  The 15k/yr ceiling is the discriminator, and the reason this is safe: no
+ *  mainstream lease advertises more than 15,000 mi/yr, so a bare figure ABOVE
+ *  15k can only be a term-total (divide it), while a figure at/below 15k is
+ *  plausibly already an annual cap and is LEFT UNTOUCHED — the division path
+ *  never sees it. That's what makes "10k miles" structurally impossible to
+ *  mangle here. The derived result must itself land in [3k, 15k] to be taken.
+ *
+ *  Returns null unless a term is known and a >15k total is present near "miles". */
+export function deriveAnnualMileage(
+  text: string | null,
+  termMonths: number | null
+): number | null {
+  if (!text || !termMonths || termMonths <= 0) return null;
+  const years = termMonths / 12;
+  const re = /([\d,]{4,})\s*(?:miles?|mi)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    // Skip figures explicitly qualified as annual ("per year", "/yr", "/year") —
+    // those are parseMileage's job, and dividing an annual figure would be wrong.
+    const trailing = text.slice(m.index + m[0].length, m.index + m[0].length + 12);
+    if (/^\s*(?:\/\s*|per\s+|a\s+)?(?:year|yr\b|annum)/i.test(trailing)) continue;
+    const total = Number(m[1].replace(/,/g, ""));
+    // ≤15k can't be a term-total that needs dividing — leave it for the annual
+    // path. Only figures that are impossibly high AS an annual cap get divided.
+    if (!Number.isFinite(total) || total <= 15_000) continue;
+    // Snap to the nearest 500 — real caps are round (7,500 / 10,000 / 12,000)
+    // and this absorbs minor OCR/total imprecision.
+    const annual = Math.round(total / years / 500) * 500;
+    if (annual >= 3_000 && annual <= 15_000) return annual;
+  }
+  return null;
+}
+
 export function fmtMileage(n: number): string {
   return `${n.toLocaleString()} mi/yr`;
 }

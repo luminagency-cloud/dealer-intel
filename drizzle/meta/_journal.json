@@ -197,6 +197,13 @@
       "when": 1783513984487,
       "tag": "0027_wise_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1783869603809,
+      "tag": "0028_demonic_junta",
+      "breakpoints": true
     }
   ]
 }

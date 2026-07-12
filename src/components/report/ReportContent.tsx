@@ -44,6 +44,11 @@ export interface ReportContentProps {
   inventoryData?: InventoryResult[];
   /** When true, show admin-only controls (Copy Link, Export CSV). */
   adminControls?: boolean;
+  /** Public shareable link for the "Copy shareable link" control. Absolute
+   *  (viewer origin) or root-relative (`/r/<token>`); the button resolves
+   *  relative values against the current origin. Falls back to the legacy
+   *  `/r/<snapshotId>` link when omitted (e.g. before a token is minted). */
+  shareUrl?: string;
   /** Tailwind classes for the outermost wrapper div. Defaults to
    *  "mx-auto max-w-6xl px-4 py-8" (suitable for the standalone public route).
    *  Override in admin context where the layout already provides padding. */
@@ -314,11 +319,20 @@ function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; 
 // Copy-link button (client interaction)
 // ---------------------------------------------------------------------------
 
-function CopyLinkButton({ snapshotId }: { snapshotId: string }) {
+function CopyLinkButton({
+  snapshotId,
+  shareUrl,
+}: {
+  snapshotId: string;
+  shareUrl?: string;
+}) {
   return (
     <button
       onClick={() => {
-        const url = `${window.location.origin}/r/${snapshotId}`;
+        const raw = shareUrl ?? `/r/${snapshotId}`;
+        const url = /^https?:\/\//.test(raw)
+          ? raw
+          : `${window.location.origin}${raw.startsWith("/") ? "" : "/"}${raw}`;
         void navigator.clipboard.writeText(url);
         const btn = document.getElementById("copy-link-btn");
         if (btn) {
@@ -348,6 +362,7 @@ export function ReportContent({
   news,
   inventoryData = [],
   adminControls = false,
+  shareUrl,
   containerClassName = "mx-auto max-w-6xl px-4 py-8",
 }: ReportContentProps) {
   // ---------------------------------------------------------------------------
@@ -602,7 +617,7 @@ export function ReportContent({
       {/* Admin controls */}
       {adminControls && (
         <div className="mb-6 flex items-center gap-3">
-          <CopyLinkButton snapshotId={snapshot.id} />
+          <CopyLinkButton snapshotId={snapshot.id} shareUrl={shareUrl} />
           <a
             href={`/reports/${snapshot.id}/export`}
             className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"

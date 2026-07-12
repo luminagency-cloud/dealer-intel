@@ -1,5 +1,6 @@
 import { and, asc, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getDb } from "./index";
+import { mintShareToken } from "../share";
 import {
   collectionRunMissions,
   collectionRunSites,
@@ -603,6 +604,40 @@ export async function setSnapshotClientVisible(
     .update(reportSnapshots)
     .set({ clientVisible: visible })
     .where(eq(reportSnapshots.id, id));
+}
+
+/**
+ * Return the snapshot's share token, minting and persisting one if it has none.
+ * Idempotent: an already-tokened snapshot keeps its token, so existing links
+ * survive re-publishing.
+ */
+export async function ensureShareToken(id: string): Promise<string | null> {
+  const [row] = await getDb()
+    .select({ shareToken: reportSnapshots.shareToken })
+    .from(reportSnapshots)
+    .where(eq(reportSnapshots.id, id));
+  if (!row) return null;
+  if (row.shareToken) return row.shareToken;
+
+  const token = mintShareToken();
+  await getDb()
+    .update(reportSnapshots)
+    .set({ shareToken: token })
+    .where(eq(reportSnapshots.id, id));
+  return token;
+}
+
+/**
+ * Overwrite a snapshot's share token with a fresh one, killing every link
+ * built from the previous token. Returns the new token.
+ */
+export async function regenerateShareToken(id: string): Promise<string> {
+  const token = mintShareToken();
+  await getDb()
+    .update(reportSnapshots)
+    .set({ shareToken: token })
+    .where(eq(reportSnapshots.id, id));
+  return token;
 }
 
 /** Touch a snapshot's approvedAt to now, signalling a manual report rebuild. */

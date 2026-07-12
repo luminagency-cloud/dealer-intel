@@ -21,6 +21,27 @@ export async function getSnapshot(id: string): Promise<ReportSnapshot | null> {
   return row ?? null;
 }
 
+/**
+ * Look up a snapshot by its public share token, but only if it is released
+ * (`clientVisible`). Returns null for unknown tokens or unpublished snapshots,
+ * so revoked/draft links 404. This is the only lookup the public /r/ route uses.
+ */
+export async function getSnapshotByShareToken(
+  token: string
+): Promise<ReportSnapshot | null> {
+  if (!token) return null;
+  const [row] = await getDb()
+    .select()
+    .from(reportSnapshots)
+    .where(
+      and(
+        eq(reportSnapshots.shareToken, token),
+        eq(reportSnapshots.clientVisible, true)
+      )
+    );
+  return row ?? null;
+}
+
 export async function listSnapshotOffers(snapshotId: string): Promise<SnapshotOffer[]> {
   return getDb()
     .select()

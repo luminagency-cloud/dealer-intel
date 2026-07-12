@@ -551,6 +551,11 @@ export const reportSnapshots = pgTable("report_snapshots", {
    *  Operators toggle this after reviewing; defaults to false so unpublished
    *  snapshots stay invisible to clients until explicitly released. */
   clientVisible: boolean("client_visible").notNull().default(false),
+  /** Revocable, URL-safe public share token. Null until the snapshot is
+   *  published (minted on first release); regenerating it invalidates any
+   *  previously shared link. The viewer's public /r/ route looks a snapshot up
+   *  by this token, never by raw UUID. */
+  shareToken: text("share_token").unique(),
   approvedAt: timestamp("approved_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -15,6 +15,10 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   R2_BUCKET: z.string().min(1).optional(),
   R2_PUBLIC_URL: z.string().url().optional(),
+  /** Public origin of the viewer app (e.g. https://reports.example.com), used
+   *  to build shareable /r/<token> links. Falls back to the request origin when
+   *  unset. */
+  VIEWER_PUBLIC_URL: z.string().url().optional(),
   ADGRADER_BASE_URL: z.string().min(1).optional(),
   ADGRADER_CLIENT_ID: z.string().min(1).optional(),
   ADGRADER_CLIENT_SECRET: z.string().min(1).optional(),

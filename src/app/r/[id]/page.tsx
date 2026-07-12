@@ -17,7 +17,8 @@ export default async function PublicReportPage({
 }) {
   const { id } = await params;
   const snapshot = await getReportSnapshot(id);
-  if (!snapshot) notFound();
+  // Public surface: only released snapshots are viewable, never drafts.
+  if (!snapshot || !snapshot.clientVisible) notFound();
 
   const [offers, primarySiteIds] = await Promise.all([
     listSnapshotOffers(snapshot.id),

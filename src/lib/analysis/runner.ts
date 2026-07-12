@@ -23,7 +23,7 @@ import {
 } from "./extract";
 import { getComplianceGrader } from "./compliance";
 import { runMistralOcr, type OcrArtifact } from "./ocr-mistral";
-import { parseMileage } from "@/lib/report";
+import { parseMileage, deriveAnnualMileage } from "@/lib/report";
 import {
   aiConfidenceThreshold,
   getOfferEnricher,
@@ -595,7 +595,9 @@ async function processAnalysis(
           effective.offerType === "lease"
             ? effective.mileageAllowance ??
               parseMileage(disclaimerText) ??
-              parseMileage(effective.rawText)
+              parseMileage(effective.rawText) ??
+              deriveAnnualMileage(disclaimerText, effective.termMonths) ??
+              deriveAnnualMileage(effective.rawText, effective.termMonths)
             : null;
 
         await db.insert(offers).values({
@@ -741,7 +743,9 @@ async function processAnalysis(
           effective.offerType === "lease"
             ? effective.mileageAllowance ??
               parseMileage(disclaimerText) ??
-              parseMileage(text)
+              parseMileage(text) ??
+              deriveAnnualMileage(disclaimerText, effective.termMonths) ??
+              deriveAnnualMileage(text, effective.termMonths)
             : null;
 
         await db.insert(offers).values({
@@ -1180,7 +1184,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
           const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
           const vehicleModel = matched?.model ?? effective.vehicleModel;
-          const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(effective.rawText) : null;
+          const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(effective.rawText) ?? deriveAnnualMileage(disclaimerText, effective.termMonths) ?? deriveAnnualMileage(effective.rawText, effective.termMonths) : null;
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
           domOffersByEvidence.set(row.id, (domOffersByEvidence.get(row.id) ?? 0) + 1);
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
@@ -1218,7 +1222,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             if (enrichment && enrichment.confidence >= effective.confidence) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
-          const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(text) : null;
+          const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(text) ?? deriveAnnualMileage(disclaimerText, effective.termMonths) ?? deriveAnnualMileage(text, effective.termMonths) : null;
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
           disclaimerOffersByMission.set(`${row.siteId}:${row.missionType}`, (disclaimerOffersByMission.get(`${row.siteId}:${row.missionType}`) ?? 0) + 1);
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];

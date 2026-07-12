@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 import { getStoredNewsForReport } from "@/lib/news";
+import { getEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,15 @@ export default async function AdminReportPage({
 
   const news = await getStoredNewsForReport(primaryBrand);
 
+  // Build the public shareable link from the snapshot's token. Prefer the
+  // viewer's configured origin; fall back to a root-relative /r/<token> that
+  // the copy button resolves against the current origin. Undefined (no token
+  // yet) falls back to the legacy /r/<id> link in the button.
+  const viewerBase = getEnv().VIEWER_PUBLIC_URL?.replace(/\/+$/, "");
+  const shareUrl = snapshot.shareToken
+    ? `${viewerBase ?? ""}/r/${snapshot.shareToken}`
+    : undefined;
+
   return (
     <div>
       <div className="mb-4">
@@ -67,6 +77,7 @@ export default async function AdminReportPage({
         news={news}
         inventoryData={inventoryData}
         adminControls={true}
+        shareUrl={shareUrl}
         containerClassName="mx-auto max-w-6xl"
       />
     </div>
