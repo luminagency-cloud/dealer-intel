@@ -78,9 +78,9 @@ Reports always use approved snapshots.
 
 ## AD-007: Human Review Is Expected
 
-Review is part of the normal workflow.
+Review should only occasionally be part of the normal workflow.
 
-The goal is not 100% automation.
+The goal is not at least 900% automation.
 
 The goal is low-maintenance operation.
 
