@@ -436,6 +436,48 @@ export const offers = pgTable("offers", {
     .defaultNow(),
 });
 
+export const offerDispositionEnum = pgEnum("offer_disposition", [
+  "passed",
+  "deleted",
+]);
+
+export type OfferDisposition =
+  (typeof offerDispositionEnum.enumValues)[number];
+
+/** Operator dispositions on analyzed offers — the ground-truth stream for
+ *  confidence calibration. When a reviewer Passes (keeps) or Deletes (junks) an
+ *  offer in run review, we log the call here ALONGSIDE the offer's confidence
+ *  and provenance at that moment. This is deliberately an append-only, FK-free
+ *  ledger of denormalized snapshots: a `deleted` label must outlive the offer
+ *  row it came from (a deleted offer is the single most valuable negative label)
+ *  and must survive re-analysis and even run deletion. Never updated; each
+ *  disposition is one immutable observation. Read back by
+ *  scripts/confidence-calibration.ts to answer "of offers scored 0.5–0.6, what
+ *  fraction did the operator delete?" — turning the publish floor from a guess
+ *  into a data-set threshold. */
+export const offerDispositions = pgTable("offer_dispositions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  /** Denormalized (no FK) so the label survives run/offer deletion. */
+  collectionRunId: uuid("collection_run_id").notNull(),
+  siteId: uuid("site_id").notNull(),
+  sourceEvidenceId: uuid("source_evidence_id"),
+  disposition: offerDispositionEnum("disposition").notNull(),
+  /** The offer's confidence at disposition time — the calibration signal. */
+  confidence: real("confidence"),
+  offerType: offerTypeEnum("offer_type").notNull(),
+  /** Whether the AI pass had touched this offer (slice calibration by path). */
+  aiAssisted: boolean("ai_assisted").notNull().default(false),
+  /** Provenance at disposition time, for per-source calibration. */
+  missionType: missionTypeEnum("mission_type"),
+  evidenceType: evidenceTypeEnum("evidence_type"),
+  /** Key offer fields captured for later inspection (make/model/payment/etc.). */
+  offerSnapshot: jsonb("offer_snapshot"),
+  operator: text("operator"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 /** Compliance grades from the external compliance service (Phase 9). The
  *  grading logic lives entirely in that service; we send evidence + disclaimer
  *  + ad type and store what comes back, one current grade per evidence record

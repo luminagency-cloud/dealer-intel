@@ -23,15 +23,18 @@ import { deleteRunDeep } from "@/lib/deep-delete";
 import {
   collectionRunMissions,
   collectionRunSites,
+  evidence,
   evidenceTypeEnum,
   getDb,
   missionTypeEnum,
   missions,
+  offerDispositions,
   offers,
   runGroupMembers,
   runGroups,
   type EvidenceType,
   type MissionType,
+  type OfferDisposition,
   type RunStatus,
 } from "@/lib/db";
 import { eq, inArray } from "drizzle-orm";
@@ -463,18 +466,82 @@ export async function deleteRunEvidence(runId: string, evidenceId: string) {
   revalidatePath(`/runs/${runId}`);
 }
 
+/** Records an operator's disposition of an offer as a durable calibration label
+ *  (see offerDispositions). Reads the offer joined to its evidence provenance
+ *  and snapshots confidence/type/source at this moment — BEFORE any delete, so
+ *  a deleted offer still leaves its "this was junk" label behind. Best-effort:
+ *  a logging failure must never block the operator's actual pass/delete. */
+async function recordDisposition(
+  offerId: string,
+  disposition: OfferDisposition,
+  operator: string | null
+) {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      collectionRunId: offers.collectionRunId,
+      siteId: offers.siteId,
+      sourceEvidenceId: offers.sourceEvidenceId,
+      confidence: offers.confidence,
+      offerType: offers.offerType,
+      normalizedJson: offers.normalizedJson,
+      vehicleMake: offers.vehicleMake,
+      vehicleModel: offers.vehicleModel,
+      monthlyPayment: offers.monthlyPayment,
+      apr: offers.apr,
+      cashIncentive: offers.cashIncentive,
+      rawText: offers.rawText,
+      missionType: evidence.missionType,
+      evidenceType: evidence.evidenceType,
+    })
+    .from(offers)
+    .leftJoin(evidence, eq(evidence.id, offers.sourceEvidenceId))
+    .where(eq(offers.id, offerId));
+  if (!row) return;
+
+  const nj = (row.normalizedJson ?? {}) as Record<string, unknown>;
+  try {
+    await db.insert(offerDispositions).values({
+      collectionRunId: row.collectionRunId,
+      siteId: row.siteId,
+      sourceEvidenceId: row.sourceEvidenceId,
+      disposition,
+      confidence: row.confidence,
+      offerType: row.offerType,
+      aiAssisted: nj.aiAssisted === true,
+      missionType: row.missionType ?? null,
+      evidenceType: row.evidenceType ?? null,
+      offerSnapshot: {
+        vehicleMake: row.vehicleMake,
+        vehicleModel: row.vehicleModel,
+        monthlyPayment: row.monthlyPayment,
+        apr: row.apr,
+        cashIncentive: row.cashIncentive,
+        rawText: row.rawText,
+      },
+      operator,
+    });
+  } catch (err) {
+    // Calibration logging is best-effort — never let it block the operator's
+    // pass/delete (e.g. the migration hasn't been applied yet). Just note it.
+    console.error("recordDisposition failed (non-fatal):", err);
+  }
+}
+
 /** "Pass" a flagged offer: mark it human-reviewed so its uncertainty badge
  *  clears and it stops counting toward "N to check". The offer stays in the run
  *  and in any published report. The mark lives in normalized_json (no schema
- *  change) and, like the offer itself, is reset if analysis is re-run. */
+ *  change) and, like the offer itself, is reset if analysis is re-run. A Pass is
+ *  also logged as a positive calibration label (offer confidence was trusted). */
 export async function passOffer(runId: string, offerId: string) {
-  await requireSession();
+  const session = await requireSession();
   const db = getDb();
   const [row] = await db
     .select({ normalizedJson: offers.normalizedJson })
     .from(offers)
     .where(eq(offers.id, offerId));
   const nj = (row?.normalizedJson ?? {}) as Record<string, unknown>;
+  await recordDisposition(offerId, "passed", session.user?.email ?? null);
   await db
     .update(offers)
     .set({ normalizedJson: { ...nj, reviewed: true } })
@@ -483,9 +550,12 @@ export async function passOffer(runId: string, offerId: string) {
 }
 
 /** "Delete" an offer: hard-remove it so it can't reach a report. Re-running
- *  analysis re-extracts from evidence, so a deleted offer reappears then. */
+ *  analysis re-extracts from evidence, so a deleted offer reappears then. The
+ *  disposition is logged FIRST (as a negative calibration label) so the "this
+ *  was junk" signal survives the row's deletion. */
 export async function deleteOffer(runId: string, offerId: string) {
-  await requireSession();
+  const session = await requireSession();
+  await recordDisposition(offerId, "deleted", session.user?.email ?? null);
   await getDb().delete(offers).where(eq(offers.id, offerId));
   revalidatePath(`/runs/${runId}`);
 }

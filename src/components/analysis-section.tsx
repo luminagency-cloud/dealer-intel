@@ -407,31 +407,31 @@ export function AnalysisSection({
                             ) : (
                               <span className="text-xs text-zinc-400">—</span>
                             )}
-                            {/* Disposition a flagged coupon: Pass (looks good, keep
-                                it and clear the flag) or Delete (pull it from the
-                                data so it can't reach a report). */}
+                            {/* Pass clears a flag, so it only applies to a
+                                flagged (coupon) offer. */}
                             {verify && (
-                              <>
-                                <form action={async () => { await passOfferAction(offer.id); }}>
-                                  <button
-                                    type="submit"
-                                    className="text-xs font-medium text-green-700 underline hover:text-green-600 dark:text-green-500"
-                                    title="Passed inspection — keep it in the report and stop flagging it"
-                                  >
-                                    Pass
-                                  </button>
-                                </form>
-                                <form action={async () => { await deleteOfferAction(offer.id); }}>
-                                  <button
-                                    type="submit"
-                                    className="text-xs font-medium text-red-700 underline hover:text-red-600 dark:text-red-500"
-                                    title="Delete this offer so it can't reach a report"
-                                  >
-                                    Delete
-                                  </button>
-                                </form>
-                              </>
+                              <form action={async () => { await passOfferAction(offer.id); }}>
+                                <button
+                                  type="submit"
+                                  className="text-xs font-medium text-green-700 underline hover:text-green-600 dark:text-green-500"
+                                  title="Passed inspection — keep it in the report and stop flagging it"
+                                >
+                                  Pass
+                                </button>
+                              </form>
                             )}
+                            {/* Delete is available on EVERY offer, not just
+                                flagged coupons, so low-confidence junk can be
+                                pulled by hand before it reaches a report. */}
+                            <form action={async () => { await deleteOfferAction(offer.id); }}>
+                              <button
+                                type="submit"
+                                className="text-xs font-medium text-red-700 underline hover:text-red-600 dark:text-red-500"
+                                title="Delete this offer so it can't reach a report"
+                              >
+                                Delete
+                              </button>
+                            </form>
                           </div>
                         </td>
                       </tr>

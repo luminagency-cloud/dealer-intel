@@ -13,6 +13,14 @@ import {
 } from "@/lib/db";
 import { getEvidencePublicUrl } from "@/lib/evidence";
 
+/** Minimum offer confidence to publish into a snapshot. An offer scoring below
+ *  this is treated as junk and never enters a report — the only confidence
+ *  cutoff in the whole reporting path. Env-tunable (REPORT_MIN_CONFIDENCE);
+ *  default 0.6. Null-confidence offers are kept (unknown ≠ low). */
+export function reportMinConfidence(): number {
+  return Number(process.env.REPORT_MIN_CONFIDENCE ?? 0.6);
+}
+
 /**
  * Phase 10 — Snapshot Publishing. The wall between analysis and reporting.
  *
@@ -66,9 +74,20 @@ export async function createSnapshotFromRun(
   if (rows.length === 0) return null;
 
   // When a groupFilter is provided, restrict to that group's sites only.
-  const filteredRows = groupFilter
+  const scopedRows = groupFilter
     ? rows.filter((r) => groupFilter.siteIds.includes(r.offer.siteId))
     : rows;
+  if (scopedRows.length === 0) return null;
+
+  // Confidence gate: drop low-confidence offers so obvious junk (partial
+  // extractions, weak single-signal guesses) never reaches a report. This is
+  // the reporting cutoff — below the floor an offer is excluded from the frozen
+  // copy entirely. Already-published snapshots are unaffected; re-publish a run
+  // to apply a new floor.
+  const minConfidence = reportMinConfidence();
+  const filteredRows = scopedRows.filter(
+    (r) => r.offer.confidence == null || r.offer.confidence >= minConfidence
+  );
   if (filteredRows.length === 0) return null;
 
   // Resolve group scope: groupFilter overrides the run's own runGroupId.

@@ -122,6 +122,73 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+/** Given the index just AFTER a `<div …>` open tag, returns the index just
+ *  after its matching `</div>`, tracking nested divs. Returns -1 when the close
+ *  can't be found (malformed/truncated HTML) so the caller leaves the node in
+ *  place rather than deleting to end-of-document. */
+function matchingDivEnd(html: string, from: number): number {
+  const tagRe = /<(\/?)div\b[^>]*>/gi;
+  tagRe.lastIndex = from;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(html)) !== null) {
+    if (m[0].slice(-2) === "/>") continue; // self-closing
+    if (m[1] === "/") {
+      if (--depth === 0) return m.index + m[0].length;
+    } else {
+      depth++;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Strips a Dealer Teamwork (MPOP) inventory dump out of raw HTML before ANY
+ * text extraction. Dealer Teamwork's MPOP widget embeds on dealer sites (DDC
+ * and others) and renders the dealer's ENTIRE new-car inventory as per-VIN
+ * "New Car Special" cards — each a `.ncs-container` carrying a `data-vin` and a
+ * `$X/mo` estimate. On a specials page that is 20–80+ cards; left in place, the
+ * offer windower explodes every one into a separate junk "offer" (Colonial
+ * Subaru produced ~80). These are auto-generated payment estimates, not
+ * advertised specials, so none should ever become an offer row.
+ *
+ * Keyed on the vendor product markup (`ncs-container` + `data-vin`), which is
+ * identical across every Dealer Teamwork client regardless of brand or CMS —
+ * verified on both a DDC Subaru site and a non-DDC Honda site. Deliberately NOT
+ * keyed on any dealer- or platform-specific token (account slug, `ddc-site`,
+ * brand), so it generalizes rather than special-casing one dealer.
+ *
+ * Only the dump cards are removed; genuine curated offers elsewhere on the page,
+ * and DT-free pages (a homepage with no `.ncs-container[data-vin]` cards), are
+ * untouched.
+ */
+export function stripDealerTeamworkDump(html: string): string {
+  // Fast path: the MPOP "New Car Special" card class isn't present at all.
+  if (!/\bncs-container\b/i.test(html)) return html;
+
+  // Opening <div> whose class list includes `ncs-container`. Quote style and
+  // class ordering vary, so match either quote and any surrounding tokens.
+  const openRe =
+    /<div\b[^>]*\bclass\s*=\s*("|')[^"'>]*\bncs-container\b[^"'>]*\1[^>]*>/gi;
+  let out = "";
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = openRe.exec(html)) !== null) {
+    // The per-VIN `data-vin` on the card element is the inventory-dump tell —
+    // it's what turns one card into one "$X/mo" offer. Requiring it (not the
+    // class alone) keeps the strip surgical.
+    if (!/\bdata-vin\s*=/i.test(m[0])) continue;
+    if (m.index < cursor) continue; // inside an already-removed card
+    const end = matchingDivEnd(html, openRe.lastIndex);
+    if (end < 0) continue; // unbalanced — leave this card rather than over-cut
+    out += html.slice(cursor, m.index);
+    cursor = end;
+    openRe.lastIndex = end;
+  }
+  out += html.slice(cursor);
+  return out;
+}
+
 function parseAmount(raw: string): number {
   return Number(raw.replace(/[,$\s]/g, ""));
 }
@@ -402,6 +469,34 @@ const SITEWIDE_TERMS_MARKERS = [
   "your privacy choices",
 ];
 
+// Vehicle-pricing / legal footer boilerplate that dealer CMS themes render in
+// the same Bootstrap grid (container-fluid > row > col-sm) as service-special
+// cards. That shared depth lets a footer block ride into the service-card layer
+// (see splitHtmlIntoCards), and its per-state doc-fee list carries cents-bearing
+// figures (e.g. "Illinois $377.63") that slip past the decimal-cents filter meant
+// to reject bare-integer doc fees. None of these phrases ever appears on a real
+// service coupon, so their presence disqualifies the block outright.
+const DISCLAIMER_BOILERPLATE_MARKERS = [
+  "reasonable effort has been made",
+  "absolute accuracy cannot be guaranteed",
+  "subject to prior sale",
+  "doc fee",
+  "documentary fee",
+  "factory rebate",
+  "suggested retail price",
+];
+
+/** True when the block is site-wide legal / vehicle-pricing footer boilerplate
+ *  rather than an advertised service coupon. Trips on either the disclaimer
+ *  markers above or the site-wide terms markers (copyright, privacy, ©, …). */
+function isDisclaimerBoilerplate(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    DISCLAIMER_BOILERPLATE_MARKERS.some((mk) => lower.includes(mk)) ||
+    SITEWIDE_TERMS_MARKERS.some((mk) => lower.includes(mk))
+  );
+}
+
 /**
  * The disclaimer for THIS ad — the fine print that sits with the offer, never
  * the page's site-wide legal terms. We look only in the text just after the
@@ -553,6 +648,31 @@ function contextAround(text: string, anchor: string | null): string | null {
 
 // --- Single-offer extraction from a text chunk ---------------------------
 
+/** Provenance prior on a vehicle offer's rule-based confidence: WHERE an offer
+ *  was found predicts how likely it is to be a real, correctly-parsed advertised
+ *  offer, independent of how many fields parsed. A dedicated finance/specials
+ *  page states full terms (baseline trust, 1.0); homepage tiles and promo
+ *  banners are teasers that routinely carry partial or gloss offers, so they are
+ *  discounted. Penalize-only by design — the factor is never > 1, so provenance
+ *  can lower a weak-source score but can never inflate a thin or wrong one into
+ *  a confident offer (see extraction hard rules: a fabricated/noisy offer is
+ *  worse than a missing one). Service confidence is computed separately and is
+ *  not routed through here. */
+function missionProvenanceFactor(mission: MissionType): number {
+  switch (mission) {
+    case "finance_offers":
+      return 1;
+    case "service_specials":
+      return 1;
+    case "homepage_offers":
+      return 0.85;
+    case "promotional_banners":
+      return 0.8;
+    default:
+      return 1;
+  }
+}
+
 /** Core extraction pass over an already-stripped text chunk (either a
  *  full-page text for service/fallback, or a per-offer window). Returns null
  *  when the chunk has no priced signal. */
@@ -605,6 +725,10 @@ function extractOfferFromText(
   // filler slots, not advertised services. Only applies to the service path.
   if (isService && isPlaceholderServiceOffer(text)) return null;
 
+  // Footer/legal boilerplate that shares the service-card DOM depth must never
+  // become a coupon — its doc-fee figures aren't real service prices.
+  if (isService && isDisclaimerBoilerplate(text)) return null;
+
   // A payment offer is a lease when the ad calls it one or caps annual mileage —
   // both are lease-only markers, so classify treats them like an explicit
   // due-at-signing figure.
@@ -656,6 +780,13 @@ function extractOfferFromText(
   // (0.5), a recognized service label (not the generic fallback) adds 0.3. A
   // well-extracted service offer therefore clears the AI threshold (0.5) and
   // skips the vehicle-oriented AI pass, which has no business rewriting it.
+  //
+  // Vehicle confidence: completeness (how many fields parsed) TIMES a provenance
+  // prior (how trustworthy the source page is). A homepage tile is a teaser —
+  // the same field count means less there than on a dedicated finance/specials
+  // page where the real advertised terms live. The prior only ever discounts a
+  // weak source, never inflates a strong one, so it cannot launder a thin or
+  // wrong extraction into a confident offer (hard rule: trustworthy > complete).
   const confidence = isService
     ? Math.min(
         1,
@@ -664,9 +795,10 @@ function extractOfferFromText(
       )
     : Math.min(
         1,
-        0.2 * signalCount +
+        (0.2 * signalCount +
           (vehicle.make ? 0.1 : 0) +
-          (disclaimer ? 0.1 : 0)
+          (disclaimer ? 0.1 : 0)) *
+          missionProvenanceFactor(hints.missionType)
       );
 
   return {
@@ -840,11 +972,14 @@ function offerAnchorPositions(text: string): number[] {
 
 /** Dedup key: two offers with the same fields are the same offer regardless
  *  of which text window they came from (e.g. a sticky header repeats the
- *  current-model payment). Vehicle model is intentionally excluded so a
- *  null-model offer from one window doesn't shadow a model-identified offer
- *  from another window covering the same anchor. For service offers the label
- *  (rawText) is included so two different services with the same discount
- *  (e.g. both "10% off") are not collapsed into one row. */
+ *  current-model payment). Vehicle model IS part of the key: a Rogue and a
+ *  Murano that happen to share payment/APR/term must stay separate rows, so
+ *  collapsing on model would be wrong. (Consequence: the same real-world offer
+ *  extracted twice with a model resolved in one window and null in the other
+ *  survives as two rows — that near-duplicate is pruned later by the publish
+ *  confidence floor, not here.) For service offers the label (rawText) is
+ *  included so two different services with the same discount (e.g. both
+ *  "10% off") are not collapsed into one row. */
 function offerSig(o: ExtractedOffer): string {
   return [
     o.offerType,
@@ -983,6 +1118,11 @@ export function extractOffers(
   html: string,
   hints: ExtractHints
 ): ExtractedOffer[] {
+  // Drop any Dealer Teamwork (MPOP) inventory dump before ANY text extraction —
+  // its per-VIN cards would otherwise explode into dozens of junk offers. No-op
+  // on non-DT input (raw text, OCR reads) since the card markup won't match.
+  const cleanHtml = stripDealerTeamworkDump(html);
+
   // Service specials — DOM/text extraction only. This is the trusted path:
   //   1. DOM offer cards            — Dealer Inspire grids, DOM-text specials
   //   2. discount-anchor windowing  — last-resort fallback for loose text
@@ -1002,7 +1142,7 @@ export function extractOffers(
     };
 
     // 1. DOM offer cards — visible, maintained ad copy.
-    for (const cardText of splitHtmlIntoCards(html)) {
+    for (const cardText of splitHtmlIntoCards(cleanHtml)) {
       push(extractOfferFromText(cardText, hints));
     }
 
@@ -1010,7 +1150,7 @@ export function extractOffers(
     //    anchor, requiring a recognized service nearby so a stray "$10 off" or
     //    legal figure can't hallucinate a coupon.
     if (results.length === 0) {
-      const svcText = htmlToText(html);
+      const svcText = htmlToText(cleanHtml);
       for (const anchor of serviceAnchors(svcText)) {
         const chunk = svcText.slice(
           Math.max(0, anchor.pos - WINDOW_BEFORE),
@@ -1027,7 +1167,7 @@ export function extractOffers(
     return results;
   }
 
-  const text = htmlToText(html);
+  const text = htmlToText(cleanHtml);
   if (!text) return [];
 
   const positions = offerAnchorPositions(text);
