@@ -1,9 +1,9 @@
-import { sql } from "drizzle-orm";
 import {
   getDb,
   siteMissions,
   type Evidence,
   type Mission,
+  type MissionType,
   type Site,
   type SiteMission,
 } from "@/lib/db";
@@ -103,16 +103,63 @@ function configuredUrls(
   return [...new Set(urls)].slice(0, MAX_PAGES_PER_MISSION);
 }
 
-/** Recovery sequence steps 3-4: platform default paths, then nav discovery. */
+/** Missions where a reachable-but-empty page is a real problem worth guarding
+ *  against: a dealer's generic "/promotions" guess path routinely redirects to
+ *  a nav hub (links to New Inventory / Service / About, no cards) rather than
+ *  the actual specials, and that hub still returns 200 — so plain reachability
+ *  isn't enough signal to trust it. Homepage/banner missions are teasers by
+ *  design (thin content is expected there), so they're exempt. */
+const SIGNAL_CHECKED_MISSIONS: MissionType[] = ["finance_offers", "service_specials"];
+
+/** Cheap, collector-local heuristic for "does this page carry a priced offer
+ *  at all" — deliberately NOT the analysis extractor (collection must not
+ *  depend on analysis logic; Collect and Analyze are separate phases, see
+ *  AGENTS.md). Used only to rank discovery candidates, never to produce an
+ *  offer record. */
+function pageHasOfferSignal(html: string): boolean {
+  const text = html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  return (
+    /\$\s?[\d,]{2,7}\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i.test(text) ||
+    /\d+(?:\.\d+)?\s*%\s*(?:APR\b|off\b|financing\b)/i.test(text) ||
+    /\$\s?[\d,]{1,7}\s*(?:cash back|customer cash|rebate|off\b)/i.test(text)
+  );
+}
+
+/** Recovery sequence steps 3-4: platform default paths, then nav discovery.
+ *
+ *  For finance/service missions, reachability alone isn't good enough to pick
+ *  a winner: the first default-path guess that responds 200 might be a bare
+ *  nav hub while a later candidate (often the nav-discovered one) is where the
+ *  real specials live. So every candidate — default paths AND nav-keyword
+ *  matches — is captured and the first one showing actual pricing/discount
+ *  signal wins. Falls back to the first merely-reachable candidate when none
+ *  show signal, so discovery never regresses to finding nothing. Other
+ *  mission types keep the original cheap probe-only behavior. */
 async function discoverUrl(
   session: CollectorSession,
   mission: Mission,
   site: Site
 ): Promise<string | null> {
   const base = site.url.replace(/\/+$/, "");
-  for (const path of PLATFORM_DEFAULT_PATHS[mission.missionType]) {
-    const candidate = `${base}/${path}`;
-    if (await session.probeUrl(candidate)) return candidate;
+  const candidates = PLATFORM_DEFAULT_PATHS[mission.missionType].map(
+    (path) => `${base}/${path}`
+  );
+
+  if (!SIGNAL_CHECKED_MISSIONS.includes(mission.missionType)) {
+    for (const candidate of candidates) {
+      if (await session.probeUrl(candidate)) return candidate;
+    }
+    const keywords = DISCOVERY_KEYWORDS[mission.missionType];
+    if (keywords.length > 0) {
+      const links = await session.collectLinks(site.url);
+      for (const keyword of keywords) {
+        const match = links.find((l) => l.text.includes(keyword));
+        if (match) return match.href;
+      }
+    }
+    return null;
   }
 
   const keywords = DISCOVERY_KEYWORDS[mission.missionType];
@@ -120,14 +167,33 @@ async function discoverUrl(
     const links = await session.collectLinks(site.url);
     for (const keyword of keywords) {
       const match = links.find((l) => l.text.includes(keyword));
-      if (match) return match.href;
+      if (match && !candidates.includes(match.href)) candidates.push(match.href);
     }
   }
-  return null;
+
+  let fallback: string | null = null;
+  for (const candidate of candidates) {
+    let capture: PageCapture;
+    try {
+      capture = await session.capturePage(candidate, {});
+    } catch {
+      continue;
+    }
+    fallback ??= candidate;
+    if (pageHasOfferSignal(capture.html)) return candidate;
+  }
+  return fallback;
 }
 
 /** Site memory: remember what worked for this dealer+mission. Creates the
- *  site_missions row when collection succeeded purely via discovery. */
+ *  site_missions row when collection succeeded purely via discovery.
+ *
+ *  `discoveredUrl` non-null means discovery actually ran this visit (either
+ *  because nothing was memorized, or because the memorized URL turned out
+ *  stale/empty and got re-validated — see the rediscovery fallback in
+ *  runMissionInSession) — so it overwrites whatever was memorized rather than
+ *  only filling a null slot. When discovery didn't run, `discoveredUrl` is
+ *  null and the existing memory is left untouched. */
 async function recordSuccess(
   site: Site,
   mission: Mission,
@@ -146,11 +212,48 @@ async function recordSuccess(
       set: {
         lastSuccessAt: new Date(),
         updatedAt: new Date(),
-        ...(discoveredUrl
-          ? { lastKnownUrl: sql`coalesce(${siteMissions.lastKnownUrl}, ${discoveredUrl})` }
-          : {}),
+        ...(discoveredUrl ? { lastKnownUrl: discoveredUrl } : {}),
       },
     });
+}
+
+/** Uploads a page capture's screenshot, HTML, and any exploration shots. */
+async function uploadCaptureEvidence(
+  base: { collectionRunId: string; siteId: string; missionType: MissionType },
+  capture: PageCapture
+): Promise<Evidence[]> {
+  // Page-capture label: the page's own title plus the path it came from, so
+  // the full-page screenshot and HTML aren't just "Screenshot · Site".
+  const pageLabel = pageCaptureLabel(capture.pageTitle, capture.finalUrl);
+  const out: Evidence[] = [
+    await uploadEvidence({
+      ...base,
+      evidenceType: "screenshot",
+      fileName: "screenshot.png",
+      body: capture.screenshot,
+      label: pageLabel,
+    }),
+    await uploadEvidence({
+      ...base,
+      evidenceType: "html_snapshot",
+      fileName: "snapshot.html",
+      body: Buffer.from(capture.html, "utf-8"),
+      label: pageLabel,
+    }),
+  ];
+  for (const shot of capture.extraShots) {
+    out.push(
+      await uploadEvidence({
+        ...base,
+        evidenceType: shot.kind,
+        fileName: `${shot.label}.png`,
+        body: shot.image,
+        label: shot.label,
+        textContent: shot.text,
+      })
+    );
+  }
+  return out;
 }
 
 /** Runs one mission for a site inside an already-open session, reusing the
@@ -174,8 +277,10 @@ export async function runMissionInSession(
   };
   const explore = MISSION_EXPLORATION[mission.missionType];
   const sig = exploreSignature(explore);
+  const checkSignal = SIGNAL_CHECKED_MISSIONS.includes(mission.missionType);
 
   let urls = configuredUrls(mission, siteMission, site);
+  const wasMemorized = urls.length > 0;
   let discoveredUrl: string | null = null;
   if (urls.length === 0) {
     discoveredUrl = await discoverUrl(session, mission, site);
@@ -199,6 +304,7 @@ export async function runMissionInSession(
   const evidence: Evidence[] = [];
   let successfulUrl: string | undefined;
   let pagesCaptured = 0;
+  let anySignal = false;
   let firstError: string | undefined;
 
   for (const url of urls) {
@@ -209,39 +315,10 @@ export async function runMissionInSession(
         capture = await session.capturePage(url, explore);
         captureCache.set(cacheKey, capture);
       }
-      // Page-capture label: the page's own title plus the path it came from,
-      // so the full-page screenshot and HTML aren't just "Screenshot · Site".
-      const pageLabel = pageCaptureLabel(capture.pageTitle, capture.finalUrl);
-      evidence.push(
-        await uploadEvidence({
-          ...base,
-          evidenceType: "screenshot",
-          fileName: "screenshot.png",
-          body: capture.screenshot,
-          label: pageLabel,
-        }),
-        await uploadEvidence({
-          ...base,
-          evidenceType: "html_snapshot",
-          fileName: "snapshot.html",
-          body: Buffer.from(capture.html, "utf-8"),
-          label: pageLabel,
-        })
-      );
-      for (const shot of capture.extraShots) {
-        evidence.push(
-          await uploadEvidence({
-            ...base,
-            evidenceType: shot.kind,
-            fileName: `${shot.label}.png`,
-            body: shot.image,
-            label: shot.label,
-            textContent: shot.text,
-          })
-        );
-      }
+      evidence.push(...(await uploadCaptureEvidence(base, capture)));
       pagesCaptured++;
       successfulUrl ??= url;
+      if (checkSignal && pageHasOfferSignal(capture.html)) anySignal = true;
     } catch (err) {
       if (err instanceof CollectionError && err.failureScreenshot) {
         try {
@@ -259,6 +336,43 @@ export async function runMissionInSession(
         }
       }
       firstError ??= cleanErrorMessage(err);
+    }
+  }
+
+  // A memorized URL that now errors outright (dead link) or that loads fine
+  // but shows no pricing/discount signal at all (drifted to a nav hub) is no
+  // longer trustworthy — re-run discovery once as a fallback and, if it finds
+  // something better, promote it. Without this, a site can get stuck on a
+  // stale/empty URL indefinitely: nothing here ever re-validates a memorized
+  // URL once it's been recorded as "working".
+  if (
+    wasMemorized &&
+    (pagesCaptured === 0 || (checkSignal && !anySignal))
+  ) {
+    const freshUrl = await discoverUrl(session, mission, site);
+    if (freshUrl && !urls.includes(freshUrl)) {
+      try {
+        const cacheKey = `${freshUrl}|${sig}`;
+        let capture = captureCache.get(cacheKey);
+        if (!capture) {
+          capture = await session.capturePage(freshUrl, explore);
+          captureCache.set(cacheKey, capture);
+        }
+        const freshHasSignal = !checkSignal || pageHasOfferSignal(capture.html);
+        // Only keep this extra capture when it's actually an improvement —
+        // the old URL captured nothing at all, or this one carries signal the
+        // old one lacked. Otherwise discard it silently; the old result already
+        // stands.
+        if (pagesCaptured === 0 || freshHasSignal) {
+          evidence.push(...(await uploadCaptureEvidence(base, capture)));
+          pagesCaptured++;
+          successfulUrl ??= freshUrl;
+          discoveredUrl = freshUrl;
+          if (freshHasSignal) anySignal = true;
+        }
+      } catch (err) {
+        firstError ??= cleanErrorMessage(err);
+      }
     }
   }
 

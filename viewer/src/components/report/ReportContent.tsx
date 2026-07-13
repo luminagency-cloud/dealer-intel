@@ -984,6 +984,8 @@ export function ReportContent({
                   <div className={REPORT_HEADLINE_CLASS}>
                     {offer.cashIncentive != null
                       ? `Up to ${fmtMoney(offer.cashIncentive)} off`
+                      : offer.salePrice != null
+                        ? `Sale price ${fmtMoney(offer.salePrice)}`
                       : offer.rawText?.slice(0, 40) ?? "—"}
                   </div>
                 )}

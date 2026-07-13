@@ -218,7 +218,11 @@ export default async function RunDetailPage({
           <h2 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
             Offer breakdown
           </h2>
-          <RunOfferBreakdown offers={runOffers} siteMeta={siteMeta} />
+          <RunOfferBreakdown
+            offers={runOffers}
+            siteMeta={siteMeta}
+            publishableConfidenceFloor={reportMinConfidence()}
+          />
         </div>
       )}
 

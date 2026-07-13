@@ -17,9 +17,11 @@ import {
   offers,
   complianceGrades,
 } from "../src/lib/db";
+import { reportMinConfidence } from "../src/lib/snapshot";
 
 // Junk that must never appear in a service offer value/label.
 const CHROME = /wild ?card|claim offer|schedule service|book now|learn more/i;
+const COUNT_TYPES = ["service", "lease", "finance", "cash", "promotional"];
 
 // Plausible bands for priced vehicle offers (mirrors extract.ts guards).
 const RANGE = {
@@ -33,6 +35,7 @@ const RANGE = {
 
 type NormalizedJson = {
   aiAssisted?: boolean;
+  reviewed?: boolean;
   matches?: { serviceOffer?: string; verify?: string; ocrValue?: string; altValue?: string };
 } | null;
 
@@ -82,6 +85,7 @@ async function main() {
       due: offers.dueAtSigning,
       cash: offers.cashIncentive,
       sale: offers.salePrice,
+      confidence: offers.confidence,
       disclaimer: offers.disclaimerText,
       nj: offers.normalizedJson,
     })
@@ -97,8 +101,33 @@ async function main() {
   console.log(`=== OFFERS BY TYPE (${rows.length} total) ===`);
   console.log(
     "  " +
-      ["service", "lease", "finance", "cash"]
+      COUNT_TYPES
         .map((t) => `${t}:${byType[t] ?? 0}`)
+        .join("  ")
+  );
+  const floor = reportMinConfidence();
+  const publishableRows = rows.filter((r) => {
+    const reviewed = njOf(r)?.reviewed === true;
+    return reviewed || r.confidence == null || r.confidence >= floor;
+  });
+  const publishableByType: Record<string, number> = {};
+  const excludedByType: Record<string, number> = {};
+  for (const r of publishableRows) {
+    publishableByType[r.type] = (publishableByType[r.type] ?? 0) + 1;
+  }
+  for (const r of rows.filter((r) => !publishableRows.includes(r))) {
+    excludedByType[r.type] = (excludedByType[r.type] ?? 0) + 1;
+  }
+  console.log(
+    `  publishable (>=${Math.round(floor * 100)}% or passed): ` +
+      COUNT_TYPES
+        .map((t) => `${t}:${publishableByType[t] ?? 0}`)
+        .join("  ")
+  );
+  console.log(
+    "  excluded below floor: " +
+      COUNT_TYPES
+        .map((t) => `${t}:${excludedByType[t] ?? 0}`)
         .join("  ")
   );
   const aiCount = rows.filter((r) => njOf(r)?.aiAssisted).length;
@@ -116,7 +145,7 @@ async function main() {
   }
   const nameWidth = Math.max(0, ...[...byDealer.keys()].map((n) => n.length));
   for (const [name, { platform, counts }] of [...byDealer.entries()].sort()) {
-    const line = ["service", "lease", "finance", "cash"].map((t) => `${t}:${String(counts[t] ?? 0).padEnd(3)}`).join(" ");
+    const line = COUNT_TYPES.map((t) => `${t}:${String(counts[t] ?? 0).padEnd(3)}`).join(" ");
     console.log(`  ${name.padEnd(nameWidth)}  ${line} (${platform ?? "?"})`);
   }
 

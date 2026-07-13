@@ -84,11 +84,13 @@ results back to analysis tables.
 
 Rule-based extraction handles the normal path. Claude is a secondary,
 text-only pass for low-confidence corrections when `ANTHROPIC_API_KEY` is
-configured. Image-only pages (zero DOM-text offers) are OCR'd with Mistral
-(`MISTRAL_API_KEY`) and run through the same deterministic extractor as DOM
-text — Mistral reads the image, the app classifies it. OCR text is stored in
-`ocr_artifacts` (one row per screenshot) for audit/debug, never fed back into
-classification.
+configured. Dealer Inspire Scene7 image ads are parsed from their structured
+image URL parameters before OCR, because those URLs carry the rendered lease,
+finance, vehicle, and disclaimer terms. Other image-only pages (zero DOM-text
+offers) are OCR'd with Mistral (`MISTRAL_API_KEY`) and run through the same
+deterministic extractor as DOM text — Mistral reads the image, the app
+classifies it. OCR text is stored in `ocr_artifacts` (one row per screenshot)
+for audit/debug, never fed back into classification.
 
 AdScore compliance is implemented through `AdScoreComplianceGrader` and is used
 when all `ADGRADER_*` variables are configured. Otherwise the system falls back

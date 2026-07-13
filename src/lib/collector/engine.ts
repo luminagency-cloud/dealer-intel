@@ -122,10 +122,21 @@ async function capturePageInContext(
 ): Promise<PageCapture> {
   const page = await context.newPage();
   try {
-    await page.goto(url, {
+    const response = await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: NAVIGATION_TIMEOUT_MS,
     });
+    // A 404/5xx page still "loads" as far as Playwright is concerned — it's
+    // real HTML Playwright will happily screenshot. Left unchecked, that page
+    // gets uploaded as if it were legitimate evidence and, worse, memorized as
+    // the site's URL for this mission forever (see mission-runner.ts
+    // recordSuccess). Treat a non-OK response as a capture failure so it falls
+    // through to the caller's error handling / rediscovery instead.
+    if (!response || !response.ok()) {
+      throw new Error(
+        `HTTP ${response ? response.status() : "no response"} loading ${url}`
+      );
+    }
     // Dealer sites rarely reach networkidle (chat/analytics keep sockets
     // open) — wait for it briefly, then proceed regardless.
     await page
