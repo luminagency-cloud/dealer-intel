@@ -83,11 +83,17 @@ export async function createSnapshotFromRun(
   // extractions, weak single-signal guesses) never reaches a report. This is
   // the reporting cutoff — below the floor an offer is excluded from the frozen
   // copy entirely. Already-published snapshots are unaffected; re-publish a run
-  // to apply a new floor.
+  // to apply a new floor. An offer an operator explicitly PASSED (reviewed) is
+  // an override: they vouched for it, so it publishes regardless of score.
   const minConfidence = reportMinConfidence();
-  const filteredRows = scopedRows.filter(
-    (r) => r.offer.confidence == null || r.offer.confidence >= minConfidence
-  );
+  const filteredRows = scopedRows.filter((r) => {
+    const reviewed =
+      (r.offer.normalizedJson as { reviewed?: boolean } | null)?.reviewed ===
+      true;
+    return (
+      reviewed || r.offer.confidence == null || r.offer.confidence >= minConfidence
+    );
+  });
   if (filteredRows.length === 0) return null;
 
   // Resolve group scope: groupFilter overrides the run's own runGroupId.

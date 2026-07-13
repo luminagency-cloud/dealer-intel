@@ -59,6 +59,9 @@ export function RunLiveData({
   resumeAnalysisAction,
   passOfferAction,
   deleteOfferAction,
+  verifyBorderlineAction,
+  lowConfidenceThreshold,
+  notice,
   publishSnapshotAction,
   defaultSnapshotLabel,
   collectionStartedAt,
@@ -100,6 +103,9 @@ export function RunLiveData({
   resumeAnalysisAction?: () => Promise<void>;
   passOfferAction: (offerId: string) => Promise<void>;
   deleteOfferAction: (offerId: string) => Promise<void>;
+  verifyBorderlineAction?: () => Promise<void>;
+  lowConfidenceThreshold: number;
+  notice?: string;
   publishSnapshotAction: (formData: FormData) => Promise<void>;
   defaultSnapshotLabel?: string;
   collectionStartedAt?: Date | null;
@@ -268,6 +274,11 @@ export function RunLiveData({
       </div>
 
       <div id="analysis" className="mb-8">
+        {notice && (
+          <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+            {notice}
+          </div>
+        )}
         <AnalysisSection
           offers={live.offers}
           grades={live.grades}
@@ -282,6 +293,8 @@ export function RunLiveData({
           resumeAnalysisAction={resumeAnalysisAction}
           passOfferAction={passOfferAction}
           deleteOfferAction={deleteOfferAction}
+          verifyBorderlineAction={verifyBorderlineAction}
+          lowConfidenceThreshold={lowConfidenceThreshold}
           canAnalyze={canAnalyze}
         />
       </div>

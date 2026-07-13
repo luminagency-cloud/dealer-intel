@@ -19,6 +19,7 @@ import {
 import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
 import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
+import { reportMinConfidence } from "@/lib/snapshot";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { RunLiveData } from "@/components/run-live-data";
 import { RunOfferBreakdown } from "@/components/run-offer-breakdown";
@@ -40,6 +41,7 @@ import {
   resumeAnalysis,
   runAnalysisForSiteMission,
   updateRunStatus,
+  verifyBorderlineOffers,
 } from "../actions";
 import { fmtDateTime, fmtSnapshotLabel } from "@/lib/fmt-date";
 
@@ -50,10 +52,10 @@ export default async function RunDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; notice?: string }>;
 }) {
   const { id } = await params;
-  const { error } = await searchParams;
+  const { error, notice } = await searchParams;
 
   const run = await getCollectionRun(id);
   if (!run) notFound();
@@ -194,6 +196,9 @@ export default async function RunDetailPage({
         resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
         passOfferAction={passOffer.bind(null, run.id)}
         deleteOfferAction={deleteOffer.bind(null, run.id)}
+        verifyBorderlineAction={verifyBorderlineOffers.bind(null, run.id)}
+        lowConfidenceThreshold={reportMinConfidence()}
+        notice={notice}
         publishSnapshotAction={publishSnapshot.bind(null, run.id)}
         defaultSnapshotLabel={fmtSnapshotLabel(
           new Date(),

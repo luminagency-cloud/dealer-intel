@@ -787,6 +787,17 @@ function extractOfferFromText(
   // page where the real advertised terms live. The prior only ever discounts a
   // weak source, never inflates a strong one, so it cannot launder a thin or
   // wrong extraction into a confident offer (hard rule: trustworthy > complete).
+  // A priced vehicle offer (lease/finance/cash) whose model we couldn't pin down
+  // is inherently less trustworthy — the ad names a vehicle we failed to
+  // identify, so it must never read as fully confident no matter how many other
+  // fields parsed (hard rule: trustworthy > complete). Penalize-only, like the
+  // provenance prior. Finance offers with no model are dropped outright
+  // downstream; this keeps a make-only lease/cash offer from posing as certain.
+  const PRICED_VEHICLE_TYPES: OfferType[] = ["lease", "finance", "cash"];
+  const missingModelPenalty =
+    !isService && PRICED_VEHICLE_TYPES.includes(offerType) && !vehicle.model
+      ? 0.75
+      : 1;
   const confidence = isService
     ? Math.min(
         1,
@@ -798,7 +809,8 @@ function extractOfferFromText(
         (0.2 * signalCount +
           (vehicle.make ? 0.1 : 0) +
           (disclaimer ? 0.1 : 0)) *
-          missionProvenanceFactor(hints.missionType)
+          missionProvenanceFactor(hints.missionType) *
+          missingModelPenalty
       );
 
   return {

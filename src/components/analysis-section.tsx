@@ -9,11 +9,21 @@ function money(value: number | null): string {
   return value === null ? "—" : `$${value.toLocaleString()}`;
 }
 
-function confidenceStyle(confidence: number | null): string {
-  if (confidence === null) return "text-zinc-700";
-  if (confidence >= 0.6) return "text-green-700";
-  if (confidence >= 0.4) return "text-amber-700";
-  return "text-red-700";
+/** Confidence value styling. Anything BELOW the publish floor (it won't reach a
+ *  report) gets a loud red PILL so junk is impossible to miss — black text on
+ *  red in light mode, white text on red in dark. At/above the floor stays quiet
+ *  green text. A low offer the operator has PASSED (reviewed) is no longer an
+ *  alarm — it renders calm amber, since it will now publish on their say-so.
+ *  `threshold` is the live REPORT_MIN_CONFIDENCE from the server. */
+function confidenceStyle(
+  confidence: number | null,
+  threshold: number,
+  reviewed: boolean
+): string {
+  if (confidence === null) return "font-medium text-zinc-700 dark:text-zinc-200";
+  if (confidence >= threshold) return "font-medium text-green-700 dark:text-green-500";
+  if (reviewed) return "font-medium text-amber-600 dark:text-amber-500";
+  return "inline-block rounded-full bg-red-500 px-2 py-0.5 font-bold text-black dark:bg-red-700 dark:text-white";
 }
 
 /** How a service coupon read from an image was verified against its alt text.
@@ -76,6 +86,8 @@ export function AnalysisSection({
   resumeAnalysisAction,
   passOfferAction,
   deleteOfferAction,
+  verifyBorderlineAction,
+  lowConfidenceThreshold,
   canAnalyze,
 }: {
   offers: Offer[];
@@ -93,6 +105,9 @@ export function AnalysisSection({
   resumeAnalysisAction?: () => Promise<void>;
   passOfferAction: (offerId: string) => Promise<void>;
   deleteOfferAction: (offerId: string) => Promise<void>;
+  verifyBorderlineAction?: () => Promise<void>;
+  /** Publish floor (REPORT_MIN_CONFIDENCE) — offers below it render red. */
+  lowConfidenceThreshold: number;
   canAnalyze: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -220,6 +235,17 @@ export function AnalysisSection({
                 </button>
               </form>
             )}
+            {verifyBorderlineAction && !analyzing && offers.length > 0 && (
+              <form action={verifyBorderlineAction}>
+                <button
+                  type="submit"
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                  title="Ask AI to confirm-or-drop borderline offers (confidence near the publish cutoff)"
+                >
+                  Verify borderline
+                </button>
+              </form>
+            )}
             <form action={runAnalysisAction}>
               <button
                 type="submit"
@@ -250,20 +276,20 @@ export function AnalysisSection({
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
+              <table className="w-full table-fixed text-left text-sm">
                 <colgroup>
-                  {siteFilter === "all" && <col style={{ width: "14%" }} />}
-                  <col style={{ width: "80px" }} />
-                  <col />
-                  <col style={{ width: "100px" }} />
-                  <col style={{ width: "70px" }} />
-                  <col style={{ width: "72px" }} />
-                  <col style={{ width: "80px" }} />
-                  <col style={{ width: "90px" }} />
-                  <col style={{ width: "80px" }} />
-                  <col style={{ width: "90px" }} />
-                  <col style={{ width: "110px" }} />
-                  <col style={{ width: "70px" }} />
+                  {siteFilter === "all" && <col style={{ width: "138px" }} />}
+                  <col style={{ width: "116px" }} />
+                  <col style={{ width: "182px" }} />
+                  <col style={{ width: "104px" }} />
+                  <col style={{ width: "64px" }} />
+                  <col style={{ width: "64px" }} />
+                  <col style={{ width: "84px" }} />
+                  <col style={{ width: "74px" }} />
+                  <col style={{ width: "78px" }} />
+                  <col style={{ width: "122px" }} />
+                  <col style={{ width: "56px" }} />
+                  <col style={{ width: "154px" }} />
                 </colgroup>
                 <thead>
                   <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-700 dark:border-zinc-800 dark:text-zinc-200">
@@ -278,8 +304,8 @@ export function AnalysisSection({
                     <th className="px-4 py-2 font-medium">Due</th>
                     <th className="px-4 py-2 font-medium">Mi/Yr</th>
                     <th className="px-4 py-2 font-medium">Cash</th>
-                    <th className="px-4 py-2 font-medium">Conf.</th>
-                    <th className="px-4 py-2 font-medium">Compliance</th>
+                    <th className="px-2 py-2 font-medium">Conf.</th>
+                    <th className="px-4 py-2 font-medium" title="Compliance grade">Grade</th>
                     <th className="px-4 py-2 font-medium">Ad</th>
                   </tr>
                 </thead>
@@ -299,10 +325,22 @@ export function AnalysisSection({
                     const nJson = offer.normalizedJson as { aiAssisted?: boolean; source?: string } | null;
                     const isImagePromo = isPromotional && nJson?.source === "image_extraction";
                     const verify = couponVerify(offer);
+                    // A low-confidence offer (won't publish) that the operator
+                    // hasn't yet vouched for. Reviewed ("passed") clears the red
+                    // flag and, per the publish rule, lets it into the report.
+                    const reviewed =
+                      (offer.normalizedJson as { reviewed?: boolean } | null)
+                        ?.reviewed === true;
+                    const isLowConf =
+                      offer.confidence !== null &&
+                      offer.confidence < lowConfidenceThreshold;
                     return (
                       <tr key={offer.id} className={isPromotional ? "bg-amber-50 dark:bg-amber-950/30" : ""}>
                         {siteFilter === "all" && (
-                          <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
+                          <td
+                            className="truncate px-4 py-3 text-zinc-900 dark:text-zinc-100"
+                            title={siteNames[offer.siteId] ?? undefined}
+                          >
                             {siteNames[offer.siteId] ?? "—"}
                           </td>
                         )}
@@ -364,24 +402,60 @@ export function AnalysisSection({
                         <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
                           {money(offer.cashIncentive)}
                         </td>
-                        <td
-                          className={`px-4 py-3 font-medium ${confidenceStyle(offer.confidence)}`}
-                        >
-                          {offer.confidence === null
-                            ? "—"
-                            : `${Math.round(offer.confidence * 100)}%`}
-                          {(
-                            offer.normalizedJson as {
-                              aiAssisted?: boolean;
-                            } | null
-                          )?.aiAssisted && (
+                        <td className="px-2 py-3">
+                          <div className="flex items-center gap-1 whitespace-nowrap">
                             <span
-                              className="ml-1 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
-                              title="Corrected by the AI analysis pass"
+                              className={confidenceStyle(
+                                offer.confidence,
+                                lowConfidenceThreshold,
+                                reviewed
+                              )}
                             >
-                              AI
+                              {offer.confidence === null
+                                ? "—"
+                                : `${Math.round(offer.confidence * 100)}%`}
                             </span>
-                          )}
+                            {reviewed && isLowConf && (
+                              <span
+                                className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+                                title="Passed by an operator — kept in the report despite low confidence"
+                              >
+                                kept
+                              </span>
+                            )}
+                            {(
+                              offer.normalizedJson as {
+                                aiAssisted?: boolean;
+                              } | null
+                            )?.aiAssisted && (
+                              <span
+                                className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
+                                title="Corrected by the AI analysis pass"
+                              >
+                                AI
+                              </span>
+                            )}
+                            {(() => {
+                              const v = (
+                                offer.normalizedJson as {
+                                  aiVerified?: { real: boolean; reason: string };
+                                } | null
+                              )?.aiVerified;
+                              if (!v) return null;
+                              return (
+                                <span
+                                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                                    v.real
+                                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                                      : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
+                                  }`}
+                                  title={`AI verify: ${v.real ? "confirmed" : "dropped"} — ${v.reason}`}
+                                >
+                                  {v.real ? "✓" : "✕"}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           {compliance ? (
@@ -407,14 +481,16 @@ export function AnalysisSection({
                             ) : (
                               <span className="text-xs text-zinc-400">—</span>
                             )}
-                            {/* Pass clears a flag, so it only applies to a
-                                flagged (coupon) offer. */}
-                            {verify && (
+                            {/* Pass = operator vouches for a flagged offer: a
+                                coupon flagged for a look, OR a low-confidence
+                                (red) offer they want to keep. Clears the flag,
+                                and (for low ones) lets it into the report. */}
+                            {(verify || (isLowConf && !reviewed)) && (
                               <form action={async () => { await passOfferAction(offer.id); }}>
                                 <button
                                   type="submit"
                                   className="text-xs font-medium text-green-700 underline hover:text-green-600 dark:text-green-500"
-                                  title="Passed inspection — keep it in the report and stop flagging it"
+                                  title="Keep this offer in the report and stop flagging it"
                                 >
                                   Pass
                                 </button>

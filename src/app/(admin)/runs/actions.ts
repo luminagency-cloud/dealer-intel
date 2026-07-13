@@ -7,7 +7,9 @@ import {
   getCollectionRun,
   updateCollectionRunStatus,
 } from "@/lib/db/repository";
-import { removeEvidence, uploadEvidence } from "@/lib/evidence";
+import { getEvidenceText, removeEvidence, uploadEvidence } from "@/lib/evidence";
+import { getOfferVerifier, verifyBand } from "@/lib/analysis/ai-enrich";
+import { htmlToText } from "@/lib/analysis/extract";
 import {
   forceReCollectSingle,
   markContentRemoved,
@@ -18,7 +20,7 @@ import {
   startRunExecution,
 } from "@/lib/run-executor";
 import { startAnalysis, startAnalysisForSiteMission } from "@/lib/analysis";
-import { createSnapshotFromRun } from "@/lib/snapshot";
+import { createSnapshotFromRun, reportMinConfidence } from "@/lib/snapshot";
 import { deleteRunDeep } from "@/lib/deep-delete";
 import {
   collectionRunMissions,
@@ -32,12 +34,14 @@ import {
   offers,
   runGroupMembers,
   runGroups,
+  sites,
+  type Evidence,
   type EvidenceType,
   type MissionType,
   type OfferDisposition,
   type RunStatus,
 } from "@/lib/db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { resolveRunGroups } from "@/lib/db/repository";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { requireSession } from "@/lib/session";
@@ -558,4 +562,154 @@ export async function deleteOffer(runId: string, offerId: string) {
   await recordDisposition(offerId, "deleted", session.user?.email ?? null);
   await getDb().delete(offers).where(eq(offers.id, offerId));
   revalidatePath(`/runs/${runId}`);
+}
+
+/** On-demand AI verification of a run's DECISION-BAND offers — those whose
+ *  rule-based confidence straddles the publish floor (verifyBand()). For each,
+ *  Claude judges whether it's a real, correctly-extracted advertised offer and
+ *  returns a calibrated confidence. CONFIRM/DROP only: the verdict replaces the
+ *  offer's confidence (a real offer keeps the model's calibrated number; a
+ *  not-real one is forced below the publish floor so it can't reach a report).
+ *  It never touches offers below the band (no rescue) or above it (already
+ *  trusted), and never edits offer fields — only the confidence + a stored
+ *  `aiVerified` note. Fields are corrected by the enrichment pass, not here. */
+export async function verifyBorderlineOffers(runId: string) {
+  await requireSession();
+  if (!process.env.ANTHROPIC_API_KEY) {
+    redirect(
+      `/runs/${runId}?error=${encodeURIComponent(
+        "AI verifier is not configured (no ANTHROPIC_API_KEY)."
+      )}`
+    );
+  }
+
+  const db = getDb();
+  const verifier = getOfferVerifier();
+  const [lo, hi] = verifyBand();
+  const floor = reportMinConfidence();
+  const maxOffers = Number(process.env.ANALYSIS_VERIFY_MAX ?? 40);
+
+  const bandOffers = await db
+    .select({ offer: offers, brand: sites.brand })
+    .from(offers)
+    .innerJoin(sites, eq(sites.id, offers.siteId))
+    .where(
+      and(
+        eq(offers.collectionRunId, runId),
+        gte(offers.confidence, lo),
+        lt(offers.confidence, hi)
+      )
+    );
+
+  const capped = bandOffers.length > maxOffers;
+  const work = bandOffers.slice(0, maxOffers);
+
+  // Resolve each offer's evidence page once (many offers share a page).
+  const evidenceIds = [
+    ...new Set(
+      work.map((w) => w.offer.sourceEvidenceId).filter((id): id is string => !!id)
+    ),
+  ];
+  const evidenceById = new Map<string, Evidence>();
+  if (evidenceIds.length > 0) {
+    const evRows = await db
+      .select()
+      .from(evidence)
+      .where(inArray(evidence.id, evidenceIds));
+    for (const ev of evRows) evidenceById.set(ev.id, ev);
+  }
+
+  const pageTextCache = new Map<string, string | null>();
+  async function pageTextFor(ev: Evidence): Promise<string | null> {
+    const cached = pageTextCache.get(ev.id);
+    if (cached !== undefined) return cached;
+    let text: string | null = null;
+    try {
+      const html = await getEvidenceText(ev);
+      text = html ? htmlToText(html) : null;
+    } catch {
+      text = null;
+    }
+    pageTextCache.set(ev.id, text);
+    return text;
+  }
+
+  let kept = 0;
+  let dropped = 0;
+  let skipped = 0;
+
+  // Small concurrency pool: responsive on demand without hammering the API.
+  let cursor = 0;
+  async function worker() {
+    while (cursor < work.length) {
+      const { offer, brand } = work[cursor++];
+      const ev = offer.sourceEvidenceId
+        ? evidenceById.get(offer.sourceEvidenceId)
+        : undefined;
+      const pageText = ev ? await pageTextFor(ev) : null;
+      if (!pageText) {
+        skipped++;
+        continue;
+      }
+      const verdict = await verifier.verify({
+        pageText,
+        brand: brand ?? null,
+        offer: {
+          offerType: offer.offerType,
+          vehicle:
+            [offer.vehicleMake, offer.vehicleModel, offer.vehicleTrim]
+              .filter(Boolean)
+              .join(" ") || null,
+          monthlyPayment: offer.monthlyPayment,
+          apr: offer.apr,
+          cashIncentive: offer.cashIncentive,
+          salePrice: offer.salePrice,
+          termMonths: offer.termMonths,
+          dueAtSigning: offer.dueAtSigning,
+          disclaimerText: offer.disclaimerText,
+          rawText: offer.rawText,
+        },
+      });
+      if (!verdict) {
+        skipped++;
+        continue;
+      }
+      const calibrated = Math.max(0, Math.min(1, verdict.calibratedConfidence));
+      // Confirm/drop: a not-real verdict is forced below the floor so the drop
+      // is guaranteed regardless of the model's own number.
+      const newConfidence = verdict.real
+        ? calibrated
+        : Math.min(calibrated, Math.max(0, floor - 0.05));
+      const nj = (offer.normalizedJson ?? {}) as Record<string, unknown>;
+      await db
+        .update(offers)
+        .set({
+          confidence: newConfidence,
+          normalizedJson: {
+            ...nj,
+            aiVerified: {
+              real: verdict.real,
+              reason: verdict.reason,
+              confidence: calibrated,
+            },
+          },
+        })
+        .where(eq(offers.id, offer.id));
+      if (newConfidence >= floor) kept++;
+      else dropped++;
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(4, work.length) }, () => worker())
+  );
+
+  revalidatePath(`/runs/${runId}`);
+  const summary =
+    work.length === 0
+      ? `No offers in the ${lo}–${hi} confidence band to verify.`
+      : `Verified ${kept + dropped} borderline offer(s): ${kept} kept, ${dropped} dropped` +
+        `${skipped ? `, ${skipped} skipped (no page text)` : ""}` +
+        `${capped ? ` — capped at ${maxOffers}` : ""}.`;
+  redirect(`/runs/${runId}?notice=${encodeURIComponent(summary)}`);
 }

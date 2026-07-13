@@ -425,10 +425,13 @@ export function ReportContent({
   // Compliance roll-up (all offers, anchor only)
   // ---------------------------------------------------------------------------
   const complianceCounts = kpis.complianceCounts;
-  // Exclude "n/a" (stub grader output) so the compliance section only appears
-  // when real grades (pass / fail / letter grades) are present.
+  // Exclude "n/a" (not-applicable offer types) and "Err" (grader failures) so
+  // the compliance section only appears when real AdScore grades are present.
+  // A failed grade is never shown to clients as if it were a real result.
   const realComplianceCounts = Object.fromEntries(
-    Object.entries(complianceCounts).filter(([g]) => g !== "n/a")
+    Object.entries(complianceCounts).filter(
+      ([g]) => g !== "n/a" && g.toLowerCase() !== "err"
+    )
   );
   const hasCompliance = Object.keys(realComplianceCounts).length > 0;
 
@@ -1156,7 +1159,8 @@ export function ReportContent({
                   anchorSiteIds.has(o.siteId) &&
                   o.offerType !== "service" &&
                   o.complianceGrade &&
-                  o.complianceGrade !== "n/a"
+                  o.complianceGrade !== "n/a" &&
+                  o.complianceGrade.toLowerCase() !== "err"
               );
               if (anchorGraded.length === 0) return null;
               return (

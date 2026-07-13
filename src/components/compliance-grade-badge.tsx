@@ -14,6 +14,7 @@ function gradeStyle(grade: string): string {
     return "bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900 dark:text-green-200 dark:hover:bg-green-800";
   }
   if (g === "n/a") return "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700";
+  if (g === "err") return "bg-zinc-700 text-zinc-50 hover:bg-zinc-600 dark:bg-zinc-600 dark:text-zinc-50 dark:hover:bg-zinc-500";
   if (g === "f" || g === "fail") return "bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800";
   return "bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800";
 }
@@ -46,6 +47,7 @@ function summaryFromDetails(details: unknown): string {
   if (bonuses.length > 0) return `No violations returned. Bonuses: ${bonuses.slice(0, 3).map(findingText).join(" ")}`;
 
   if (details.notApplicable) return "This offer type is not sent to AdScore.";
+  if (details.error) return "The grader could not produce a result for this ad, so no grade was recorded.";
   if (details.adScore) return "AdScore returned no violations in the saved findings.";
   return "No reason text was included in the saved grade details.";
 }
@@ -64,6 +66,14 @@ function detailRows(details: unknown): Array<[string, unknown]> {
     ["Bonuses", findings.bonuses],
     ["Batch ID", details.batchId],
     ["Grade ID", details.gradeId],
+    // Error drill-down (only populated on "Err" grades from a failed grade call).
+    ["Error code", details.code],
+    ["Retryable", typeof details.retryable === "boolean" ? String(details.retryable) : details.retryable],
+    ["Phase", details.phase],
+    ["Provider", details.provider],
+    ["Upstream status", details.upstreamStatus],
+    ["Upstream message", details.upstreamMessage],
+    ["Request ID", details.requestId],
   ];
   return rows.filter(([, value]) => value !== undefined && value !== null && value !== "");
 }

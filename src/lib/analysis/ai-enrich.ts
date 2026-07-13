@@ -163,3 +163,117 @@ export function getOfferEnricher(): OfferEnricher {
 export function aiConfidenceThreshold(): number {
   return Number(process.env.ANALYSIS_AI_CONFIDENCE_THRESHOLD ?? 0.5);
 }
+
+// --- AI verifier (confirm/drop) ------------------------------------------
+//
+// A DIFFERENT job from the enricher. The enricher CORRECTS fields on offers it
+// thinks are salvageable. The verifier JUDGES whether a borderline offer is real
+// at all, and returns a calibrated confidence — it never rewrites fields. It's
+// aimed at the "decision band" straddling the publish floor (the rows the cutoff
+// actually turns on), which the enricher's <0.5-or-null-model gate skips. Used
+// on demand: the operator runs it over a run's band offers, and the verdict
+// replaces the shaky completeness proxy with a judgment on exactly those rows.
+
+/** The verifier's ruling on one offer. Confirm/drop only — no field edits. */
+export interface OfferVerdict {
+  /** True if this is a genuinely advertised offer, correctly extracted. */
+  real: boolean;
+  /** Calibrated P(this is a correct, real advertised offer), 0..1. */
+  calibratedConfidence: number;
+  /** One-line justification, surfaced to the operator. */
+  reason: string;
+}
+
+export interface VerifyInput {
+  /** Full visible text of the page the offer came from. */
+  pageText: string;
+  brand: string | null;
+  /** The stored offer being judged (fields as persisted). */
+  offer: {
+    offerType: OfferType;
+    vehicle: string | null;
+    monthlyPayment: number | null;
+    apr: number | null;
+    cashIncentive: number | null;
+    salePrice: number | null;
+    termMonths: number | null;
+    dueAtSigning: number | null;
+    disclaimerText: string | null;
+    rawText: string | null;
+  };
+}
+
+export interface OfferVerifier {
+  /** Returns a verdict, or null if the pass is disabled or errored (caller
+   *  leaves the offer untouched). */
+  verify(input: VerifyInput): Promise<OfferVerdict | null>;
+}
+
+export class NoopOfferVerifier implements OfferVerifier {
+  async verify(): Promise<OfferVerdict | null> { return null; }
+}
+
+const VerdictSchema = z.object({
+  real: z.boolean(),
+  calibratedConfidence: z.number(),
+  reason: z.string(),
+});
+
+const VERIFY_SYSTEM_PROMPT = `You AUDIT a single automotive dealer offer that a rule-based extractor pulled from a dealership web page. Your job is to JUDGE, not to rewrite: decide whether this is a REAL advertised offer, correctly extracted as it appears on the page.
+
+Return:
+- real: true if the offer is genuinely advertised on this page AND the extracted fields are consistent with what the page says; false otherwise.
+- calibratedConfidence: your probability (0..1) that this is a correct, real advertised offer. Be honestly calibrated — 0.9 means you'd expect 9 of 10 like this to be correct. Reserve >0.85 for clear-cut cases and <0.3 for clear rejects.
+- reason: one short line an operator can read.
+
+Mark real=false when the "offer" is actually:
+- Footer / legal / disclaimer boilerplate mistaken for an offer (per-state doc-fee lists, "reasonable effort has been made", terms of use).
+- A per-VIN inventory auto-estimate — a generic "$X/mo" tied to a specific stock number from an inventory widget, not a curated advertised special.
+- Numbers stitched from unrelated parts of the page (a payment from one ad, a model from site navigation).
+- Not an actual advertised offer at all (no real terms).
+
+A PARTIAL extraction is still real if what was extracted is correct — a missing cash amount or term does not make a genuine ad fake. Judge only what you were given against the page text; do not invent or change any field value.`;
+
+export class ClaudeOfferVerifier implements OfferVerifier {
+  private client = new Anthropic();
+  private model = process.env.ANALYSIS_AI_MODEL ?? "claude-opus-4-8";
+  private maxPageChars = Number(process.env.ANALYSIS_AI_MAX_PAGE_CHARS ?? 8000);
+
+  async verify(input: VerifyInput): Promise<OfferVerdict | null> {
+    const pageText = input.pageText.slice(0, this.maxPageChars);
+    const textContent =
+      `Dealer brand: ${input.brand ?? "unknown"}\n\n` +
+      `Extracted offer:\n${JSON.stringify(input.offer)}\n\n` +
+      `Page text:\n${pageText}`;
+
+    try {
+      const response = await this.client.messages.parse({
+        model: this.model,
+        max_tokens: 512,
+        system: VERIFY_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: textContent }],
+        output_config: { format: zodOutputFormat(VerdictSchema) },
+      });
+      return response.parsed_output ?? null;
+    } catch (err) {
+      console.error("AI offer verification failed:", err);
+      return null;
+    }
+  }
+}
+
+/** Claude verifier when a key is configured, else the no-op. */
+export function getOfferVerifier(): OfferVerifier {
+  return process.env.ANTHROPIC_API_KEY
+    ? new ClaudeOfferVerifier()
+    : new NoopOfferVerifier();
+}
+
+/** The decision band [lo, hi) the on-demand verifier operates on — offers whose
+ *  rule-based confidence straddles the publish floor. Offers below `lo` are left
+ *  as dropped (no rescue) and offers at/above `hi` are left as trusted. */
+export function verifyBand(): [number, number] {
+  const lo = Number(process.env.ANALYSIS_VERIFY_BAND_LO ?? 0.45);
+  const hi = Number(process.env.ANALYSIS_VERIFY_BAND_HI ?? 0.65);
+  return [lo, hi];
+}
