@@ -19,10 +19,10 @@ Design docs live in [./Docs](./Docs). Current status: **Phase 1 (Platform Founda
    npm install
    ```
 
-2. Create `.env.local` from the template and fill it in:
+2. Create `.env` from the template and fill it in:
 
    ```
-   copy .env.example .env.local
+   copy .env.example .env
    ```
 
    | Variable | Where it comes from |

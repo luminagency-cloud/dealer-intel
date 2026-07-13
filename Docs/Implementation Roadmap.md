@@ -1,6 +1,6 @@
 # Dealer Intel Working List
 
-_Last updated: July 1, 2026_
+_Last updated: July 13, 2026_
 
 This is the single human-readable place for current status and open work.
 If something is done, it should not live here as a future task.
@@ -41,7 +41,7 @@ Evidence:
 - `src/lib/analysis/compliance.ts` contains `AdScoreComplianceGrader`.
 - `getComplianceGrader(runId)` selects AdScore when all `ADGRADER_*` variables
   are present.
-- The local `.env.local` contains:
+- The local `.env` contains:
   - `ADGRADER_BASE_URL`
   - `ADGRADER_CLIENT_ID`
   - `ADGRADER_CLIENT_SECRET`
@@ -72,14 +72,14 @@ Evidence:
   through the same deterministic `extractOffers()` used for DOM text (Mistral
   reads the ad; the app classifies it) and persists the raw OCR read to the
   `ocr_artifacts` table for audit/debug.
-- The local `.env.local` contains `ANTHROPIC_API_KEY`.
+- The local `.env` contains `ANTHROPIC_API_KEY`.
 - A read-only database check found 146 offers total, with 25 marked
   `normalized_json.aiAssisted=true` (pre-migration figure — from the Claude
   Vision era).
 
 What remains open:
 
-- `MISTRAL_API_KEY` is not yet in `.env.local` — the image-only pass is
+- `MISTRAL_API_KEY` is not yet in `.env` — the image-only pass is
   currently disabled until it's added.
 - The `ocr_artifacts` migration (`drizzle/0026_classy_the_spike.sql`) has been
   generated but not yet applied — run `npm run db:migrate` before the image
@@ -93,7 +93,7 @@ Status: **implemented and locally configured**
 
 Evidence:
 
-- The local `.env.local` contains `NEWS_API_URL`, `NEWS_API_KEY`,
+- The local `.env` contains `NEWS_API_URL`, `NEWS_API_KEY`,
   `INVENTORY_API_URL`, and `INVENTORY_API_KEY`.
 - News and inventory modules exist and are wired into the current ops flow.
 
@@ -105,18 +105,13 @@ What remains open:
 
 ## Actually Open
 
-### 1. Fix Environment Source Confusion
+### 1. Environment Source Convention
 
-The project instructions say secrets live in `.env`, but this workspace has
-`.env.local` and no `.env`. `drizzle.config.ts` currently loads `.env.local`
-first, then `.env`.
+Status: **resolved July 13, 2026**
 
-Done when one convention is chosen and the repo agrees everywhere:
-
-- project instructions,
-- `drizzle.config.ts`,
-- user-facing configuration messages,
-- deployment docs.
+The workspace uses `.env` for local configuration. Project instructions,
+user-facing configuration messages, and implementation notes should refer to
+`.env`, not `.env.local`.
 
 ### 2. Dealer Inspire / Dealer Alchemist Disclaimer Capture
 

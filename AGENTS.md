@@ -38,8 +38,7 @@ As of July 1, 2026:
 - AI-assisted analysis is implemented, configured, and producing AI-assisted
   offers.
 - News and inventory are implemented and locally configured.
-- The workspace currently has `.env.local` and no `.env`; the desired env-file
-  convention is still an open cleanup item.
+- The workspace uses `.env` for local configuration.
 
 Never print secret values.
 

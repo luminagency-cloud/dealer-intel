@@ -151,13 +151,12 @@ Database schema changes go through Drizzle:
 
 Do not hand-write migrations.
 
-Configuration currently needs cleanup:
+Configuration convention:
 
-- project rules say secrets belong in `.env`,
-- this workspace currently has `.env.local`,
-- `drizzle.config.ts` currently loads `.env.local` first and `.env` second.
-
-That mismatch is tracked in `Docs/Implementation Roadmap.md`.
+- this workspace uses `.env` for local configuration,
+- user-facing setup messages should refer to `.env`,
+- `drizzle.config.ts` may load legacy files for compatibility, but `.env` is
+  the active convention.
 
 ## Keep In Mind
 

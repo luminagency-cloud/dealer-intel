@@ -52,7 +52,7 @@ export default async function LoginPage({
               Set <code className="font-mono">AUTH_SECRET</code>,{" "}
               <code className="font-mono">ADMIN_EMAIL</code> and{" "}
               <code className="font-mono">ADMIN_PASSWORD</code> in{" "}
-              <code className="font-mono">.env.local</code>, then restart the
+              <code className="font-mono">.env</code>, then restart the
               server.
             </p>
           </div>

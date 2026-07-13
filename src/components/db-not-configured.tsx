@@ -4,7 +4,7 @@ export function DbNotConfigured() {
       <p className="font-medium">Database not configured</p>
       <p className="mt-1">
         Set <code className="font-mono">DATABASE_URL</code> in{" "}
-        <code className="font-mono">.env.local</code> (Neon Postgres connection
+        <code className="font-mono">.env</code> (Neon Postgres connection
         string), run <code className="font-mono">npm run db:migrate</code>, then
         restart the server.
       </p>

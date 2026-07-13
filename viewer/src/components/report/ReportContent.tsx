@@ -44,6 +44,11 @@ export interface ReportContentProps {
   inventoryData?: InventoryResult[];
   /** When true, show admin-only controls (Copy Link, Export CSV). */
   adminControls?: boolean;
+  /** Absolute public shareable link for the "Copy shareable link" control.
+   *  Omitted when a public viewer origin or share token is not available. */
+  shareUrl?: string;
+  /** Short disabled-state label explaining why no public link can be copied. */
+  shareUrlUnavailableLabel?: string;
   /** Tailwind classes for the outermost wrapper div. Defaults to
    *  "mx-auto max-w-6xl px-4 py-8" (suitable for the standalone public route).
    *  Override in admin context where the layout already provides padding. */
@@ -54,6 +59,21 @@ export interface ReportContentProps {
 // Helper sub-components
 // ---------------------------------------------------------------------------
 
+const REPORT_PANEL_CLASS =
+  "overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-950";
+const REPORT_CARD_CLASS =
+  "rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-950";
+const REPORT_EMPTY_CLASS =
+  "rounded-xl border border-zinc-200 bg-white p-6 text-base font-semibold text-black shadow-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50";
+const REPORT_HEADLINE_CLASS =
+  "text-base font-semibold leading-snug text-black dark:text-zinc-50";
+const REPORT_BODY_CLASS = "text-base text-black dark:text-zinc-50";
+const REPORT_META_CLASS = "text-sm font-semibold text-zinc-900 dark:text-zinc-100";
+const REPORT_LABEL_CLASS =
+  "text-sm font-bold uppercase tracking-wide text-zinc-900 dark:text-zinc-100";
+const REPORT_LINK_CLASS =
+  "text-sm font-semibold text-blue-700 hover:underline dark:text-blue-300";
+const REPORT_BORDER_CLASS = "border-zinc-200 dark:border-zinc-800";
 
 function SectionHeading({
   num,
@@ -68,13 +88,13 @@ function SectionHeading({
 }) {
   return (
     <div id={id} className="mb-3">
-      <h2 className="flex items-baseline gap-2 text-xl font-bold text-[#1b3a6b]">
+      <h2 className="flex items-baseline gap-2 text-xl font-bold text-[#1b3a6b] dark:text-blue-300">
         {num && (
-          <span className="text-[#1b3a6b] opacity-50">{num} ·</span>
+          <span className="text-[#1b3a6b] dark:text-blue-300">{num} ·</span>
         )}
         {title}
       </h2>
-      {sub && <p className="mt-0.5 text-sm text-zinc-500">{sub}</p>}
+      {sub && <p className="mt-0.5 text-base text-black dark:text-zinc-50">{sub}</p>}
     </div>
   );
 }
@@ -82,7 +102,7 @@ function SectionHeading({
 function Narrative({ text }: { text: string }) {
   if (!text) return null;
   return (
-    <div className="mt-3 rounded-md border-l-4 border-[#1b3a6b] bg-blue-50 px-4 py-3 text-sm text-zinc-700">
+    <div className="mt-3 rounded-md border-l-4 border-[#1b3a6b] bg-blue-50 px-4 py-3 text-base text-black dark:border-blue-400 dark:bg-blue-950/40 dark:text-zinc-50">
       {text}
     </div>
   );
@@ -90,7 +110,7 @@ function Narrative({ text }: { text: string }) {
 
 // "Not Advertised" cell style
 const NA_CLASS =
-  "text-zinc-400 italic text-xs text-center";
+  "text-sm font-semibold italic text-zinc-900 text-center dark:text-zinc-100";
 
 function rankClass(rank: number | null, total: number): string {
   return rankBgClass(rank, total);
@@ -120,13 +140,13 @@ function GridTable({
 }: GridTableProps) {
   if (rows.length === 0) {
     return (
-      <p className="py-4 text-sm text-zinc-500">No offers captured.</p>
+      <p className="py-4 text-base font-semibold text-black dark:text-zinc-50">No offers captured.</p>
     );
   }
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm" style={{ tableLayout: "fixed" }}>
+      <table className="w-full border-collapse text-base" style={{ tableLayout: "fixed" }}>
         <colgroup>
           <col style={{ width: "160px" }} />
           {dealers.map((d) => (
@@ -135,16 +155,16 @@ function GridTable({
         </colgroup>
         <thead>
           <tr>
-            <th className="border border-zinc-200 bg-zinc-100 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-600">
+            <th className="border border-zinc-200 bg-zinc-100 px-3 py-2 text-left text-sm font-bold uppercase tracking-wide text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50">
               Model
             </th>
             {dealers.map((d) => (
               <th
                 key={d.siteId ?? d.siteName}
-                className={`border border-zinc-200 px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide ${
+                className={`border border-zinc-200 px-2 py-2 text-center text-sm font-bold uppercase tracking-wide dark:border-zinc-800 ${
                   d.isPrimary
                     ? "bg-[#1b5e3b] text-white"
-                    : "bg-zinc-700 text-white"
+                    : "bg-zinc-800 text-white dark:bg-zinc-700"
                 }`}
               >
                 {d.siteName}
@@ -158,7 +178,7 @@ function GridTable({
         <tbody>
           {rows.map((row) => (
             <tr key={row.vehicleModel}>
-              <td className="border border-zinc-200 bg-zinc-50 px-3 py-2 font-medium text-zinc-800">
+              <td className="border border-zinc-200 bg-zinc-50 px-3 py-2 font-semibold text-black dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50">
                 {row.vehicleModel}
               </td>
               {row.cells.map((cell, i) => {
@@ -166,14 +186,14 @@ function GridTable({
                 return (
                   <td
                     key={dealers[i].siteId ?? dealers[i].siteName}
-                    className={`border border-zinc-200 px-3 py-2 text-center align-top ${disableRanking ? "" : bg}`}
+                    className={`border border-zinc-200 px-3 py-2 text-center align-top text-black dark:border-zinc-800 dark:text-zinc-50 ${disableRanking ? "" : bg}`}
                   >
                     {cell.offer ? (
                       <div className="space-y-0.5">
                         {renderCell(cell, cell.offer)}
                         {cell.trimMismatch && cell.displayTrim && (
                           <div>
-                            <span className="inline-block rounded bg-amber-100 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-800">
+                            <span className="inline-block rounded bg-amber-100 px-1.5 py-0.5 text-xs font-bold uppercase tracking-wide text-amber-800 dark:bg-amber-950 dark:text-amber-200">
                               TRIM: {cell.displayTrim}
                             </span>
                           </div>
@@ -200,7 +220,7 @@ function GridTable({
 function GridLegend({ hasRanking }: { hasRanking: boolean }) {
   if (!hasRanking) return null;
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-600">
+    <div className="mt-3 flex flex-wrap items-center gap-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
       <span className="font-medium">Key:</span>
       <span className="flex items-center gap-1">
         <span className="inline-block h-3 w-3 rounded bg-emerald-700" /> 1st
@@ -217,7 +237,7 @@ function GridLegend({ hasRanking }: { hasRanking: boolean }) {
       <span className="flex items-center gap-1">
         <span className="inline-block h-3 w-3 rounded bg-red-600" /> Last
       </span>
-      <span className="text-zinc-400 italic">Not Advertised</span>
+      <span className="italic">Not Advertised</span>
     </div>
   );
 }
@@ -248,10 +268,10 @@ const CATEGORY_COLORS: Record<NewsItem["category"], string> = {
 
 function NewsCard({ item }: { item: NewsItem }) {
   return (
-    <div className="flex gap-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+    <div className={`flex gap-4 p-4 ${REPORT_CARD_CLASS}`}>
       <div className="flex-shrink-0">
         <span
-          className={`inline-flex items-center justify-center rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${CATEGORY_COLORS[item.category]}`}
+          className={`inline-flex items-center justify-center rounded px-2 py-1 text-xs font-bold uppercase tracking-wider ${CATEGORY_COLORS[item.category]}`}
           style={{ minWidth: "4.5rem", textAlign: "center" }}
         >
           {CATEGORY_LABELS[item.category]}
@@ -266,7 +286,7 @@ function NewsCard({ item }: { item: NewsItem }) {
         >
           {item.headline}
         </a>
-        <p className="mt-1 text-sm text-zinc-600">{item.summary}</p>
+        <p className={`mt-1 ${REPORT_BODY_CLASS}`}>{item.summary}</p>
       </div>
     </div>
   );
@@ -275,7 +295,7 @@ function NewsCard({ item }: { item: NewsItem }) {
 function ReturnToSummary() {
   return (
     <div className="mt-4 text-right">
-      <a href="#summary" className="text-xs font-medium text-zinc-400 hover:text-[#1b3a6b] hover:underline">
+      <a href="#summary" className={REPORT_LINK_CLASS}>
         ↑ Return to summary
       </a>
     </div>
@@ -301,7 +321,7 @@ function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; 
           ))}
         </div>
       ) : (
-        <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center text-sm text-zinc-400">
+        <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center text-base font-semibold text-black dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50">
           Brand &amp; industry news will appear here once the news service is connected.
         </div>
       )}
@@ -310,16 +330,173 @@ function BrandNewsSection({ news, brand }: { news: NewsData | null | undefined; 
   );
 }
 
+const GENERIC_SUMMARY_NOTES = new Set([
+  "Compare advertised lease payments and terms below.",
+  "Compare advertised finance rates below.",
+  "Compare advertised cash discounts and rebates below.",
+]);
+
+const GRADE_VALUES: Record<string, number> = {
+  "a+": 12,
+  a: 11,
+  "a-": 10,
+  "b+": 9,
+  b: 8,
+  "b-": 7,
+  "c+": 6,
+  c: 5,
+  "c-": 4,
+  "d+": 3,
+  d: 2,
+  "d-": 1,
+  f: 0,
+  pass: 11,
+  fail: 0,
+};
+
+const VALUE_GRADES = [
+  "F",
+  "D-",
+  "D",
+  "D+",
+  "C-",
+  "C",
+  "C+",
+  "B-",
+  "B",
+  "B+",
+  "A-",
+  "A",
+  "A+",
+];
+
+function isMeaningfulSummaryNote(text: string): boolean {
+  return Boolean(text && !GENERIC_SUMMARY_NOTES.has(text));
+}
+
+function cleanComplianceGrades(offers: SnapshotOffer[]): SnapshotOffer[] {
+  return offers.filter((o) => {
+    const grade = o.complianceGrade?.toLowerCase();
+    return Boolean(
+      grade &&
+        o.offerType !== "service" &&
+        grade !== "n/a" &&
+        grade !== "err" &&
+        GRADE_VALUES[grade] !== undefined
+    );
+  });
+}
+
+function averageComplianceGrade(offers: SnapshotOffer[]): string | null {
+  const graded = cleanComplianceGrades(offers);
+  if (graded.length === 0) return null;
+  const avg =
+    graded.reduce((sum, offer) => {
+      const grade = offer.complianceGrade?.toLowerCase() ?? "";
+      return sum + GRADE_VALUES[grade];
+    }, 0) / graded.length;
+  return VALUE_GRADES[Math.max(0, Math.min(12, Math.round(avg)))] ?? null;
+}
+
+function ServiceDealerCard({
+  dealer,
+  offers,
+  emptyLabel,
+}: {
+  dealer: DealerCol;
+  offers: SnapshotOffer[];
+  emptyLabel: string;
+}) {
+  const usesOfferGrid = offers.length > 1;
+  const finalGridRowStart = offers.length % 2 === 0
+    ? offers.length - 2
+    : offers.length - 1;
+
+  return (
+    <div className="mb-4 break-inside-avoid overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-950">
+      <div
+        className={`px-4 py-2.5 text-base font-semibold ${
+          dealer.isPrimary
+            ? "bg-[#1b5e3b] text-white"
+            : "bg-zinc-800 text-white dark:bg-zinc-700"
+        }`}
+      >
+        {dealer.siteName}
+        {dealer.isPrimary && <span className="ml-1 text-yellow-300">★</span>}
+      </div>
+      {offers.length === 0 ? (
+        <p className="px-4 py-3 text-sm font-semibold italic text-black dark:text-zinc-50">
+          {emptyLabel}
+        </p>
+      ) : (
+        <ul className={usesOfferGrid ? "grid grid-flow-row sm:grid-cols-2" : ""}>
+          {offers.map((o, index) => {
+            const matchMap = (
+              o.normalizedJson as { matches?: Record<string, string> } | null
+            )?.matches ?? {};
+            const isLast = index === offers.length - 1;
+            const isInFinalGridRow = usesOfferGrid && index >= finalGridRowStart;
+            return (
+              <li
+                key={o.id}
+                className={`border-b border-zinc-200 px-4 py-3 dark:border-zinc-800 ${
+                  isLast ? "border-b-0" : ""
+                } ${isInFinalGridRow ? "sm:border-b-0" : ""}`}
+              >
+                <div className="text-base font-semibold leading-snug text-black dark:text-zinc-50">
+                  {o.rawText ?? "Service Special"}
+                </div>
+                {o.cashIncentive != null ? (
+                  <div className="mt-1 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                    {fmtMoney(o.cashIncentive)} off
+                  </div>
+                ) : matchMap.serviceOffer ? (
+                  <div className="mt-1 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                    {matchMap.serviceOffer}
+                  </div>
+                ) : null}
+                {(o.evidenceUrl ?? o.sourceEvidenceId) && (
+                  <a
+                    href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 block text-sm font-semibold text-blue-700 hover:underline dark:text-blue-300"
+                  >
+                    View ad
+                  </a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Copy-link button (client interaction)
 // ---------------------------------------------------------------------------
 
-function CopyLinkButton({ snapshotId }: { snapshotId: string }) {
+function CopyLinkButton({
+  shareUrl,
+  unavailableLabel = "Public link unavailable",
+}: {
+  shareUrl?: string;
+  unavailableLabel?: string;
+}) {
+  const canCopy = Boolean(shareUrl);
   return (
     <button
+      disabled={!canCopy}
+      title={
+        canCopy
+          ? "Copy public report link"
+          : unavailableLabel
+      }
       onClick={() => {
-        const url = `${window.location.origin}/r/${snapshotId}`;
-        void navigator.clipboard.writeText(url);
+        if (!shareUrl) return;
+        void navigator.clipboard.writeText(shareUrl);
         const btn = document.getElementById("copy-link-btn");
         if (btn) {
           btn.textContent = "Copied!";
@@ -329,9 +506,9 @@ function CopyLinkButton({ snapshotId }: { snapshotId: string }) {
         }
       }}
       id="copy-link-btn"
-      className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+      className="rounded-md border border-white bg-white px-3 py-1.5 text-sm font-semibold text-[#12315c] shadow-sm hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-blue-200 disabled:bg-blue-100 disabled:text-blue-500 disabled:shadow-none"
     >
-      Copy shareable link
+      {canCopy ? "Copy shareable link" : unavailableLabel}
     </button>
   );
 }
@@ -348,6 +525,8 @@ export function ReportContent({
   news,
   inventoryData = [],
   adminControls = false,
+  shareUrl,
+  shareUrlUnavailableLabel,
   containerClassName = "mx-auto max-w-6xl px-4 py-8",
 }: ReportContentProps) {
   // ---------------------------------------------------------------------------
@@ -387,6 +566,16 @@ export function ReportContent({
   );
   const cashOffers = offers.filter((o) => o.offerType === "cash");
   const serviceOffers = offers.filter((o) => o.offerType === "service");
+  const serviceOffersByDealer = new Map<string, SnapshotOffer[]>();
+  for (const offer of serviceOffers) {
+    const key = offer.siteId ?? offer.siteName;
+    const dealerOffers = serviceOffersByDealer.get(key);
+    if (dealerOffers) {
+      dealerOffers.push(offer);
+    } else {
+      serviceOffersByDealer.set(key, [offer]);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Build grids
@@ -550,6 +739,44 @@ export function ReportContent({
     .filter((d) => !d.isPrimary)
     .map((d) => d.siteName);
 
+  const anchorOffers = offers.filter((o) => o.siteId && anchorSiteIds.has(o.siteId));
+  const competitorOffers = offers.filter((o) => !o.siteId || !anchorSiteIds.has(o.siteId));
+  const anchorComplianceAverage = averageComplianceGrade(anchorOffers);
+  const competitorComplianceAverage = averageComplianceGrade(competitorOffers);
+  const complianceSummary =
+    anchorComplianceAverage && competitorComplianceAverage
+      ? `${anchor?.siteName ?? "Anchor"} average: ${anchorComplianceAverage}; competitor average: ${competitorComplianceAverage}.`
+      : anchorComplianceAverage
+        ? `${anchor?.siteName ?? "Anchor"} average: ${anchorComplianceAverage} across ${cleanComplianceGrades(anchorOffers).length} graded ads.`
+        : null;
+  const inventorySummary = hasInventory
+    ? `${invAnchor?.siteName ?? "Anchor"} holds ${invAnchorUnits} units${
+        invAnchorRank > 0
+          ? `, ranked #${invAnchorRank} of ${dealerInventory.length}`
+          : ""
+      }; market average is ${invMarketAvg}.`
+    : null;
+  const summaryItems = [
+    isMeaningfulSummaryNote(leaseNote)
+      ? { href: "#lease", label: "Lease Specials", text: leaseNote }
+      : null,
+    isMeaningfulSummaryNote(financeNote)
+      ? { href: "#finance", label: "Finance (APR)", text: financeNote }
+      : null,
+    isMeaningfulSummaryNote(cashNote)
+      ? { href: "#cash", label: "Cash & Discounts", text: cashNote }
+      : null,
+    anchorServiceCount === 0 && serviceOffers.length > 0 && isMeaningfulSummaryNote(serviceNote)
+      ? { href: "#service", label: "Service Specials", text: serviceNote }
+      : null,
+    inventorySummary
+      ? { href: "#inventory", label: "Inventory Snapshot", text: inventorySummary }
+      : null,
+    hasCompliance && complianceSummary
+      ? { href: "#compliance", label: "Ad Compliance", text: complianceSummary }
+      : null,
+  ].filter((item): item is { href: string; label: string; text: string } => Boolean(item));
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -564,123 +791,79 @@ export function ReportContent({
             Competitive Market Analysis
           </h1>
           {anchor && (
-            <p className="mt-2 text-base text-blue-200">
+            <p className="mt-2 text-base font-semibold text-blue-100">
               {anchor.siteName} ★ vs.{" "}
               {competitorNames.join(", ") || "no competitors captured"}
             </p>
           )}
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <span className="rounded-full border border-blue-400/40 bg-blue-800/40 px-3 py-1 text-sm font-medium">
+            <span className="rounded-full border border-blue-300/60 bg-blue-800/40 px-3 py-1 text-sm font-semibold">
               {snapshot.runGroupName ?? "All sites"}
             </span>
-            <span className="rounded-full border border-blue-400/40 bg-blue-800/40 px-3 py-1 text-sm">
+            <span className="rounded-full border border-blue-300/60 bg-blue-800/40 px-3 py-1 text-sm font-semibold">
               {snapshot.label || `Snapshot ${snapshot.id.slice(0, 8)}`}
             </span>
-            <span className="rounded-full border border-blue-400/40 bg-blue-800/40 px-3 py-1 text-sm">
+            <span className="rounded-full border border-blue-300/60 bg-blue-800/40 px-3 py-1 text-sm font-semibold">
               Published {captureDate}
             </span>
           </div>
         </div>
-        {/* KPI tiles */}
-        <div className="grid grid-cols-2 gap-px border-t border-blue-800/60 bg-blue-800/30 sm:grid-cols-4">
-          {[
-            { value: kpis.leaseModelCount, label: `${anchor?.siteName ?? "Anchor"} Lease Models` },
-            { value: kpis.financeOfferCount, label: `${anchor?.siteName ?? "Anchor"} Finance Offers` },
-            { value: kpis.cashOfferCount, label: `${anchor?.siteName ?? "Anchor"} Cash Offers` },
-            { value: kpis.serviceOfferCount, label: `${anchor?.siteName ?? "Anchor"} Service Offers` },
-          ].map((t) => (
-            <div
-              key={t.label}
-              className="flex flex-col items-center px-4 py-5 text-center"
-            >
-              <span className="text-3xl font-bold">{t.value}</span>
-              <span className="mt-1 text-[11px] font-semibold uppercase tracking-widest text-blue-300">
-                {t.label}
-              </span>
-            </div>
-          ))}
+        <div className="border-t border-blue-800/60 bg-blue-900/25 px-4 py-4 sm:px-8">
+          <p className="whitespace-nowrap text-sm font-semibold text-blue-100">
+            Current offers:{" "}
+            <span className="text-white">Lease: {kpis.leaseModelCount}</span>
+            <span className="mx-1 text-blue-300 sm:mx-2">|</span>
+            <span className="text-white">Finance: {kpis.financeOfferCount}</span>
+            <span className="mx-1 text-blue-300 sm:mx-2">|</span>
+            <span className="text-white">Cash: {kpis.cashOfferCount}</span>
+            <span className="mx-1 text-blue-300 sm:mx-2">|</span>
+            <span className="text-white">Service: {kpis.serviceOfferCount}</span>
+          </p>
         </div>
+        {(adminControls || summaryItems.length > 0) && (
+          <div className="border-t border-blue-800/60 px-4 py-5 sm:px-8">
+            {adminControls && (
+              <div className="mb-3 flex items-center justify-end gap-3">
+                <CopyLinkButton
+                  shareUrl={shareUrl}
+                  unavailableLabel={shareUrlUnavailableLabel}
+                />
+                <a
+                  href={`/reports/${snapshot.id}/export`}
+                  className="rounded-md border border-blue-200 bg-[#12315c] px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-[#0f294e]"
+                >
+                  Export CSV
+                </a>
+              </div>
+            )}
+            {summaryItems.length > 0 && (
+              <div id="summary" className="rounded-lg border border-blue-100 bg-white p-5 text-black shadow-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50">
+                <h2 className={`mb-3 ${REPORT_LABEL_CLASS}`}>
+                  Key Takeaways
+                </h2>
+                <ul className="list-disc space-y-2 pl-5 text-base">
+                  {summaryItems.map((item) => (
+                    <li key={item.href}>
+                      <a
+                        href={item.href}
+                        className="font-semibold text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-200"
+                      >
+                        {item.label}
+                      </a>
+                      <span className="text-black dark:text-zinc-50">: {item.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-
-      {/* Admin controls */}
-      {adminControls && (
-        <div className="mb-6 flex items-center gap-3">
-          <CopyLinkButton snapshotId={snapshot.id} />
-          <a
-            href={`/reports/${snapshot.id}/export`}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
-          >
-            Export CSV
-          </a>
-        </div>
-      )}
 
       {/* ------------------------------------------------------------------ */}
       {/* 1 · Brand News                                                      */}
       {/* ------------------------------------------------------------------ */}
       <BrandNewsSection news={news} brand={news?.brand ?? undefined} />
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Executive brief                                                     */}
-      {/* ------------------------------------------------------------------ */}
-      <div id="summary" className="mb-8 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-3 text-sm font-bold uppercase tracking-widest text-zinc-500">
-          Report Summary
-        </h2>
-        <ul className="space-y-2 text-sm text-zinc-700">
-          {leaseGrid.length > 0 && (
-            <li>
-              <a href="#lease" className="font-semibold text-[#1b3a6b] hover:underline">
-                Lease Specials →
-              </a>{" "}
-              {leaseNote}
-            </li>
-          )}
-          {financeGrid.length > 0 && (
-            <li>
-              <a href="#finance" className="font-semibold text-[#1b3a6b] hover:underline">
-                Finance (APR) →
-              </a>{" "}
-              {financeNote}
-            </li>
-          )}
-          {cashGrid.length > 0 && (
-            <li>
-              <a href="#cash" className="font-semibold text-[#1b3a6b] hover:underline">
-                Cash &amp; Discounts →
-              </a>{" "}
-              {cashNote}
-            </li>
-          )}
-          {serviceOffers.length > 0 && (
-            <li>
-              <a href="#service" className="font-semibold text-[#1b3a6b] hover:underline">
-                Service Specials →
-              </a>{" "}
-              {serviceNote}
-            </li>
-          )}
-          {hasInventory && (
-            <li>
-              <a href="#inventory" className="font-semibold text-[#1b3a6b] hover:underline">
-                Inventory Snapshot →
-              </a>{" "}
-              {invAnchor?.siteName ?? "Anchor"} holds {invAnchorUnits} units ({invAnchorRank > 0 ? `ranked #${invAnchorRank} of ${dealerInventory.length}` : "no rank"}) vs. {invTotalMarket} total in market.
-            </li>
-          )}
-          {hasCompliance && (
-            <li>
-              <a href="#compliance" className="font-semibold text-[#1b3a6b] hover:underline">
-                Compliance →
-              </a>{" "}
-              {Object.entries(complianceCounts)
-                .map(([g, n]) => `${n} ${g}`)
-                .join(", ")}{" "}
-              for {anchor?.siteName ?? "anchor"}.
-            </li>
-          )}
-        </ul>
-      </div>
 
       {/* ------------------------------------------------------------------ */}
       {/* 2 · Lease Specials                                                  */}
@@ -690,7 +873,7 @@ export function ReportContent({
           num="2"
           title="Lease Specials"
         />
-        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+        <div className={REPORT_PANEL_CLASS}>
           <div className="p-4">
             <GridTable
               dealers={dealers}
@@ -708,11 +891,11 @@ export function ReportContent({
                 return (
                   <>
                     {offer.monthlyPayment !== null && (
-                      <div className="font-bold">
+                      <div className={REPORT_HEADLINE_CLASS}>
                         {fmtMoney(offer.monthlyPayment)}/mo
                       </div>
                     )}
-                    <div className="text-xs opacity-80">
+                    <div className={REPORT_META_CLASS}>
                       {[
                         offer.termMonths ? `${offer.termMonths} mo` : null,
                         mileage ? fmtMileage(mileage) : null,
@@ -724,7 +907,7 @@ export function ReportContent({
                         .join(" · ")}
                     </div>
                     {missingFields.length > 0 && (
-                      <div className="mt-0.5 text-[9px] text-amber-600 opacity-75">
+                      <div className="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300">
                         missing: {missingFields.join(", ")}
                       </div>
                     )}
@@ -733,7 +916,7 @@ export function ReportContent({
                         href={offer.evidenceUrl ?? `/api/evidence/${offer.sourceEvidenceId}/file`}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-1 block text-[9px] text-blue-500 hover:underline"
+                        className={REPORT_LINK_CLASS}
                       >
                         View ad ↗
                       </a>
@@ -756,7 +939,7 @@ export function ReportContent({
           title="Finance (APR) Specials"
           sub="Advertised APR per model. Term length varies and is shown in each cell."
         />
-        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+        <div className={REPORT_PANEL_CLASS}>
           <div className="p-4">
             <GridTable
               dealers={dealers}
@@ -765,10 +948,10 @@ export function ReportContent({
               renderCell={(_cell, offer) => (
                 <>
                   {offer.apr !== null && (
-                    <div className="font-bold">{fmtApr(offer.apr)}</div>
+                    <div className={REPORT_HEADLINE_CLASS}>{fmtApr(offer.apr)}</div>
                   )}
                   {offer.termMonths && (
-                    <div className="text-xs opacity-80">{offer.termMonths} mo</div>
+                    <div className={REPORT_META_CLASS}>{offer.termMonths} mo</div>
                   )}
                 </>
               )}
@@ -788,17 +971,17 @@ export function ReportContent({
           sub="Ranked by advertised discount amount (larger = better)."
         />
         {cashOffers.length === 0 ? (
-          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 shadow-sm">
+          <div className={REPORT_EMPTY_CLASS}>
             No cash or discount offers captured this period.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
+          <div className={REPORT_PANEL_CLASS}>
             <div className="p-4">
               <GridTable
                 dealers={dealers}
                 rows={cashGrid}
                 renderCell={(_cell, offer) => (
-                  <div className="font-bold">
+                  <div className={REPORT_HEADLINE_CLASS}>
                     {offer.cashIncentive != null
                       ? `Up to ${fmtMoney(offer.cashIncentive)} off`
                       : offer.rawText?.slice(0, 40) ?? "—"}
@@ -823,71 +1006,21 @@ export function ReportContent({
           sub="Advertised service offers per dealer."
         />
         {serviceOffers.length === 0 ? (
-          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 shadow-sm">
+          <div className={REPORT_EMPTY_CLASS}>
             No service specials captured this period.
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="columns-1 gap-4 lg:columns-2">
             {dealers.map((d) => {
               const dKey = d.siteId ?? d.siteName;
-              const dOffers = serviceOffers.filter(
-                (o) => (o.siteId ?? o.siteName) === dKey
-              );
+              const dOffers = serviceOffersByDealer.get(dKey) ?? [];
               return (
-                <div
+                <ServiceDealerCard
                   key={dKey}
-                  className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm"
-                >
-                  <div
-                    className={`px-4 py-2.5 text-sm font-semibold ${
-                      d.isPrimary
-                        ? "bg-[#1b5e3b] text-white"
-                        : "bg-zinc-700 text-white"
-                    }`}
-                  >
-                    {d.siteName}
-                    {d.isPrimary && <span className="ml-1 text-yellow-300">★</span>}
-                  </div>
-                  {dOffers.length === 0 ? (
-                    <p className="px-4 py-3 text-xs italic text-zinc-400">
-                      Not Advertised
-                    </p>
-                  ) : (
-                    <ul className="divide-y divide-zinc-100">
-                      {dOffers.map((o) => {
-                        const matchMap = (
-                          o.normalizedJson as { matches?: Record<string, string> } | null
-                        )?.matches ?? {};
-                        return (
-                        <li key={o.id} className="px-4 py-2.5">
-                          <div className="text-sm text-zinc-800">
-                            {o.rawText ?? "Service Special"}
-                          </div>
-                          {o.cashIncentive != null ? (
-                            <div className="mt-0.5 text-xs font-medium text-emerald-700">
-                              {fmtMoney(o.cashIncentive)} off
-                            </div>
-                          ) : matchMap.serviceOffer ? (
-                            <div className="mt-0.5 text-xs font-medium text-emerald-700">
-                              {matchMap.serviceOffer}
-                            </div>
-                          ) : null}
-                          {(o.evidenceUrl ?? o.sourceEvidenceId) && (
-                            <a
-                              href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-0.5 block text-xs text-blue-600 hover:underline"
-                            >
-                              View evidence
-                            </a>
-                          )}
-                        </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
+                  dealer={d}
+                  offers={dOffers}
+                  emptyLabel="Not Advertised"
+                />
               );
             })}
           </div>
@@ -914,61 +1047,61 @@ export function ReportContent({
                 value: invAnchorUnits.toLocaleString(),
                 label: `${invAnchor?.siteName ?? "Anchor"} Units`,
                 sub: invAnchorRank > 0 ? `#${invAnchorRank} of ${dealerInventory.length} dealers` : "",
-                color: "text-emerald-600",
+                color: "text-emerald-700 dark:text-emerald-300",
               },
               {
                 value: invMarketAvg.toLocaleString(),
                 label: "Market Average",
                 sub: `Across ${dealerInventory.length} dealers`,
-                color: "text-blue-600",
+                color: "text-blue-700 dark:text-blue-300",
               },
               {
                 value: invTotalMarket.toLocaleString(),
                 label: "Total Market Supply",
                 sub: `${dealerInventory.length} dealers combined`,
-                color: "text-zinc-800",
+                color: "text-black dark:text-zinc-50",
               },
             ].map((t) => (
-              <div key={t.label} className="rounded-lg border border-zinc-200 bg-white px-4 py-3 shadow-sm text-center">
+              <div key={t.label} className="rounded-lg border border-zinc-200 bg-white px-4 py-3 text-center shadow-sm dark:border-zinc-700 dark:bg-zinc-950">
                 <div className={`text-3xl font-extrabold ${t.color}`}>{t.value}</div>
-                <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500">{t.label}</div>
-                {t.sub && <div className="text-[10px] text-zinc-400">{t.sub}</div>}
+                <div className={`mt-1 ${REPORT_LABEL_CLASS}`}>{t.label}</div>
+                {t.sub && <div className={REPORT_META_CLASS}>{t.sub}</div>}
               </div>
             ))}
           </div>
 
           {/* Total Inventory Ranking */}
-          <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-            <div className="border-b border-zinc-100 px-4 py-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Total Inventory Ranking</h3>
+          <div className={`mb-4 rounded-lg ${REPORT_PANEL_CLASS}`}>
+            <div className={`border-b px-4 py-2 ${REPORT_BORDER_CLASS}`}>
+              <h3 className={REPORT_LABEL_CLASS}>Total Inventory Ranking</h3>
             </div>
-            <div className="divide-y divide-zinc-50 px-4 py-1">
+            <div className="divide-y divide-zinc-200 px-4 py-1 dark:divide-zinc-800">
               {invSorted.map((d, i) => {
                 const pct = invTotalMarket > 0 ? (d.totalUnits / invSorted[0].totalUnits) * 100 : 0;
                 return (
                   <div key={d.siteName} className={`flex items-center gap-3 py-1.5 ${d.isPrimary ? "font-semibold" : ""}`}>
-                    <span className="w-5 text-right text-xs text-zinc-400">{d.isPrimary ? "★" : i + 1}</span>
-                    <span className="w-36 shrink-0 text-xs text-zinc-700">{d.siteName}{d.isPrimary ? " ★" : ""}</span>
+                    <span className={REPORT_META_CLASS + " w-5 text-right"}>{d.isPrimary ? "★" : i + 1}</span>
+                    <span className={REPORT_META_CLASS + " w-36 shrink-0"}>{d.siteName}{d.isPrimary ? " ★" : ""}</span>
                     <div className="flex-1">
                       <div
                         className={`h-4 rounded ${d.isPrimary ? "bg-[#1b3a6b]" : "bg-blue-300"}`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="w-8 text-right text-xs font-medium text-zinc-700">{d.totalUnits}</span>
+                    <span className={REPORT_META_CLASS + " w-8 text-right"}>{d.totalUnits}</span>
                   </div>
                 );
               })}
             </div>
             {invInsights && invInsights.gapDealer && !invAnchor?.isPrimary && (
-              <div className="border-t border-zinc-100 bg-amber-50 px-4 py-2 text-xs text-zinc-600">
-                <span className="font-semibold uppercase tracking-wide text-amber-700">Inventory Gap Alert</span>{" "}
+              <div className="border-t border-zinc-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-black dark:border-zinc-800 dark:bg-amber-950/30 dark:text-zinc-50">
+                <span className="uppercase tracking-wide text-amber-700 dark:text-amber-300">Inventory Gap Alert</span>{" "}
                 {invInsights.gapDealer.siteName} carries {Math.abs(invInsights.gap)} more units than {invAnchor?.siteName ?? "anchor"}.
               </div>
             )}
             {invInsights && invInsights.gapDealer && invAnchorRank === 1 && (
-              <div className="border-t border-zinc-100 bg-emerald-50 px-4 py-2 text-xs text-zinc-600">
-                <span className="font-semibold uppercase tracking-wide text-emerald-700">Market Leader</span>{" "}
+              <div className="border-t border-zinc-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-black dark:border-zinc-800 dark:bg-emerald-950/30 dark:text-zinc-50">
+                <span className="uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Market Leader</span>{" "}
                 {invAnchor?.siteName ?? "Anchor"} leads the competitive set with {invAnchorUnits} units — {invInsights.gap < 0 ? Math.abs(invInsights.gap) : ""} more than {invInsights.gapDealer.siteName}.
               </div>
             )}
@@ -976,16 +1109,16 @@ export function ReportContent({
 
           {/* Anchor brand breakdown */}
           {invAnchor && invAnchor.makes.length > 0 && (
-            <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-              <div className="border-b border-zinc-100 px-4 py-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{invAnchor.siteName} — Brand Breakdown</h3>
+            <div className={`mb-4 rounded-lg ${REPORT_PANEL_CLASS}`}>
+              <div className={`border-b px-4 py-2 ${REPORT_BORDER_CLASS}`}>
+                <h3 className={REPORT_LABEL_CLASS}>{invAnchor.siteName} — Brand Breakdown</h3>
               </div>
               <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
                 {[...invAnchor.makes].sort((a, b) => b.inStock - a.inStock).map((m) => (
-                  <div key={m.make} className="rounded border border-zinc-100 bg-zinc-50 px-3 py-2 text-center">
-                    <div className="text-[10px] font-medium text-zinc-500">{m.make}</div>
-                    <div className="text-xl font-bold text-[#1b3a6b]">{m.inStock}</div>
-                    <div className="text-[10px] text-zinc-400">{invAnchorUnits > 0 ? Math.round((m.inStock / invAnchorUnits) * 100) : 0}% of stock</div>
+                  <div key={m.make} className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-center dark:border-zinc-800 dark:bg-zinc-900">
+                    <div className={REPORT_META_CLASS}>{m.make}</div>
+                    <div className="text-2xl font-extrabold text-[#1b3a6b] dark:text-blue-300">{m.inStock}</div>
+                    <div className={REPORT_META_CLASS}>{invAnchorUnits > 0 ? Math.round((m.inStock / invAnchorUnits) * 100) : 0}% of stock</div>
                   </div>
                 ))}
               </div>
@@ -994,20 +1127,20 @@ export function ReportContent({
 
           {/* Model-by-Dealer table */}
           {Object.keys(allModelsByMake).length > 0 && (
-            <div className="mb-4 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-              <div className="border-b border-zinc-100 px-4 py-2 flex items-baseline gap-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Model-by-Dealer Breakdown</h3>
-                <span className="text-[10px] text-zinc-400">Shading = inventory density · darkest = row leader</span>
+            <div className={`mb-4 rounded-lg ${REPORT_PANEL_CLASS}`}>
+              <div className={`flex items-baseline gap-3 border-b px-4 py-2 ${REPORT_BORDER_CLASS}`}>
+                <h3 className={REPORT_LABEL_CLASS}>Model-by-Dealer Breakdown</h3>
+                <span className={REPORT_META_CLASS}>Shading = inventory density · darkest = row leader</span>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-xs" style={{ tableLayout: "fixed" }}>
+                <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "140px" }} />
                     {dealerInventory.map((d) => <col key={d.siteName} style={{ width: "90px" }} />)}
                     <col style={{ width: "70px" }} />
                   </colgroup>
                   <thead>
-                    <tr className="border-b border-zinc-100 bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-500">
+                    <tr className="border-b border-zinc-200 bg-zinc-50 text-sm uppercase tracking-wide text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50">
                       <th className="px-3 py-1.5 text-left font-medium">Model</th>
                       {dealerInventory.map((d) => (
                         <th key={d.siteName} className={`px-2 py-1.5 text-center font-medium ${d.isPrimary ? "bg-[#1b3a6b] text-white" : ""}`}>
@@ -1017,11 +1150,11 @@ export function ReportContent({
                       <th className="px-2 py-1.5 text-right font-medium">Market</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-50">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                     {allMakes.filter((make) => allModelsByMake[make]?.length > 0).map((make) => (
                       <React.Fragment key={`make-${make}`}>
-                        <tr className="bg-zinc-100">
-                          <td colSpan={dealerInventory.length + 2} className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                        <tr className="bg-zinc-100 dark:bg-zinc-900">
+                          <td colSpan={dealerInventory.length + 2} className={REPORT_LABEL_CLASS + " px-3 py-1"}>
                             {make}
                           </td>
                         </tr>
@@ -1030,8 +1163,8 @@ export function ReportContent({
                           const maxVal = Math.max(...vals, 1);
                           const marketTotal = vals.reduce((s, v) => s + v, 0);
                           return (
-                            <tr key={`${make}|${model}`} className="hover:bg-zinc-50/50">
-                              <td className="px-3 py-1.5 text-zinc-700">{model}</td>
+                            <tr key={`${make}|${model}`} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/70">
+                              <td className="px-3 py-1.5 font-semibold text-black dark:text-zinc-50">{model}</td>
                               {dealerInventory.map((d, di) => {
                                 const n = vals[di];
                                 const intensity = n === 0 ? 0 : n === maxVal ? 1 : 0.3 + (n / maxVal) * 0.5;
@@ -1040,7 +1173,7 @@ export function ReportContent({
                                 return (
                                   <td
                                     key={d.siteName}
-                                    className={`px-2 py-1.5 text-center font-medium ${n === 0 ? "text-zinc-300" : isLeader ? "text-white" : isPrimary ? "text-white" : "text-zinc-700"}`}
+                                    className={`px-2 py-1.5 text-center font-semibold ${n === 0 ? "text-zinc-900 dark:text-zinc-100" : isLeader ? "text-white" : isPrimary ? "text-white" : "text-black dark:text-zinc-50"}`}
                                     style={{
                                       backgroundColor: n === 0 ? "transparent" : isLeader
                                         ? "#1b3a6b"
@@ -1053,20 +1186,20 @@ export function ReportContent({
                                   </td>
                                 );
                               })}
-                              <td className="px-2 py-1.5 text-right font-semibold text-zinc-700">{marketTotal}</td>
+                              <td className="px-2 py-1.5 text-right font-semibold text-black dark:text-zinc-50">{marketTotal}</td>
                             </tr>
                           );
                         })}
                       </React.Fragment>
                     ))}
-                    <tr className="border-t-2 border-zinc-200 bg-zinc-50 font-bold">
-                      <td className="px-3 py-1.5 text-zinc-700">TOTAL</td>
+                    <tr className="border-t-2 border-zinc-200 bg-zinc-50 font-bold dark:border-zinc-700 dark:bg-zinc-900">
+                      <td className="px-3 py-1.5 text-black dark:text-zinc-50">TOTAL</td>
                       {dealerInventory.map((d) => (
-                        <td key={d.siteName} className={`px-2 py-1.5 text-center ${d.isPrimary ? "text-[#1b3a6b]" : "text-zinc-700"}`}>
+                        <td key={d.siteName} className={`px-2 py-1.5 text-center ${d.isPrimary ? "text-[#1b3a6b] dark:text-blue-300" : "text-black dark:text-zinc-50"}`}>
                           {d.totalUnits}
                         </td>
                       ))}
-                      <td className="px-2 py-1.5 text-right text-zinc-700">{invTotalMarket}</td>
+                      <td className="px-2 py-1.5 text-right text-black dark:text-zinc-50">{invTotalMarket}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1078,33 +1211,33 @@ export function ReportContent({
           {invInsights && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {invInsights.anchorLeadModels.length > 0 && (
-                <div className="rounded-lg border-l-4 border-emerald-500 bg-emerald-50 px-3 py-2.5">
-                  <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-700">Strength</div>
-                  <p className="text-xs text-zinc-700">
+                <div className="rounded-lg border-l-4 border-emerald-500 bg-emerald-50 px-3 py-2.5 dark:bg-emerald-950/30">
+                  <div className="mb-1 text-sm font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-300">Strength</div>
+                  <p className={REPORT_BODY_CLASS}>
                     Market leader in {invInsights.anchorLeadModels.slice(0, 3).join(", ")}
                     {invInsights.anchorLeadModels.length > 3 ? ` and ${invInsights.anchorLeadModels.length - 3} more` : ""}.
                   </p>
                 </div>
               )}
               {invInsights.makeGaps.length > 0 && invInsights.makeGaps[0].gap > 0 && (
-                <div className="rounded-lg border-l-4 border-amber-500 bg-amber-50 px-3 py-2.5">
-                  <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-amber-700">Watch</div>
-                  <p className="text-xs text-zinc-700">
+                <div className="rounded-lg border-l-4 border-amber-500 bg-amber-50 px-3 py-2.5 dark:bg-amber-950/30">
+                  <div className="mb-1 text-sm font-bold uppercase tracking-widest text-amber-700 dark:text-amber-300">Watch</div>
+                  <p className={REPORT_BODY_CLASS}>
                     {invInsights.makeGaps[0].make} supply gap vs. market leader ({invInsights.makeGaps[0].anchorN} vs. {invInsights.makeGaps[0].leaderN} units).
                   </p>
                 </div>
               )}
               {invInsights.makeGaps.length > 1 && invInsights.makeGaps[invInsights.makeGaps.length - 1].gap <= 0 && (
-                <div className="rounded-lg border-l-4 border-blue-500 bg-blue-50 px-3 py-2.5">
-                  <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-blue-700">Opportunity</div>
-                  <p className="text-xs text-zinc-700">
+                <div className="rounded-lg border-l-4 border-blue-500 bg-blue-50 px-3 py-2.5 dark:bg-blue-950/30">
+                  <div className="mb-1 text-sm font-bold uppercase tracking-widest text-blue-700 dark:text-blue-300">Opportunity</div>
+                  <p className={REPORT_BODY_CLASS}>
                     Leading in {invInsights.makeGaps[invInsights.makeGaps.length - 1].make} with minimal competition from the field.
                   </p>
                 </div>
               )}
-              <div className="rounded-lg border-l-4 border-zinc-300 bg-zinc-50 px-3 py-2.5">
-                <div className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Context</div>
-                <p className="text-xs text-zinc-700">
+              <div className="rounded-lg border-l-4 border-zinc-400 bg-zinc-50 px-3 py-2.5 dark:bg-zinc-900">
+                <div className={`mb-1 ${REPORT_LABEL_CLASS}`}>Context</div>
+                <p className={REPORT_BODY_CLASS}>
                   {invSorted[0].siteName} leads the market with {invSorted[0].totalUnits} units
                   {invSorted[0].isPrimary ? " — anchor holds the top position." : ` — ${Math.round((invSorted[0].totalUnits / invTotalMarket) * 100)}% of total market supply.`}
                 </p>
@@ -1125,9 +1258,9 @@ export function ReportContent({
             title="Ad Compliance"
             sub={`Compliance grades for ${anchor?.siteName ?? "anchor"} offers.`}
           />
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
-            <div className="px-6 pt-5 pb-4 border-b border-zinc-100">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">
+          <div className={REPORT_PANEL_CLASS}>
+            <div className={`px-6 pt-5 pb-4 border-b ${REPORT_BORDER_CLASS}`}>
+              <p className={`mb-3 ${REPORT_LABEL_CLASS}`}>
                 This week&apos;s ad grades
               </p>
               <div className="flex flex-wrap gap-6">
@@ -1144,7 +1277,7 @@ export function ReportContent({
                     >
                       {grade.toUpperCase()}
                     </div>
-                    <div className="mt-1 text-sm font-medium text-zinc-500">
+                    <div className={REPORT_META_CLASS + " mt-1"}>
                       {count} ad{count !== 1 ? "s" : ""}
                     </div>
                   </div>
@@ -1164,9 +1297,9 @@ export function ReportContent({
               );
               if (anchorGraded.length === 0) return null;
               return (
-                <table className="w-full border-t border-zinc-100 text-sm">
+                <table className="w-full border-t border-zinc-200 text-base dark:border-zinc-800">
                   <thead>
-                    <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                    <tr className={`border-b ${REPORT_BORDER_CLASS} ${REPORT_LABEL_CLASS}`}>
                       <th className="px-4 py-2 text-left font-medium">Offer</th>
                       <th className="px-4 py-2 text-left font-medium">Type</th>
                       <th className="px-4 py-2 text-left font-medium">Grade</th>
@@ -1174,20 +1307,20 @@ export function ReportContent({
                       <th className="px-4 py-2 text-left font-medium">Original Ad</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-100">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                     {anchorGraded.map((o) => {
                       const details = o.complianceDetailsJson as Record<string, unknown> | null;
                       const reason = details?.reason as string | undefined;
                       return (
                       <tr key={o.id}>
-                        <td className="px-4 py-3 text-zinc-800 align-top">
-                          <div className="font-medium">
+                        <td className="px-4 py-3 align-top text-black dark:text-zinc-50">
+                          <div className="font-semibold">
                             {[o.vehicleMake, o.vehicleModel, o.vehicleTrim]
                               .filter(Boolean)
                               .join(" ") || "—"}
                           </div>
                         </td>
-                        <td className="px-4 py-3 capitalize text-zinc-600 align-top">
+                        <td className="px-4 py-3 capitalize align-top text-black dark:text-zinc-50">
                           {o.offerType}
                         </td>
                         <td className="px-4 py-3 align-top">
@@ -1203,8 +1336,8 @@ export function ReportContent({
                             {o.complianceGrade}
                           </span>
                         </td>
-                        <td className="px-4 py-3 align-top text-zinc-600">
-                          {reason ?? <span className="text-zinc-400">—</span>}
+                        <td className="px-4 py-3 align-top text-black dark:text-zinc-50">
+                          {reason ?? <span className="text-black dark:text-zinc-50">—</span>}
                         </td>
                         <td className="px-4 py-3 align-top">
                           {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
@@ -1212,12 +1345,12 @@ export function ReportContent({
                               href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-sm text-blue-600 hover:underline"
+                              className={REPORT_LINK_CLASS}
                             >
                               View
                             </a>
                           ) : (
-                            <span className="text-sm text-zinc-400">—</span>
+                            <span className={REPORT_META_CLASS}>—</span>
                           )}
                         </td>
                       </tr>
@@ -1238,38 +1371,38 @@ export function ReportContent({
       {adminControls && groupSnapshots.length > 1 && (
         <section className="mb-10">
           <SectionHeading title="Snapshot History" />
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
-            <table className="w-full text-sm">
+          <div className={REPORT_PANEL_CLASS}>
+            <table className="w-full text-base">
               <thead>
-                <tr className="border-b border-zinc-100 text-xs uppercase tracking-wide text-zinc-500">
+                <tr className={`border-b ${REPORT_BORDER_CLASS} ${REPORT_LABEL_CLASS}`}>
                   <th className="px-4 py-2 text-left font-medium">Published</th>
                   <th className="px-4 py-2 text-left font-medium">Report</th>
                   <th className="px-4 py-2 text-right font-medium">Offers</th>
                   <th className="px-4 py-2 text-right font-medium">Sites</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-100">
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                 {groupSnapshots.map((s) => (
-                  <tr key={s.id} className={s.id === snapshot.id ? "bg-blue-50/50" : ""}>
-                    <td className="px-4 py-2.5 text-zinc-600">
+                  <tr key={s.id} className={s.id === snapshot.id ? "bg-blue-50/50 dark:bg-blue-950/30" : ""}>
+                    <td className="px-4 py-2.5 font-semibold text-black dark:text-zinc-50">
                       {new Date(s.approvedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </td>
                     <td className="px-4 py-2.5">
                       {s.id === snapshot.id ? (
-                        <span className="font-medium text-zinc-900">
+                        <span className="font-semibold text-black dark:text-zinc-50">
                           {s.label || "This report"} (current)
                         </span>
                       ) : (
                         <a
                           href={`/reports/${s.id}`}
-                          className="text-blue-600 hover:underline"
+                          className={REPORT_LINK_CLASS}
                         >
                           {s.label || `Snapshot ${s.id.slice(0, 8)}`}
                         </a>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-zinc-700">{s.offerCount}</td>
-                    <td className="px-4 py-2.5 text-right text-zinc-700">{s.siteCount}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-black dark:text-zinc-50">{s.offerCount}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-black dark:text-zinc-50">{s.siteCount}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1281,8 +1414,8 @@ export function ReportContent({
       {/* ------------------------------------------------------------------ */}
       {/* Methodology footer                                                   */}
       {/* ------------------------------------------------------------------ */}
-      <footer className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 px-6 py-5 text-xs text-zinc-500">
-        <p className="font-semibold text-zinc-700">Methodology &amp; Data Provenance</p>
+      <footer className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 px-6 py-5 text-base text-black dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50">
+        <p className="font-semibold text-black dark:text-zinc-50">Methodology &amp; Data Provenance</p>
         <p className="mt-2">
           Specials data captured from each dealer&apos;s published promotions pages at
           the time of collection. Offer payments, APRs, and terms are read from
@@ -1297,7 +1430,7 @@ export function ReportContent({
           payments, APRs, and terms are subject to change, qualification, and dealer
           availability. Not all buyers will qualify.
         </p>
-        <p className="mt-3 text-zinc-400">
+        <p className="mt-3 font-semibold text-black dark:text-zinc-50">
           Dealer Intel · Competitive Specials Comparison ·{" "}
           {snapshot.runGroupName ?? "All sites"} · Published {captureDate}
         </p>

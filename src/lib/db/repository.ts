@@ -346,6 +346,16 @@ export async function getReportSnapshot(
   return row;
 }
 
+export async function getReportSnapshotByShareToken(
+  token: string
+): Promise<ReportSnapshot | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(reportSnapshots)
+    .where(eq(reportSnapshots.shareToken, token));
+  return row;
+}
+
 export async function listReportSnapshots(): Promise<ReportSnapshot[]> {
   return getDb()
     .select()

@@ -1,18 +1,43 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
+  ensureShareToken,
   getPrimarySiteIds,
   getRunGroupSiteIds,
   getReportSnapshot,
   listSnapshotOffers,
   listSnapshotsForGroup,
   listLatestInventoryForSites,
+  setSnapshotClientVisible,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 import { getStoredNewsForReport } from "@/lib/news";
-import { getEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
+
+function getPublicViewerOrigin(): {
+  origin?: string;
+  unavailableLabel?: string;
+} {
+  const raw = process.env.VIEWER_PUBLIC_URL;
+  if (!raw) return { unavailableLabel: "Set public report URL" };
+
+  const trimmed = raw.trim().replace(/\s+#.*$/, "").replace(/\/+$/, "");
+  if (!trimmed) return { unavailableLabel: "Set public report URL" };
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return { unavailableLabel: "Fix public report URL" };
+  }
+
+  if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+    return { unavailableLabel: "Use non-local report URL" };
+  }
+
+  return { origin: url.origin };
+}
 
 export default async function AdminReportPage({
   params,
@@ -22,6 +47,7 @@ export default async function AdminReportPage({
   const { id } = await params;
   const snapshot = await getReportSnapshot(id);
   if (!snapshot) notFound();
+  const snapshotId = snapshot.id;
 
   const [offers, primarySiteIds, groupSnapshots] = await Promise.all([
     listSnapshotOffers(snapshot.id),
@@ -53,14 +79,24 @@ export default async function AdminReportPage({
 
   const news = await getStoredNewsForReport(primaryBrand);
 
-  // Build the public shareable link from the snapshot's token. Prefer the
-  // viewer's configured origin; fall back to a root-relative /r/<token> that
-  // the copy button resolves against the current origin. Undefined (no token
-  // yet) falls back to the legacy /r/<id> link in the button.
-  const viewerBase = getEnv().VIEWER_PUBLIC_URL?.replace(/\/+$/, "");
-  const shareUrl = snapshot.shareToken
-    ? `${viewerBase ?? ""}/r/${snapshot.shareToken}`
+  // Build the public shareable link from the snapshot's token. Do not fall
+  // back to the admin request origin: locally that would copy localhost, which
+  // is not shareable.
+  const viewerOrigin = getPublicViewerOrigin();
+  let shareToken = snapshot.shareToken;
+  if (!snapshot.clientVisible) {
+    await setSnapshotClientVisible(snapshotId, true);
+  }
+  if (!shareToken) {
+    shareToken = await ensureShareToken(snapshotId);
+  }
+
+  const shareUrl = shareToken && viewerOrigin.origin
+    ? `${viewerOrigin.origin}/r/${shareToken}`
     : undefined;
+  const shareUrlUnavailableLabel = shareToken
+    ? viewerOrigin.unavailableLabel
+    : "Share link unavailable";
 
   return (
     <div>
@@ -78,6 +114,7 @@ export default async function AdminReportPage({
         inventoryData={inventoryData}
         adminControls={true}
         shareUrl={shareUrl}
+        shareUrlUnavailableLabel={shareUrlUnavailableLabel}
         containerClassName="mx-auto max-w-6xl"
       />
     </div>

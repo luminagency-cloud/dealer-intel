@@ -36,6 +36,11 @@ function readEnv(): Env {
   const source = Object.fromEntries(
     Object.entries(process.env).filter(([, v]) => v !== "")
   );
+  if (typeof source.VIEWER_PUBLIC_URL === "string") {
+    source.VIEWER_PUBLIC_URL = source.VIEWER_PUBLIC_URL
+      .trim()
+      .replace(/\s+#.*$/, "");
+  }
   const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues
@@ -55,7 +60,7 @@ export function requireEnv(key: keyof Env): string {
   if (!value) {
     throw new Error(
       `Missing required environment variable ${key}. ` +
-        `Copy .env.example to .env.local and fill it in.`
+        `Copy .env.example to .env and fill it in.`
     );
   }
   return value;

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import {
   getPrimarySiteIds,
-  getReportSnapshot,
+  getReportSnapshotByShareToken,
   listSnapshotOffers,
   listLatestInventoryForSites,
 } from "@/lib/db/repository";
@@ -16,8 +16,8 @@ export default async function PublicReportPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const snapshot = await getReportSnapshot(id);
-  // Public surface: only released snapshots are viewable, never drafts.
+  const snapshot = await getReportSnapshotByShareToken(id);
+  // Public surface: only share-token URLs for public snapshots are viewable.
   if (!snapshot || !snapshot.clientVisible) notFound();
 
   const [offers, primarySiteIds] = await Promise.all([

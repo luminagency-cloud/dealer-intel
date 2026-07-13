@@ -12,6 +12,7 @@ import {
   type ReportSnapshot,
 } from "@/lib/db";
 import { getEvidencePublicUrl } from "@/lib/evidence";
+import { mintShareToken } from "@/lib/share";
 
 /** Minimum offer confidence to publish into a snapshot. An offer scoring below
  *  this is treated as junk and never enters a report — the only confidence
@@ -125,6 +126,8 @@ export async function createSnapshotFromRun(
       label: label?.trim() || null,
       offerCount: filteredRows.length,
       siteCount: distinctSites,
+      clientVisible: true,
+      shareToken: mintShareToken(),
       approvedBy,
     })
     .returning();
