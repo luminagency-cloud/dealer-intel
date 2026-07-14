@@ -104,6 +104,7 @@ export const snapshotOffers = pgTable("snapshot_offers", {
   monthlyPayment: real("monthly_payment"),
   apr: real("apr"),
   cashIncentive: real("cash_incentive"),
+  salePrice: real("sale_price"),
   termMonths: integer("term_months"),
   dueAtSigning: real("due_at_signing"),
   rawText: text("raw_text"),
