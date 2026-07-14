@@ -1,4 +1,5 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
+import sharp from "sharp";
 import {
   getDb,
   collectionRuns,
@@ -77,10 +78,44 @@ function isUnmodeledPricedOffer(
   return MODEL_REQUIRED_TYPES.includes(offerType) && !vehicleModel;
 }
 
+/** Below this, an image can't plausibly hold legible offer text — franchise
+ *  badges (e.g. "franchise-logos/.../117x80.png") and nav/UI icons are well
+ *  under this, real ad cards and coupon graphics are well over it. Shared by
+ *  the URL-hint fast path (extractAdImageUrls) and the post-fetch real-pixel
+ *  check (isAdSizedImage) so both agree on what counts as "too small". */
+const MIN_AD_IMAGE_WIDTH = 150;
+const MIN_AD_IMAGE_HEIGHT = 100;
+/** Below this many bytes an image is a tracking pixel, spacer, or trivial
+ *  icon — not worth decoding just to measure it. */
+const MIN_AD_IMAGE_BYTES = 1024;
+
+/** True if the URL itself (filename dimensions like "117x80.png", or a
+ *  resize query param like "w=100"/"h=64") tells us the image is too small
+ *  to be an ad, without having to fetch it. */
+function isTooSmallByUrlHints(url: string): boolean {
+  const dims = /(\d{2,4})x(\d{2,4})(?=\.\w+(?:\?|#|$))/i.exec(url);
+  if (dims) {
+    const w = Number(dims[1]);
+    const h = Number(dims[2]);
+    if (w < MIN_AD_IMAGE_WIDTH || h < MIN_AD_IMAGE_HEIGHT) return true;
+  }
+  try {
+    const params = new URL(url).searchParams;
+    const w = Number(params.get("w") ?? params.get("width") ?? "");
+    const h = Number(params.get("h") ?? params.get("height") ?? "");
+    if (Number.isFinite(w) && w > 0 && w < MIN_AD_IMAGE_WIDTH) return true;
+    if (Number.isFinite(h) && h > 0 && h < MIN_AD_IMAGE_HEIGHT) return true;
+  } catch {
+    // not a resolvable absolute URL — nothing to check here
+  }
+  return false;
+}
+
 /** Strips structural chrome (header/footer/nav) from HTML, then extracts
  *  candidate offer-card image URLs. Checks src and common lazy-load attributes
- *  (data-src, data-lazy-src, data-original). Skips data URIs, SVGs, and
- *  obvious icon/logo URLs. Returns absolute URLs only. */
+ *  (data-src, data-lazy-src, data-original). Skips data URIs, SVGs, obvious
+ *  icon/logo/badge URLs, and images too small (by filename or query-param
+ *  dimensions) to hold legible offer text. Returns absolute URLs only. */
 function extractAdImageUrls(html: string, pageUrl?: string): string[] {
   const stripped = html
     .replace(/<header\b[\s\S]*?<\/header>/gi, "")
@@ -109,7 +144,11 @@ function extractAdImageUrls(html: string, pageUrl?: string): string[] {
     }
     if (!src || src.startsWith("data:")) continue;
     if (/\.(svg|ico|gif)(\?|#|$)/i.test(src)) continue;
-    if (/\/(icon|logo|sprite|badge|arrow|btn|button|nav|menu|header|footer|social|share|fb|twitter|instagram|linkedin|youtube|track|pixel|beacon)\b/i.test(src)) continue;
+    // Matches a keyword as a whole path/filename segment (delimited by /, _,
+    // -, or .) rather than requiring it to start right after a "/" — the old
+    // pattern missed "franchise-logos/.../117x80.png" because "logos" isn't
+    // preceded by a slash.
+    if (/(?:^|[/_-])(icons?|logos?|sprites?|badges?|avatars?|favicons?|placeholders?|spacers?|swatch(?:es)?|arrow|btn|button|nav|menu|header|footer|social|share|fb|twitter|instagram|linkedin|youtube|track|pixel|beacon)(?:[/_.-]|$)/i.test(src)) continue;
 
     src = decodeHtmlAttribute(src);
 
@@ -118,6 +157,7 @@ function extractAdImageUrls(html: string, pageUrl?: string): string[] {
       if (!pageUrl) continue;
       try { resolved = new URL(src, pageUrl).toString(); } catch { continue; }
     }
+    if (isTooSmallByUrlHints(resolved)) continue;
     if (!seen.has(resolved)) { seen.add(resolved); urls.push(resolved); }
   }
   return urls;
@@ -522,6 +562,22 @@ async function fetchImageBuffer(url: string): Promise<Buffer | null> {
   }
 }
 
+/** Real-pixel-dimension gate applied to a fetched image buffer, right before
+ *  it would be sent to Mistral OCR. Catches everything the URL-hint fast path
+ *  (isTooSmallByUrlHints) can't see — icons with no size in the URL, tracking
+ *  pixels, and (as a side effect) empty/corrupt fetch bodies, which otherwise
+ *  reach sharp's resize inside runMistralOcr and throw "Input Buffer is
+ *  empty". */
+async function isAdSizedImage(buf: Buffer | null): Promise<boolean> {
+  if (!buf || buf.length < MIN_AD_IMAGE_BYTES) return false;
+  try {
+    const { width, height } = await sharp(buf).metadata();
+    return Boolean(width && height && width >= MIN_AD_IMAGE_WIDTH && height >= MIN_AD_IMAGE_HEIGHT);
+  } catch {
+    return false;
+  }
+}
+
 function offerSignature(siteId: string, offer: ExtractedOffer): string {
   return [
     siteId,
@@ -661,8 +717,10 @@ async function serviceCouponOffers(
         const resp = await fetch(coupon.imageUrl, { signal: AbortSignal.timeout(10_000) });
         if (resp.ok) {
           const buf = Buffer.from(await resp.arrayBuffer());
-          const artifact = await runMistralOcr(buf);
-          ocrText = artifact?.imageText ?? null;
+          if (await isAdSizedImage(buf)) {
+            const artifact = await runMistralOcr(buf);
+            ocrText = artifact?.imageText ?? null;
+          }
         }
       } catch {
         // Image fetch/OCR failed — fall back to the alt cross-check alone.
@@ -1173,6 +1231,7 @@ async function processAnalysis(
           if (!resp.ok) continue;
           imageBuf = Buffer.from(await resp.arrayBuffer());
         } catch { continue; }
+        if (!(await isAdSizedImage(imageBuf))) continue;
         const artifact = await runMistralOcr(imageBuf);
         if (!artifact || !artifact.imageText.trim()) continue;
         const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
@@ -1619,6 +1678,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
               if (!resp.ok) continue;
               imageBuf = Buffer.from(await resp.arrayBuffer());
             } catch { continue; }
+            if (!(await isAdSizedImage(imageBuf))) continue;
             const artifact = await runMistralOcr(imageBuf);
             if (!artifact || !artifact.imageText.trim()) continue;
             const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
