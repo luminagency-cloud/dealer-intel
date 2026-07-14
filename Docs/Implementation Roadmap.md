@@ -154,6 +154,19 @@ Done when:
 - Month-to-date sales has a known source and ingestion model, if we decide to
   include it.
 
+### 6. Remote Operator Access
+
+Status: **planned, not yet implemented** — see
+`Docs/-future/Remote Operator Setup Plan.md` for the full plan.
+
+Done when:
+
+- Tailscale + NSSM are set up so a second, non-technical operator can drive
+  collection from the operator's own persistent machine without installing
+  Node/Git/Playwright or touching `.env`.
+- The sibling `dealer-inventory-api` local start requirements are verified
+  (currently unconfirmed — that repo is out of scope for this workspace).
+
 ## Not Currently Open
 
 These should not be re-added as tasks unless new evidence proves they are
