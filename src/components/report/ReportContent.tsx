@@ -75,6 +75,139 @@ const REPORT_LINK_CLASS =
   "text-sm font-semibold text-blue-700 hover:underline dark:text-blue-300";
 const REPORT_BORDER_CLASS = "border-zinc-200 dark:border-zinc-800";
 
+// ---------------------------------------------------------------------------
+// Compliance reason cell — clickable failure reasons
+// ---------------------------------------------------------------------------
+//
+// The grading pass stores its findings as JSON on each offer. For real (AdScore)
+// grades the human-readable reasons live in `details.findings.violations[]` —
+// an array of deduction objects (label, explanation, severity, citation,
+// points). The report table renders a short "N issues — view" link that opens
+// a modal listing those reasons as plain formatted text. Falls back to a plain
+// `details.reason` string (stub grader) or an em dash when nothing is stored.
+
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function extractComplianceViolations(
+  details: Record<string, unknown> | null,
+): Record<string, unknown>[] {
+  if (!details) return [];
+  const findings = details.findings;
+  const fromFindings =
+    findings && typeof findings === "object" && !Array.isArray(findings)
+      ? (findings as Record<string, unknown>).violations
+      : undefined;
+  const raw = Array.isArray(fromFindings)
+    ? fromFindings
+    : Array.isArray(details.violations)
+      ? (details.violations as unknown[])
+      : [];
+  return raw.filter(
+    (v): v is Record<string, unknown> =>
+      typeof v === "object" && v !== null && !Array.isArray(v),
+  );
+}
+
+function ComplianceReasonCell({
+  details,
+}: {
+  details: Record<string, unknown> | null;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const violations = extractComplianceViolations(details);
+  const reasonText = asTrimmedString(details?.reason);
+
+  if (violations.length === 0) {
+    return (
+      <span className="text-black dark:text-zinc-50">{reasonText ?? "—"}</span>
+    );
+  }
+
+  const count = violations.length;
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className={REPORT_LINK_CLASS}>
+        {count} issue{count !== 1 ? "s" : ""} — view
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Compliance failure reasons"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl dark:bg-zinc-950"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className={`sticky top-0 flex items-center justify-between border-b bg-white px-5 py-4 dark:bg-zinc-950 ${REPORT_BORDER_CLASS}`}
+            >
+              <h3 className="text-base font-semibold text-black dark:text-zinc-50">
+                Why this ad was flagged
+              </h3>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Close
+              </button>
+            </div>
+            <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              {violations.map((v, i) => {
+                const label =
+                  asTrimmedString(v.label) ??
+                  asTrimmedString(v.ruleId) ??
+                  `Issue ${i + 1}`;
+                const explanation = asTrimmedString(v.explanation);
+                const severity = asTrimmedString(v.severity);
+                const citation = asTrimmedString(v.citation);
+                const category = asTrimmedString(v.categoryLabel);
+                const pts =
+                  typeof v.appliedPoints === "number"
+                    ? v.appliedPoints
+                    : typeof v.points === "number"
+                      ? v.points
+                      : null;
+                return (
+                  <li key={i} className="px-5 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm font-semibold text-black dark:text-zinc-50">
+                        {label}
+                      </p>
+                      {severity && (
+                        <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-red-800 dark:bg-red-900 dark:text-red-200">
+                          {severity}
+                        </span>
+                      )}
+                    </div>
+                    {explanation && (
+                      <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">
+                        {explanation}
+                      </p>
+                    )}
+                    {(category || citation || pts !== null) && (
+                      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                        {category && <span>{category}</span>}
+                        {citation && <span>{citation}</span>}
+                        {pts !== null && <span>{pts} pts</span>}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function SectionHeading({
   num,
   title,
@@ -1312,7 +1445,6 @@ export function ReportContent({
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                     {anchorGraded.map((o) => {
                       const details = o.complianceDetailsJson as Record<string, unknown> | null;
-                      const reason = details?.reason as string | undefined;
                       return (
                       <tr key={o.id}>
                         <td className="px-4 py-3 align-top text-black dark:text-zinc-50">
@@ -1339,7 +1471,7 @@ export function ReportContent({
                           </span>
                         </td>
                         <td className="px-4 py-3 align-top text-black dark:text-zinc-50">
-                          {reason ?? <span className="text-black dark:text-zinc-50">—</span>}
+                          <ComplianceReasonCell details={details} />
                         </td>
                         <td className="px-4 py-3 align-top">
                           {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
