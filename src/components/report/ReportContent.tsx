@@ -44,6 +44,9 @@ export interface ReportContentProps {
   inventoryData?: InventoryResult[];
   /** When true, show admin-only controls (Copy Link, Export CSV). */
   adminControls?: boolean;
+  /** Controls whether missing frozen public evidence URLs may fall back to the
+   *  admin-only route or the public share-token scoped route. */
+  evidenceAccess?: "admin" | "public";
   /** Absolute public shareable link for the "Copy shareable link" control.
    *  Omitted when a public viewer origin or share token is not available. */
   shareUrl?: string;
@@ -241,6 +244,17 @@ function Narrative({ text }: { text: string }) {
   );
 }
 
+function evidenceHref(
+  offer: SnapshotOffer,
+  snapshot: ReportSnapshot,
+  access: "admin" | "public"
+): string | null {
+  if (offer.evidenceUrl) return offer.evidenceUrl;
+  if (!offer.sourceEvidenceId) return null;
+  if (access === "admin") return `/api/evidence/${offer.sourceEvidenceId}/file`;
+  if (!snapshot.shareToken) return null;
+  return `/api/report-evidence/${encodeURIComponent(snapshot.shareToken)}/${offer.id}/file`;
+}
 // "Not Advertised" cell style
 const NA_CLASS =
   "text-sm font-semibold italic text-zinc-900 text-center dark:text-zinc-100";
@@ -535,10 +549,14 @@ function ServiceDealerCard({
   dealer,
   offers,
   emptyLabel,
+  snapshot,
+  evidenceAccess,
 }: {
   dealer: DealerCol;
   offers: SnapshotOffer[];
   emptyLabel: string;
+  snapshot: ReportSnapshot;
+  evidenceAccess: "admin" | "public";
 }) {
   const usesOfferGrid = offers.length > 1;
   const finalGridRowStart = offers.length % 2 === 0
@@ -590,7 +608,7 @@ function ServiceDealerCard({
                 ) : null}
                 {(o.evidenceUrl ?? o.sourceEvidenceId) && (
                   <a
-                    href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
+                    href={evidenceHref(o, snapshot, evidenceAccess) ?? undefined}
                     target="_blank"
                     rel="noreferrer"
                     className="mt-1 block text-sm font-semibold text-blue-700 hover:underline dark:text-blue-300"
@@ -658,6 +676,7 @@ export function ReportContent({
   news,
   inventoryData = [],
   adminControls = false,
+  evidenceAccess = adminControls ? "admin" : "public",
   shareUrl,
   shareUrlUnavailableLabel,
   containerClassName = "mx-auto max-w-6xl px-4 py-8",
@@ -1046,7 +1065,7 @@ export function ReportContent({
                     )}
                     {(offer.evidenceUrl ?? offer.sourceEvidenceId) && (
                       <a
-                        href={offer.evidenceUrl ?? `/api/evidence/${offer.sourceEvidenceId}/file`}
+                        href={evidenceHref(offer, snapshot, evidenceAccess) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
                         className={REPORT_LINK_CLASS}
@@ -1155,6 +1174,8 @@ export function ReportContent({
                   dealer={d}
                   offers={dOffers}
                   emptyLabel="NA"
+                  snapshot={snapshot}
+                  evidenceAccess={evidenceAccess}
                 />
               );
             })}
@@ -1476,7 +1497,7 @@ export function ReportContent({
                         <td className="px-4 py-3 align-top">
                           {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
                             <a
-                              href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
+                              href={evidenceHref(o, snapshot, evidenceAccess) ?? undefined}
                               target="_blank"
                               rel="noreferrer"
                               className={REPORT_LINK_CLASS}

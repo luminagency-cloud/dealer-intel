@@ -48,6 +48,7 @@ export default async function PublicReportPage({
       news={news}
       inventoryData={inventoryData}
       adminControls={false}
+      evidenceAccess="public"
     />
   );
 }

@@ -386,6 +386,29 @@ export async function listSnapshotOffers(
     .orderBy(asc(snapshotOffers.siteName));
 }
 
+/** Resolve a public report's linked evidence through the share token and
+ * snapshot offer id. This keeps public evidence access scoped to the visible
+ * report that rendered the link. */
+export async function getEvidenceForPublicSnapshotOffer(
+  shareToken: string,
+  snapshotOfferId: string
+): Promise<Evidence | undefined> {
+  const [row] = await getDb()
+    .select({ evidence })
+    .from(snapshotOffers)
+    .innerJoin(
+      reportSnapshots,
+      and(
+        eq(snapshotOffers.snapshotId, reportSnapshots.id),
+        eq(reportSnapshots.shareToken, shareToken),
+        eq(reportSnapshots.clientVisible, true)
+      )
+    )
+    .innerJoin(evidence, eq(evidence.id, snapshotOffers.sourceEvidenceId))
+    .where(eq(snapshotOffers.id, snapshotOfferId));
+  return row?.evidence;
+}
+
 export async function deleteReportSnapshot(id: string): Promise<void> {
   // snapshot_offers cascade via FK; the snapshot owns no R2 objects (it links
   // to the run's evidence, which the run delete cleans up).
