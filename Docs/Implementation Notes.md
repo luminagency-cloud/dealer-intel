@@ -1,6 +1,6 @@
 # Implementation Notes
 
-_Last updated: July 1, 2026_
+_Last updated: July 18, 2026_
 
 This is the compact map of how the system works. The open work list lives in
 `Docs/Implementation Roadmap.md`.
@@ -12,8 +12,11 @@ Dealer Intel is a collect -> analyze -> report pipeline.
 Collection creates raw evidence. Analysis reads evidence and creates structured
 offers/compliance grades. Reporting reads published snapshots.
 
-The important boundary: reports never read live run data and never visit dealer
-sites.
+The important boundary: analysis never scrapes, and core offer/compliance
+reporting never reads live run data or visits dealer sites.
+
+Reports may show latest inventory as an operational side section. That
+inventory context does not create offers, compliance grades, or offer rankings.
 
 ## Collection
 
@@ -30,6 +33,10 @@ For each site, the run executor groups selected missions together and calls
 `collectSite` opens one browser session for that site, runs the selected
 missions inside it, and shares a capture cache by URL + exploration signature.
 If a mission captures zero pages, it gets one fresh-session retry.
+
+Run progress is persisted to `mission_results` and exposed through
+`src/app/api/runs/[id]/status/route.ts`. The run page polls that narrow status
+endpoint through `src/components/run-live-data.tsx`.
 
 Key files:
 
@@ -90,7 +97,8 @@ finance, vehicle, and disclaimer terms. Other image-only pages (zero DOM-text
 offers) are OCR'd with Mistral (`MISTRAL_API_KEY`) and run through the same
 deterministic extractor as DOM text — Mistral reads the image, the app
 classifies it. OCR text is stored in `ocr_artifacts` (one row per screenshot)
-for audit/debug, never fed back into classification.
+for audit/debug before deterministic extraction. `MISTRAL_API_KEY` is present
+locally and the `ocr_artifacts` migration has been applied.
 
 AdScore compliance is implemented through `AdScoreComplianceGrader` and is used
 when all `ADGRADER_*` variables are configured. Otherwise the system falls back
@@ -109,7 +117,7 @@ Key files:
 
 Publishing creates an immutable snapshot from the current run analysis.
 
-Reports read only:
+Core report offer/compliance data reads only:
 
 - `report_snapshots`,
 - `snapshot_offers`,
@@ -117,6 +125,11 @@ Reports read only:
 
 Re-running collection or analysis does not mutate an already-published
 snapshot.
+
+Report pages can also load latest inventory rows for the report's dealer group
+and render them as an Inventory Snapshot section. Snapshot history is shown for
+admin users when a run group has prior snapshots; true current-vs-prior report
+deltas are still backlog.
 
 Key files:
 

@@ -1,121 +1,99 @@
 # Dealer Intel Working List
 
-_Last updated: July 13, 2026_
+_Last updated: July 18, 2026_
 
-This is the single human-readable place for current status and open work.
-If something is done, it should not live here as a future task.
+This is the current human-readable status and backlog. If something is done, it
+should not live here as future work.
 
 ## Product Truth
 
-Dealer Intel runs as a simple pipeline:
+Dealer Intel is a collect -> analyze -> report platform.
 
 1. **Collect** promotional evidence from dealer sites.
 2. **Analyze** stored evidence into offers and compliance grades.
-3. **Report** from published snapshots only.
+3. **Report** from published snapshots.
 
-Reports do not scrape sites. Analysis does not scrape sites. Collection stores
-raw evidence first, then everything downstream reads that evidence.
+Collection stores raw evidence first. Analysis reads stored evidence. Core
+offer/compliance reporting reads published snapshots, not live run data and not
+dealer sites.
 
-## Collection Truth
+Inventory is operational context. Reports can show the latest inventory snapshot
+beside the frozen offer snapshot, but inventory does not create offers,
+compliance grades, or offer rankings.
 
-A run selects sites and missions.
+## Current Verified Status
 
-For each dealer/site, the selected missions run in one browser session with a
-shared capture cache. Missions are targeting buckets, not separate browser jobs.
+Secret values were not printed.
 
-That means a normal run should not open one browser for finance, close it, open
-another browser for service, and so on. A single-mission retry can still launch
-its own session because it is intentionally retrying one row.
+### Collection
 
-## Verified
+Status: **implemented**
 
-These are facts checked from the repo/workspace on July 1, 2026. Secret values
-were not printed.
+- Collection is dealer/site-scoped.
+- For each dealer/site, selected missions run in one browser session through
+  `collectSite`.
+- Missions share a capture cache by URL + exploration signature, so mission
+  buckets do not become separate browser jobs.
+- A single-mission retry can still open its own fresh session.
+- Run progress is exposed through `src/app/api/runs/[id]/status/route.ts`, and
+  `src/components/run-live-data.tsx` polls that endpoint instead of refreshing
+  the whole run page for status-only updates.
 
-### AdScore Compliance
+### Analysis
 
-Status: **implemented, configured, and producing real stored grades**
+Status: **implemented and configured**
 
-Evidence:
+- Rule-based extraction is the primary offer parser.
+- Claude is a text-only low-confidence correction pass through
+  `src/lib/analysis/ai-enrich.ts`, gated on `ANTHROPIC_API_KEY`.
+- Dealer Inspire Scene7 image ads are parsed directly from their structured URL
+  parameters before OCR.
+- Other image-only evidence is OCR'd through Mistral in
+  `src/lib/analysis/ocr-mistral.ts`, gated on `MISTRAL_API_KEY`.
+- Mistral OCR text is stored in `ocr_artifacts` for audit/debug and then passed
+  through the deterministic extractor. Mistral reads the image; the app
+  classifies the offer.
+- `MISTRAL_API_KEY` is present in `.env`.
+- The `ocr_artifacts` migration has been applied.
+
+### Compliance
+
+Status: **implemented and configured**
 
 - `src/lib/analysis/compliance.ts` contains `AdScoreComplianceGrader`.
 - `getComplianceGrader(runId)` selects AdScore when all `ADGRADER_*` variables
   are present.
-- The local `.env` contains:
-  - `ADGRADER_BASE_URL`
-  - `ADGRADER_CLIENT_ID`
-  - `ADGRADER_CLIENT_SECRET`
-- A read-only database check found 65 compliance grades:
-  - 48 real AdScore results,
-  - 0 stub results,
-  - 17 not-applicable results.
-
-What remains open:
-
-- No known AdScore wiring work.
+- `.env` contains the AdScore configuration keys.
 - If future grades fall back to stub, inspect server logs for the reason:
   missing screenshot, missing market state, API error, or 422 retry failure.
-
-### AI-Assisted Analysis
-
-Status: **implemented, configured, and producing AI-assisted offers** (text
-pass); image-only OCR pass moved from Claude Vision to Mistral OCR on
-2026-07-06.
-
-Evidence:
-
-- `src/lib/analysis/ai-enrich.ts` contains `ClaudeOfferEnricher` — text-only
-  low-confidence correction, gated on `ANTHROPIC_API_KEY`. It never receives
-  an image.
-- `src/lib/analysis/ocr-mistral.ts` contains `runMistralOcr` — OCRs image-only
-  screenshots, gated on `MISTRAL_API_KEY`. `runner.ts` runs the OCR'd text
-  through the same deterministic `extractOffers()` used for DOM text (Mistral
-  reads the ad; the app classifies it) and persists the raw OCR read to the
-  `ocr_artifacts` table for audit/debug.
-- The local `.env` contains `ANTHROPIC_API_KEY`.
-- A read-only database check found 146 offers total, with 25 marked
-  `normalized_json.aiAssisted=true` (pre-migration figure — from the Claude
-  Vision era).
-
-What remains open:
-
-- `MISTRAL_API_KEY` is not yet in `.env` — the image-only pass is
-  currently disabled until it's added.
-- The `ocr_artifacts` migration (`drizzle/0026_classy_the_spike.sql`) has been
-  generated but not yet applied — run `npm run db:migrate` before the image
-  pass can write OCR artifacts.
-- If the UI does not show the AI badge for AI-assisted rows, that is a UI bug,
-  not an integration task.
 
 ### News And Inventory
 
 Status: **implemented and locally configured**
 
-Evidence:
+- `.env` contains the news and inventory API configuration keys.
+- News and inventory are wired into the current ops flow.
+- Inventory runs through the inventory page/batch flow and appears in report
+  views as an Inventory Snapshot section.
+- Local inventory mode can auto-start the sibling `dealer-inventory-api` process
+  when configured.
 
-- The local `.env` contains `NEWS_API_URL`, `NEWS_API_KEY`,
-  `INVENTORY_API_URL`, and `INVENTORY_API_KEY`.
-- News and inventory modules exist and are wired into the current ops flow.
+### Reporting
 
-What remains open:
+Status: **implemented**
 
-- No wiring task is currently known from docs alone.
-- If the UI says either service is not configured, investigate environment
-  loading first.
+- Publishing creates immutable report snapshots.
+- Offer/compliance report content reads from `report_snapshots` and
+  `snapshot_offers`.
+- Report pages can show snapshot history for a run group.
+- Public report sharing uses snapshot share tokens.
 
 ## Actually Open
 
-### 1. Environment Source Convention
+### 1. Dealer Inspire / Dealer Alchemist Disclaimer Capture
 
-Status: **resolved July 13, 2026**
-
-The workspace uses `.env` for local configuration. Project instructions,
-user-facing configuration messages, and implementation notes should refer to
-`.env`, not `.env.local`.
-
-### 2. Dealer Inspire / Dealer Alchemist Disclaimer Capture
-
-Known risk: disclaimer modal selectors may not match these platforms.
+Known risk: disclaimer modal selectors may not match these platforms on all
+real dealer pages.
 
 Done when:
 
@@ -123,54 +101,39 @@ Done when:
   text into `evidence.text_content`.
 - Captured text is tied to the ad, not footer/legal boilerplate.
 
-### 3. Run Page Progress Polling
+### 2. Report Trend Deltas
 
-Current run-page refresh may be heavier than needed.
-
-Done when:
-
-- A narrow progress endpoint returns run execution state and work-item statuses.
-- The run page polls that endpoint instead of refreshing the whole page for
-  status-only updates.
-
-### 4. Report Trend Deltas
-
-Backlog item.
+Snapshot history exists, but true current-vs-prior deltas are still backlog.
 
 Done when:
 
-- Reports can compare the current published snapshot with the prior group
-  snapshot.
-- Deltas come only from published snapshots, not live run data.
+- Reports compare the current published snapshot with the prior group snapshot.
+- Deltas come from published snapshots, not live run data.
 
-### 5. Inventory And Sales In Reports
+### 3. Month-To-Date Sales In Reports
 
-Backlog/decision item.
+Inventory is already in reports. Month-to-date sales is still unresolved.
 
 Done when:
 
-- We decide whether inventory belongs directly in the competitive report or
-  remains an operational side view.
-- Month-to-date sales has a known source and ingestion model, if we decide to
-  include it.
+- Month-to-date sales has a known source.
+- The ingestion and report model are defined, if we decide to include it.
 
-### 6. Remote Operator Access
+### 4. Remote Operator Access
 
-Status: **planned, not yet implemented** — see
-`Docs/-future/Remote Operator Setup Plan.md` for the full plan.
+Status: **planned, not yet implemented**. See
+`Docs/-future/Remote Operator Setup Plan.md`.
 
 Done when:
 
 - Tailscale + NSSM are set up so a second, non-technical operator can drive
   collection from the operator's own persistent machine without installing
   Node/Git/Playwright or touching `.env`.
-- The sibling `dealer-inventory-api` local start requirements are verified
-  (currently unconfirmed — that repo is out of scope for this workspace).
+- The sibling `dealer-inventory-api` local start requirements are verified.
 
 ## Not Currently Open
 
-These should not be re-added as tasks unless new evidence proves they are
-broken:
+Do not re-add these as tasks unless new evidence proves they are broken:
 
 - Build the collector.
 - Build missions.
@@ -181,10 +144,14 @@ broken:
 - Build reports.
 - Wire AdScore code from scratch.
 - Add an Anthropic key locally.
+- Add a Mistral key locally.
+- Apply the OCR artifacts migration.
+- Build run-page progress polling.
+- Decide whether inventory belongs in reports.
 - Wire news from scratch.
 - Wire inventory from scratch.
 
-## Before Calling Work Done
+## Before Calling Code Work Done
 
 For code changes:
 
