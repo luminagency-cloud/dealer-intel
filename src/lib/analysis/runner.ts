@@ -300,12 +300,20 @@ function extractDealerInspireScene7Offers(
 const globalState = globalThis as unknown as {
   __activeAnalysisRuns?: Set<string>;
   __analysisProgress?: Map<string, { processed: number; total: number }>;
+  __analysisQueueState?: {
+    queue: AnalysisQueueTask[];
+    running: number;
+  };
 };
 const activeAnalyses = (globalState.__activeAnalysisRuns ??= new Set<string>());
 const analysisProgress = (globalState.__analysisProgress ??= new Map<
   string,
   { processed: number; total: number }
 >());
+const ANALYSIS_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.ANALYSIS_CONCURRENCY ?? "1", 10)
+);
 
 export function isAnalysisRunning(runId: string): boolean {
   return activeAnalyses.has(runId);
@@ -354,6 +362,40 @@ interface SiteInfo {
 interface EvidenceWithSite {
   evidence: Evidence;
   site: SiteInfo;
+}
+
+interface AnalysisQueueTask {
+  runId: string;
+  rows: EvidenceWithSite[];
+  resume: boolean;
+}
+
+const analysisQueueState = (globalState.__analysisQueueState ??= {
+  queue: [],
+  running: 0,
+});
+
+function enqueueAnalysis(task: AnalysisQueueTask): void {
+  analysisQueueState.queue.push(task);
+  drainAnalysisQueue();
+}
+
+function drainAnalysisQueue(): void {
+  while (
+    analysisQueueState.running < ANALYSIS_CONCURRENCY &&
+    analysisQueueState.queue.length > 0
+  ) {
+    const task = analysisQueueState.queue.shift()!;
+    analysisQueueState.running++;
+    void processAnalysis(task.runId, task.rows, task.resume)
+      .catch((err) => {
+        console.error(`analysis for run ${task.runId} crashed:`, err);
+      })
+      .finally(() => {
+        analysisQueueState.running--;
+        drainAnalysisQueue();
+      });
+  }
 }
 
 async function loadAnalyzableEvidence(
@@ -797,8 +839,6 @@ async function processAnalysis(
     const screenshotIndex = await loadScreenshotIndex(runId);
     const disclaimerEvidence = await loadDisclaimerEvidence(runId);
     analysisProgress.set(runId, { processed: 0, total: rows.length + disclaimerEvidence.length });
-    // Cache R2 fetches: screenshot bytes keyed by evidence row ID.
-    const screenshotCache = new Map<string, Buffer | null>();
     // Cache Mistral OCR reads per screenshot evidence id (see getOcrArtifact).
     const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
 
@@ -855,13 +895,7 @@ async function processAnalysis(
       // the same page; avoid redundant R2 reads via the cache).
       let screenshotBuffer: Buffer | null = null;
       if (screenshotRow) {
-        if (!screenshotCache.has(screenshotRow.id)) {
-          screenshotCache.set(
-            screenshotRow.id,
-            await getEvidenceBody(screenshotRow)
-          );
-        }
-        screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
+        screenshotBuffer = await getEvidenceBody(screenshotRow);
       }
 
       const prog = analysisProgress.get(runId);
@@ -1009,10 +1043,7 @@ async function processAnalysis(
       ].filter((s): s is string => Boolean(s));
 
       // The disclaimer screenshot IS the ad image — use it for compliance.
-      if (!screenshotCache.has(row.id)) {
-        screenshotCache.set(row.id, await getEvidenceBody(row));
-      }
-      const screenshotBuffer = screenshotCache.get(row.id) ?? null;
+      const screenshotBuffer = await getEvidenceBody(row);
 
       const pageText = text;
 
@@ -1288,10 +1319,7 @@ async function processAnalysis(
         const screenshotKey = `${htmlRow.siteId}:${htmlRow.missionType}:${htmlRow.label ?? ""}`;
         const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
         if (screenshotRow) {
-          if (!screenshotCache.has(screenshotRow.id)) {
-            screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
-          }
-          const buf = screenshotCache.get(screenshotRow.id) ?? null;
+          const buf = await getEvidenceBody(screenshotRow);
           if (buf) {
             const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
             const extracted = artifact && artifact.imageText.trim()
@@ -1454,10 +1482,7 @@ export async function startAnalysis(runId: string, { resume = false }: { resume?
       .update(collectionRuns)
       .set({ analysisStartedAt: new Date() })
       .where(eq(collectionRuns.id, runId));
-    void processAnalysis(runId, rows, resume).catch((err) => {
-      console.error(`analysis for run ${runId} crashed:`, err);
-      activeAnalyses.delete(runId);
-    });
+    enqueueAnalysis({ runId, rows, resume });
     return rows.length;
   } catch (err) {
     activeAnalyses.delete(runId);
@@ -1515,7 +1540,6 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       const aiThreshold = aiConfidenceThreshold();
       const capturedDisclaimers = await loadCapturedDisclaimers(runId);
       const screenshotIndex = await loadScreenshotIndex(runId);
-      const screenshotCache = new Map<string, Buffer | null>();
       const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
       const seen = new Set<string>();
       // Per-page text yield, to gate the image pass per page (see processAnalysis).
@@ -1535,10 +1559,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
         let screenshotBuffer: Buffer | null = null;
         if (screenshotRow) {
-          if (!screenshotCache.has(screenshotRow.id)) {
-            screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
-          }
-          screenshotBuffer = screenshotCache.get(screenshotRow.id) ?? null;
+          screenshotBuffer = await getEvidenceBody(screenshotRow);
         }
         for (const offer of extracted) {
           const sig = [row.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
@@ -1575,8 +1596,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         const text = row.textContent!;
         const extracted = extractOffers(text, { missionType: row.missionType, brand: site.brand });
         const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
-        if (!screenshotCache.has(row.id)) screenshotCache.set(row.id, await getEvidenceBody(row));
-        const screenshotBuffer = screenshotCache.get(row.id) ?? null;
+        const screenshotBuffer = await getEvidenceBody(row);
         for (const offer of extracted) {
           let effective = offer;
           if (!effective.vehicleModel && row.label) {
@@ -1706,10 +1726,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           const screenshotKey = `${htmlRow.siteId}:${htmlRow.missionType}:${htmlRow.label ?? ""}`;
           const screenshotRow = screenshotIndex.get(screenshotKey) ?? null;
           if (screenshotRow) {
-            if (!screenshotCache.has(screenshotRow.id)) {
-              screenshotCache.set(screenshotRow.id, await getEvidenceBody(screenshotRow));
-            }
-            const buf = screenshotCache.get(screenshotRow.id) ?? null;
+            const buf = await getEvidenceBody(screenshotRow);
             if (buf) {
               const artifact = await getOcrArtifact(db, runId, screenshotRow, ocrCache, buf);
               const extracted = artifact && artifact.imageText.trim()

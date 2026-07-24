@@ -1,6 +1,6 @@
 # Dealer Intel Working List
 
-_Last updated: July 18, 2026_
+_Last updated: July 19, 2026_
 
 This is the current human-readable status and backlog. If something is done, it
 should not live here as future work.
@@ -55,6 +55,11 @@ Status: **implemented and configured**
   classifies the offer.
 - `MISTRAL_API_KEY` is present in `.env`.
 - The `ocr_artifacts` migration has been applied.
+- Full-run analyses are queued in-process and run with `ANALYSIS_CONCURRENCY`
+  parallel workers, defaulting to 1. This keeps an all-groups collection from
+  starting many OCR/compliance-heavy analysis passes at once.
+- If Mistral returns 401 Unauthorized, OCR is disabled for that server process
+  until the key is fixed and the app is restarted.
 
 ### Compliance
 

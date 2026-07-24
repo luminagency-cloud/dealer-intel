@@ -1,6 +1,6 @@
 # Implementation Notes
 
-_Last updated: July 18, 2026_
+_Last updated: July 19, 2026_
 
 This is the compact map of how the system works. The open work list lives in
 `Docs/Implementation Roadmap.md`.
@@ -99,6 +99,12 @@ deterministic extractor as DOM text — Mistral reads the image, the app
 classifies it. OCR text is stored in `ocr_artifacts` (one row per screenshot)
 for audit/debug before deterministic extraction. `MISTRAL_API_KEY` is present
 locally and the `ocr_artifacts` migration has been applied.
+
+Full-run analysis jobs are queued in-process and limited by
+`ANALYSIS_CONCURRENCY` (default: 1) so auto-analysis after a large collection
+does not run many OCR/compliance-heavy passes at once. The runner does not keep
+raw screenshot buffers in a run-wide cache; it fetches screenshot bytes only for
+the current page/ad operation.
 
 AdScore compliance is implemented through `AdScoreComplianceGrader` and is used
 when all `ADGRADER_*` variables are configured. Otherwise the system falls back

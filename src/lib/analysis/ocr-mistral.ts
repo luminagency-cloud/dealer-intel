@@ -27,6 +27,7 @@ export interface OcrArtifact {
 }
 
 const MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr";
+let mistralUnauthorized = false;
 
 function mistralModel(): string {
   return process.env.MISTRAL_OCR_MODEL || "mistral-ocr-latest";
@@ -108,6 +109,7 @@ export async function runMistralOcr(
 ): Promise<OcrArtifact | null> {
   const apiKey = process.env.MISTRAL_API_KEY;
   if (!apiKey) return null;
+  if (mistralUnauthorized) return null;
 
   let imageBase64: string;
   try {
@@ -138,6 +140,12 @@ export async function runMistralOcr(
     const resp = await fetchMistralWithRetry(body, apiKey);
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
+      if (resp.status === 401) {
+        mistralUnauthorized = true;
+        console.error(
+          "[ocr-mistral] disabling OCR for this server process after 401 unauthorized; fix MISTRAL_API_KEY and restart the app"
+        );
+      }
       console.error(`[ocr-mistral] request failed status=${resp.status} model=${model}: ${text.slice(0, 300)}`);
       return null;
     }
