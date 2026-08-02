@@ -1,0 +1,2 @@
+CREATE TYPE "public"."collector_mode" AS ENUM('current', 'chrome_extension');--> statement-breakpoint
+ALTER TABLE "collection_runs" ADD COLUMN "collector_mode" "collector_mode" DEFAULT 'current' NOT NULL;

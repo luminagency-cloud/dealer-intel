@@ -85,6 +85,17 @@ export function RunScopePicker({
         className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm font-mono text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
       />
 
+      {/* Collector backend — persisted on the run, never a global toggle. */}
+      <select
+        name="collectorMode"
+        defaultValue="current"
+        aria-label="Collector"
+        className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+      >
+        <option value="current">Collector: Current</option>
+        <option value="chrome_extension">Collector: Chrome extension</option>
+      </select>
+
       {/* Scope selector */}
       <select
         name="scope"

@@ -220,6 +220,13 @@ export function AnalysisSection({
               {totalMin(analysisStartedAt, analysisCompletedAt) && (
                 <> · {totalMin(analysisStartedAt, analysisCompletedAt)}</>
               )}
+              {analysisCompletedAt && evidencePageCount > 0 && (
+                <>
+                  {" · "}Analyzed {evidencePageCount} page
+                  {evidencePageCount === 1 ? "" : "s"} · {offers.length} offer
+                  {offers.length === 1 ? "" : "s"} found
+                </>
+              )}
             </p>
           ) : null}
         </div>
@@ -303,7 +310,7 @@ export function AnalysisSection({
                     <th className="px-4 py-2 font-medium">Term</th>
                     <th className="px-4 py-2 font-medium">Due</th>
                     <th className="px-4 py-2 font-medium">Mi/Yr</th>
-                    <th className="px-4 py-2 font-medium">Cash</th>
+                    <th className="px-4 py-2 font-medium">Purchase Price</th>
                     <th className="px-2 py-2 font-medium">Conf.</th>
                     <th className="px-4 py-2 font-medium" title="Compliance grade">Grade</th>
                     <th className="px-4 py-2 font-medium">Ad</th>
@@ -367,9 +374,7 @@ export function AnalysisSection({
                             ? ((offer.normalizedJson as { matches?: { serviceOffer?: string } } | null)?.matches?.serviceOffer ?? "—")
                             : offer.monthlyPayment !== null
                               ? `${money(offer.monthlyPayment)}/mo`
-                              : offer.salePrice !== null
-                                ? money(offer.salePrice)
-                                : "—"}
+                              : "—"}
                           {verify && (
                             <span
                               className={`ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
@@ -400,7 +405,7 @@ export function AnalysisSection({
                             : fmtMileage(offer.mileageAllowance)}
                         </td>
                         <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
-                          {money(offer.cashIncentive)}
+                          {money(offer.salePrice)}
                         </td>
                         <td className="px-2 py-3">
                           <div className="flex items-center gap-1 whitespace-nowrap">

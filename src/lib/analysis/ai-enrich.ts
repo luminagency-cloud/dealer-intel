@@ -93,10 +93,10 @@ const SYSTEM_PROMPT = `You extract a single automotive dealer ADVERTISED OFFER f
 
 Rules:
 - Identify the ONE offer the rule-based guess is anchored on (matched by its monthly payment / price), not every offer on the page. Multi-offer pages are why this is hard — keep the vehicle, payment, term, APR, cash, and due-at-signing consistent with that single ad.
-- offerType: "lease" (a monthly payment the ad calls a lease — the word "lease" by the payment, or a due-at-signing figure, or an annual mileage allowance; due-at-signing is often only in the fine print, so its absence does NOT make it finance), "finance" (APR, or a monthly payment + term with no lease markers), "cash" (rebate/cash incentive OR a raw sale/cash price), "service" (service-department special), or "promotional" (no priced terms).
+- offerType: "lease" (a monthly payment the ad calls a lease — the word "lease" by the payment, or a due-at-signing figure, or an annual mileage allowance; due-at-signing is often only in the fine print, so its absence does NOT make it finance), "finance" (APR, or a monthly payment + term with no lease markers), "cash" (an explicitly advertised purchase/sale price), "service" (service-department special), or "promotional" (no priced terms). Customer cash, bonus cash, rebates, and discounts are NOT cash offers.
 - Vehicle make/model/trim must be the real advertised vehicle for THIS offer. Use null when not stated — never guess a model from page navigation or headers. The rule-based guess's vehicleModel may already be resolved from an OCR'd ad image (image-only platforms bake the vehicle name into the image rather than the DOM) — trust it unless the page text clearly contradicts it.
 - Money as plain numbers (no $ or commas). Term in whole months. APR as a percent number.
-- cashIncentive: a discount/rebate dollar amount (e.g. "$1,000 cash back", "$500 off"). salePrice: the raw advertised sale or cash price of the vehicle (e.g. "Sale Price $28,999"). Use null when not present.
+- cashIncentive: always null. Customer cash, bonus cash, rebates, and discounts must not be attached to lease/finance offers or emitted as standalone offers. salePrice: the explicitly advertised purchase price of the vehicle (e.g. "Sale Price $28,999" or "Buy this car for $28,999"). Use null when not present.
 - mileageAllowance: for lease offers, the annual mileage allowance in miles/year (e.g. "10,000 miles per year" → 10000). Use null when not a lease or not stated.
 - DISCLAIMER (hard rule): the disclaimer is the fine print tied to THIS specific ad (it sits with the offer, e.g. "MSRP $X. Lease for $Y/mo, $Z due at signing..."). It is NEVER the site-wide footer legalese (Terms of Use, Privacy, ©, "do not sell"). Use null if no ad-specific disclaimer is present.
 - confidence: your 0..1 confidence in this corrected offer.`;
@@ -143,7 +143,18 @@ export class ClaudeOfferEnricher implements OfferEnricher {
         messages: [{ role: "user", content: textContent }],
         output_config: { format: zodOutputFormat(EnrichmentSchema) },
       });
-      return response.parsed_output ?? null;
+      const parsed = response.parsed_output;
+      if (!parsed) return null;
+      // Enforce product taxonomy even if the model follows older automotive
+      // conventions: incentives never become or decorate a cash offer.
+      return {
+        ...parsed,
+        offerType:
+          parsed.offerType === "cash" && parsed.salePrice === null
+            ? "promotional"
+            : parsed.offerType,
+        cashIncentive: null,
+      };
     } catch (err) {
       console.error("AI offer enrichment failed:", err);
       return null;

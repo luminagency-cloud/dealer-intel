@@ -42,7 +42,7 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
             <th className="px-4 py-2 font-medium">Term</th>
             <th className="px-4 py-2 font-medium">Due</th>
             <th className="px-4 py-2 font-medium">Mi/Yr</th>
-            <th className="px-4 py-2 font-medium">Cash</th>
+            <th className="px-4 py-2 font-medium">Purchase Price</th>
             <th className="px-4 py-2 font-medium">Conf.</th>
             <th className="px-4 py-2 font-medium">Compliance</th>
             <th className="px-4 py-2 font-medium">Evidence</th>
@@ -94,7 +94,7 @@ export function SnapshotOffersTable({ offers }: { offers: SnapshotOffer[] }) {
                     : fmtMileage(offer.mileageAllowance)}
                 </td>
                 <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
-                  {money(offer.cashIncentive)}
+                  {money(offer.salePrice)}
                 </td>
                 <td
                   className={`px-4 py-3 font-medium ${confidenceStyle(offer.confidence)}`}

@@ -2,8 +2,9 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import type { Mission, MissionResult, MissionResultStatus, Site, SiteMission } from "@/lib/db";
+import type { CollectorMode, Mission, MissionResult, MissionResultStatus, Site, SiteMission } from "@/lib/db";
 import { MissionStatusBadge } from "@/components/mission-status-badge";
+import { ChromeCollectorControl } from "@/components/chrome-collector-control";
 
 export interface PanelWorkItem {
   site: Site;
@@ -59,6 +60,9 @@ export function MissionRunPanel({
   partialAnalysisKeys,
   resumeAction,
   error,
+  collectorMode,
+  needsChromeRecovery,
+  switchToCurrentCollectorAction,
 }: {
   runId: string;
   items: PanelWorkItem[];
@@ -81,6 +85,9 @@ export function MissionRunPanel({
   partialAnalysisKeys?: Set<string>;
   resumeAction?: () => Promise<void>;
   error?: string;
+  collectorMode: CollectorMode;
+  needsChromeRecovery: boolean;
+  switchToCurrentCollectorAction: () => Promise<void>;
 }) {
   // Auto-collapse when the run is done — but stay open if a partial re-analysis
   // is in flight so the operator can see the per-row "Analyzing…" indicator.
@@ -124,7 +131,9 @@ export function MissionRunPanel({
         return result ? filter!.has(result.status) : false;
       });
 
-  const canBulkRecollect = !executing && (canCollect || !!forceReCollectAction);
+  const currentCollector = collectorMode === "current";
+  const canBulkRecollect =
+    currentCollector && !executing && (canCollect || !!forceReCollectAction);
 
   function toggleRow(key: string) {
     setSelected((prev) => {
@@ -186,8 +195,9 @@ export function MissionRunPanel({
             </span>
           </button>
           <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-200">
-            Runs in the background; this page refreshes itself while work is
-            in flight. Roughly a minute per page.
+            {currentCollector
+              ? "Runs in the background; this page refreshes itself while work is in flight. Roughly a minute per page."
+              : "Runs the selected dealers and missions sequentially in visible Chrome, reusing one browser session per dealer."}
           </p>
           {(collectionStartedAt || collectionCompletedAt) && (
             <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-200">
@@ -199,7 +209,14 @@ export function MissionRunPanel({
             </p>
           )}
         </div>
-        {items.length > 0 &&
+        {items.length > 0 && !currentCollector ? (
+          <ChromeCollectorControl
+            runId={runId}
+            canStart={canCollect && !executing}
+            needsRecovery={needsChromeRecovery}
+            switchToCurrentAction={switchToCurrentCollectorAction}
+          />
+        ) : items.length > 0 &&
           (executing ? (
             <button
               type="button"
@@ -397,7 +414,11 @@ export function MissionRunPanel({
                               </form>
                             )
                           )}
-                          {busy ? (
+                          {!currentCollector ? (
+                            <span className="text-xs text-zinc-700 dark:text-zinc-200">
+                              Chrome run
+                            </span>
+                          ) : busy ? (
                             <span className="text-xs text-zinc-700 dark:text-zinc-200">—</span>
                           ) : retryable && canCollect && !executing ? (
                             <form action={retryAction.bind(null, result.id)}>

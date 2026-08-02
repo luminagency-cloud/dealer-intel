@@ -742,8 +742,8 @@ export function ReportContent({
   const cashGrid = buildGrid(
     dealers,
     cashOffers,
-    (o) => o.cashIncentive,
-    "higher"
+    (o) => o.salePrice,
+    "lower"
   );
 
   // ---------------------------------------------------------------------------
@@ -1114,17 +1114,17 @@ export function ReportContent({
       </section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 4 · Cash & Discount Specials                                        */}
+      {/* 4 · Cash Purchase Offers                                             */}
       {/* ------------------------------------------------------------------ */}
       <section id="cash" className="mb-10">
         <SectionHeading
           num="4"
-          title="Cash &amp; Discount Specials"
-          sub="Ranked by advertised discount amount (larger = better)."
+          title="Cash Purchase Offers"
+          sub="Ranked by advertised purchase price (lower = better)."
         />
         {cashOffers.length === 0 ? (
           <div className={REPORT_EMPTY_CLASS}>
-            No cash or discount offers captured this period.
+            No advertised purchase prices captured this period.
           </div>
         ) : (
           <div className={REPORT_PANEL_CLASS}>
@@ -1134,10 +1134,8 @@ export function ReportContent({
                 rows={cashGrid}
                 renderCell={(_cell, offer) => (
                   <div className={REPORT_HEADLINE_CLASS}>
-                    {offer.cashIncentive != null
-                      ? `Up to ${fmtMoney(offer.cashIncentive)} off`
-                      : offer.salePrice != null
-                        ? `Sale price ${fmtMoney(offer.salePrice)}`
+                    {offer.salePrice != null
+                      ? `Purchase price ${fmtMoney(offer.salePrice)}`
                       : offer.rawText?.slice(0, 40) ?? "—"}
                   </div>
                 )}

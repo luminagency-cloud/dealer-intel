@@ -25,10 +25,13 @@ import { deleteRunDeep } from "@/lib/deep-delete";
 import {
   collectionRunMissions,
   collectionRunSites,
+  collectionRuns,
+  collectorModeEnum,
   evidence,
   evidenceTypeEnum,
   getDb,
   missionTypeEnum,
+  missionResults,
   missions,
   offerDispositions,
   offers,
@@ -36,6 +39,7 @@ import {
   runGroups,
   sites,
   type Evidence,
+  type CollectorMode,
   type EvidenceType,
   type MissionType,
   type OfferDisposition,
@@ -138,7 +142,18 @@ export async function createRun(formData?: FormData) {
       ? cycleValue.trim()
       : getISOWeekLabel();
 
-  const run = await createCollectionRun({ runGroupId: resolvedRunGroupId ?? resolvedRunGroupIdFromAllGroups, cycle });
+  const collectorModeValue = formData?.get("collectorMode");
+  const collectorMode = collectorModeEnum.enumValues.includes(
+    collectorModeValue as CollectorMode
+  )
+    ? (collectorModeValue as CollectorMode)
+    : "current";
+
+  const run = await createCollectionRun({
+    runGroupId: resolvedRunGroupId ?? resolvedRunGroupIdFromAllGroups,
+    cycle,
+    collectorMode,
+  });
   if (siteIds.length > 0) {
     await getDb()
       .insert(collectionRunSites)
@@ -153,7 +168,7 @@ export async function createRun(formData?: FormData) {
   }
   revalidatePath("/runs");
 
-  if (process.env.AUTO_START_RUN === "true") {
+  if (collectorMode === "current" && process.env.AUTO_START_RUN === "true") {
     void startRunExecution(run.id).catch((err) => {
       console.error(`AUTO_START_RUN: failed to start run ${run.id}:`, err);
     });
@@ -254,12 +269,22 @@ async function requireCollectableRun(runId: string) {
   return run;
 }
 
+async function requireCurrentCollector(runId: string) {
+  const run = await getCollectionRun(runId);
+  if (!run) throw new Error("Run not found");
+  if (run.collectorMode !== "current") {
+    throw new Error("This run is assigned to the Chrome extension collector");
+  }
+  return run;
+}
+
 export async function executeWorkItem(
   runId: string,
   siteId: string,
   missionId: string
 ) {
   await requireSession();
+  await requireCurrentCollector(runId);
   await requireCollectableRun(runId);
   const queued = await startRunExecution(runId, [{ siteId, missionId }]);
   revalidatePath(`/runs/${runId}`);
@@ -272,6 +297,7 @@ export async function executeWorkItem(
 
 export async function executeAllMissions(runId: string) {
   await requireSession();
+  await requireCurrentCollector(runId);
   await requireCollectableRun(runId);
   const queued = await startRunExecution(runId);
   revalidatePath(`/runs/${runId}`);
@@ -281,6 +307,49 @@ export async function executeAllMissions(runId: string) {
       : queued === 0
         ? `/runs/${runId}?error=${encodeURIComponent("No active missions")}`
         : `/runs/${runId}`
+  );
+}
+
+/** Hard fallback for a Chrome run that has not written evidence. This keeps
+ *  the run scope/id, clears any pre-evidence attempt rows, and hands execution
+ *  back to the proven collector. */
+export async function switchToCurrentCollector(runId: string) {
+  await requireSession();
+  const run = await getCollectionRun(runId);
+  if (!run) throw new Error("Run not found");
+
+  const evidenceCount = await getDb().$count(
+    evidence,
+    eq(evidence.collectionRunId, runId)
+  );
+  if (evidenceCount > 0) {
+    redirect(
+      `/runs/${runId}?error=${encodeURIComponent(
+        "Chrome evidence already exists. Create a replacement run with the Current collector so collector outputs are not mixed."
+      )}`
+    );
+  }
+
+  const db = getDb();
+  await db
+    .delete(missionResults)
+    .where(eq(missionResults.collectionRunId, runId));
+  await db
+    .update(collectionRuns)
+    .set({
+      collectorMode: "current",
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+    })
+    .where(eq(collectionRuns.id, runId));
+
+  revalidatePath("/runs");
+  revalidatePath(`/runs/${runId}`);
+  redirect(
+    `/runs/${runId}?notice=${encodeURIComponent(
+      "Switched to the Current collector. The Chrome attempt did not write evidence."
+    )}`
   );
 }
 

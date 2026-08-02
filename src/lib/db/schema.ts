@@ -188,6 +188,18 @@ export const runStatusEnum = pgEnum("run_status", [
 
 export type RunStatus = (typeof runStatusEnum.enumValues)[number];
 
+export const collectorModeEnum = pgEnum("collector_mode", [
+  "current",
+  "chrome_extension",
+]);
+
+export type CollectorMode = (typeof collectorModeEnum.enumValues)[number];
+
+export const COLLECTOR_MODE_LABELS: Record<CollectorMode, string> = {
+  current: "Current collector",
+  chrome_extension: "Chrome extension",
+};
+
 export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   pending: "Pending",
   running: "Running",
@@ -207,6 +219,11 @@ export const collectionRuns = pgTable("collection_runs", {
   /** ISO week label for the reporting cycle this run belongs to (e.g. "2026-W31").
    *  Defaults to the current ISO week at creation time; operator can override. */
   cycle: text("cycle"),
+  /** Collection backend selected for this run. Kept run-scoped so matched
+   *  current/Chrome runs can be compared without mixing evidence. */
+  collectorMode: collectorModeEnum("collector_mode")
+    .notNull()
+    .default("current"),
   status: runStatusEnum("status").notNull().default("pending"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),

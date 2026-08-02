@@ -3,6 +3,7 @@ import { asc } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import {
   RUN_STATUS_LABELS,
+  COLLECTOR_MODE_LABELS,
   collectionRunSites,
   getDb,
   isDatabaseConfigured,
@@ -136,6 +137,7 @@ export default async function RunsPage({
                   <th className="px-4 py-3">Cycle</th>
                   <th className="px-4 py-3">Scope</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Collector</th>
                   <th className="px-4 py-3">Created</th>
                   <th className="px-4 py-3">Started</th>
                   <th className="px-4 py-3">Completed</th>
@@ -166,6 +168,9 @@ export default async function RunsPage({
                     </td>
                     <td className="px-4 py-3">
                       <RunStatusBadge status={run.status} />
+                    </td>
+                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
+                      {COLLECTOR_MODE_LABELS[run.collectorMode]}
                     </td>
                     <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
                       {formatDate(run.createdAt)}

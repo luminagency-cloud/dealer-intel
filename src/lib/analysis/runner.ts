@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import sharp from "sharp";
 import {
   getDb,
@@ -821,15 +821,6 @@ async function processAnalysis(
       await db
         .delete(complianceGrades)
         .where(eq(complianceGrades.collectionRunId, runId));
-    }
-
-    // Void prior-run offers for every site this run covers. Scoped by siteId
-    // so runs covering different dealer sets don't step on each other.
-    const siteIdsInRun = [...new Set(rows.map((r) => r.evidence.siteId))];
-    if (siteIdsInRun.length > 0) {
-      await db
-        .delete(offers)
-        .where(and(inArray(offers.siteId, siteIdsInRun), ne(offers.collectionRunId, runId)));
     }
 
     const grader = getComplianceGrader(runId);

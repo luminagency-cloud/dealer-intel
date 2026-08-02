@@ -342,7 +342,7 @@ async function drainRun(runId: string): Promise<void> {
  *  held in review for the operator. Only fires once every work item in the
  *  run's scope has a settled result — single-mission collects leave the run
  *  open. */
-async function finalizeRunIfDone(runId: string): Promise<void> {
+export async function finalizeRunIfDone(runId: string): Promise<void> {
   const db = getDb();
   const [run] = await db
     .select()

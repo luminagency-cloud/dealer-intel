@@ -1,6 +1,6 @@
 # Dealer Intel Working List
 
-_Last updated: July 19, 2026_
+_Last updated: August 2, 2026_
 
 This is the current human-readable status and backlog. If something is done, it
 should not live here as future work.
@@ -58,6 +58,8 @@ Status: **implemented and configured**
 - Full-run analyses are queued in-process and run with `ANALYSIS_CONCURRENCY`
   parallel workers, defaulting to 1. This keeps an all-groups collection from
   starting many OCR/compliance-heavy analysis passes at once.
+- Analysis rows remain run-scoped: analyzing a newer run no longer deletes the
+  saved offers from earlier runs covering the same dealers.
 - If Mistral returns 401 Unauthorized, OCR is disabled for that server process
   until the key is fixed and the app is restarted.
 
@@ -94,6 +96,41 @@ Status: **implemented**
 - Public report sharing uses snapshot share tokens.
 
 ## Actually Open
+
+### Chrome Extension Collector Pilot
+
+Status: **matched-suite proof in progress**. See
+`Docs/Chrome Extension Collector Plan.md`.
+
+- Runs can select the Current collector or Chrome extension collector.
+- The current collector remains the production fallback.
+- The one-item proof passed. The current extension processes a selected suite
+  sequentially, reusing one visible Chrome window for each dealer's missions
+  and storing HTML plus a screenshot for every result.
+- Reloading or reopening a running Chrome run automatically resumes only the
+  unfinished items. A browser lock prevents duplicate collection when the same
+  run is open in two Dealer Intel tabs.
+- The first matched baseline is Current run `f931930e`: Anchor Nissan Suite,
+  five dealers, three missions per dealer, 15 pages, and 72 analyzed offers.
+- Matched Chrome run `e6562632` also captured all 15 pages and settled every
+  item successfully. Four of five dealers matched publishable counts exactly;
+  Balise produced six extra publishable analysis rows despite materially
+  matching source-page content, making analysis deduplication the next parity
+  issue rather than collection reliability.
+- Phase two brings inventory through the same visible-Chrome mechanism. The
+  existing `dealer-inventory-api` process check/autostart remains in place only
+  until the extension path reproduces the current inventory results reliably.
+
+Done when:
+
+- Missing/disabled extension preflight leaves the run untouched and presents a
+  clear switch to the Current collector.
+- A Chrome proof run stores evidence in the existing model and reaches the
+  normal ready-to-analyze state.
+- Matched current/Chrome test runs establish whether visible Chrome materially
+  improves blocked dealer collection.
+- Inventory parity is verified before removing the sibling inventory service
+  and its local DLL/process check.
 
 ### 1. Dealer Inspire / Dealer Alchemist Disclaimer Capture
 

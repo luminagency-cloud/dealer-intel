@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Dealer Intel Chrome Collector",
+  "description": "Collects dealer evidence in a visible Chrome browser for Dealer Intel.",
+  "version": "0.2.1",
+  "permissions": ["activeTab", "scripting", "tabs", "windows"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Dealer Intel Chrome Collector"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

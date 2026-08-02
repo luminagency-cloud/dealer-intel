@@ -7,12 +7,24 @@ import type { Page } from "playwright";
  * never considered failed because an overlay would not close.
  */
 
-/** Consent-accept buttons tried by text, most specific vendors first. */
+/** Consent buttons tried by text, most specific vendors first. Prefer the
+ *  privacy-preserving reject/necessary-only action when it dismisses the same
+ *  obstruction; accepting is the fallback for banners that offer no reject
+ *  control on their first screen. */
 const COOKIE_ACCEPT_SELECTORS = [
+  'button.ca-secondary-button:has-text("Deny targeting cookies")',
+  'button:has-text("Deny Targeting Cookies")',
+  'button:has-text("Reject All")',
+  'button:has-text("Reject all")',
+  'button:has-text("Decline All")',
+  'button:has-text("Necessary Cookies Only")',
   "#onetrust-accept-btn-handler",
   "button#truste-consent-button",
   ".cky-btn-accept",
   "#cookiescript_accept",
+  'button.ca-primary-button:has-text("Allow all cookies")',
+  'button:has-text("Allow Targeting Cookies")',
+  'button:has-text("Allow all cookies")',
   'button:has-text("Accept All")',
   'button:has-text("Accept all")',
   'button:has-text("Allow All")',

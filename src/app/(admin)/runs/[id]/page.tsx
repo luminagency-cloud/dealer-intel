@@ -37,6 +37,7 @@ import {
   resumePausedRun,
   resumeRun,
   retryResult,
+  switchToCurrentCollector,
   runAnalysis,
   resumeAnalysis,
   runAnalysisForSiteMission,
@@ -101,14 +102,20 @@ export default async function RunDetailPage({
   );
 
   const canCollect = run.status === "pending" || run.status === "running" || run.status === "paused";
-  const executing = isRunExecuting(run.id);
+  const executing =
+    run.collectorMode === "current" ? isRunExecuting(run.id) : false;
   const paused = isPausedRun(run.id);
   const evidencePageCount = runResults.reduce(
     (sum, r) => sum + (r.pagesCaptured ?? 0),
     0
   );
   const stalled =
+    run.collectorMode === "current" &&
     !executing &&
+    runResults.some((r) => r.status === "pending" || r.status === "running");
+  const needsChromeRecovery =
+    run.collectorMode === "chrome_extension" &&
+    run.status === "running" &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
   const analyzing = isAnalysisRunning(run.id);
   const analysisProgressData = getAnalysisProgress(run.id);
@@ -210,6 +217,9 @@ export default async function RunDetailPage({
         runIdShort={run.id}
         createdLabel={fmtDateTime(run.createdAt)}
         error={error}
+        collectorMode={run.collectorMode}
+        needsChromeRecovery={needsChromeRecovery}
+        switchToCurrentCollectorAction={switchToCurrentCollector.bind(null, run.id)}
       />
 
       {/* Offer breakdown — pre-publish gut check, same view as verify-offers.ts */}

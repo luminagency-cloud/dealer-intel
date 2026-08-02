@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
+import type { CollectorMode, MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
 import { fmtDateTime } from "@/lib/fmt-date";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
 import { RunWorkflowStrip } from "@/components/run-workflow-strip";
@@ -70,6 +70,9 @@ export function RunLiveData({
   runIdShort,
   createdLabel,
   error,
+  collectorMode,
+  needsChromeRecovery,
+  switchToCurrentCollectorAction,
 }: {
   runId: string;
   initialExecuting: boolean;
@@ -113,6 +116,9 @@ export function RunLiveData({
   runIdShort: string;
   createdLabel: string;
   error?: string;
+  collectorMode: CollectorMode;
+  needsChromeRecovery: boolean;
+  switchToCurrentCollectorAction: () => Promise<void>;
 }) {
   const [live, setLive] = useState<LiveStatus>({
     executing: initialExecuting,
@@ -231,7 +237,7 @@ export function RunLiveData({
         executing={live.executing}
         paused={live.paused}
         stalled={live.stalled}
-        canCollect={canCollect}
+        canCollect={canCollect && collectorMode === "current"}
         analyzing={live.analyzing}
         canAnalyze={canAnalyze}
         canPublish={canPublish}
@@ -270,6 +276,9 @@ export function RunLiveData({
           partialAnalysisKeys={new Set(live.partialAnalysisKeys)}
           resumeAction={resumeAction}
           error={error}
+          collectorMode={collectorMode}
+          needsChromeRecovery={needsChromeRecovery}
+          switchToCurrentCollectorAction={switchToCurrentCollectorAction}
         />
       </div>
 

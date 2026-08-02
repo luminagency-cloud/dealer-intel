@@ -94,11 +94,6 @@ const KNOWN_MODELS = [
   "CX-90", "CX-50", "CX-30", "CX-5", "Mazda3", "Mazda6", "MX-5",
 ].sort((a, b) => b.length - a.length);
 
-// Plausible vehicle cash incentive / rebate band. Below this is service-coupon
-// noise; above it is an MSRP or total price misread as cash.
-const CASH_MIN = 250;
-const CASH_MAX = 25_000;
-
 // Text window cut around each payment anchor for multi-offer segmentation.
 // 350 chars before captures vehicle name; after must cover term + the full
 // disclaimer reach (extractDisclaimerNear's DISCLAIMER_WINDOW) — a shorter
@@ -242,36 +237,20 @@ function extractDueAtSigning(text: string) {
   return m ? { value: parseAmount(m[1]), match: m[0].trim() } : null;
 }
 
-function extractCashIncentive(text: string) {
-  const m =
-    firstMatch(
-      text,
-      /\$\s?([\d,]{2,7})\s*(?:cash back|customer cash|bonus cash|cash allowance|rebate|in (?:total )?savings)/i
-    ) ??
-    firstMatch(text, /save\s+(?:up to\s+)?\$\s?([\d,]{2,7})/i) ??
-    firstMatch(text, /\$\s?([\d,]{2,7})\s*(?:off\b)/i) ??
-    firstMatch(text, /([\d,]{2,7})\s*dollars?\s+off\b/i);
-  if (!m) return null;
-  const value = parseAmount(m[1]);
-  // Reject service-coupon noise and MSRP/price misreads — a real vehicle cash
-  // incentive sits in a plausible band (see CASH_MIN/CASH_MAX).
-  if (value < CASH_MIN || value > CASH_MAX) return null;
-  return { value, match: m[0].trim() };
-}
-
 // Plausible cash sale price band — avoids zip codes, trim levels, and
 // service coupon amounts being misread as a vehicle price.
 const SALE_PRICE_MIN = 5_000;
 const SALE_PRICE_MAX = 200_000;
 
 function extractSalePrice(text: string) {
-  // "$28,999", "priced at $28,999", "sale price $28,999", "now $28,999"
+  // "priced at $28,999", "sale price $28,999", "buy this car for $28,999"
   const m =
     firstMatch(
       text,
-      /(?:sale\s+price|priced\s+at|now|internet\s+price|our\s+price)[:\s]*\$\s?([\d,]{4,7})/i
+      /(?:sale\s+price|cash\s+price|priced\s+at|now|internet\s+price|our\s+price)[:\s]*\$\s?([\d,]{4,7})/i
     ) ??
-    firstMatch(text, /\$\s?([\d,]{4,7})\s*(?:sale\s+price|internet\s+price)/i);
+    firstMatch(text, /\$\s?([\d,]{4,7})\s*(?:sale\s+price|cash\s+price|internet\s+price)/i) ??
+    firstMatch(text, /\b(?:buy|purchase)\b[^$]{0,80}\bfor\s+\$\s?([\d,]{4,7})/i);
   if (!m) return null;
   const value = parseAmount(m[1]);
   if (value < SALE_PRICE_MIN || value > SALE_PRICE_MAX) return null;
@@ -634,7 +613,9 @@ function classify(
   if (fields.monthlyPayment !== null && fields.termMonths !== null) {
     return "finance";
   }
-  if (fields.cashIncentive !== null || fields.salePrice !== null) return "cash";
+  // "Cash" means an advertised purchase price, not manufacturer/customer-cash
+  // money. Rebates are alternative incentives and must not create a report row.
+  if (fields.salePrice !== null) return "cash";
   return "promotional";
 }
 
@@ -684,7 +665,6 @@ function extractOfferFromText(
   const apr = extractApr(text);
   const term = extractTerm(text);
   const due = extractDueAtSigning(text);
-  const cash = extractCashIncentive(text);
   const salePrice = extractSalePrice(text);
 
   const isService = hints.missionType === "service_specials";
@@ -711,7 +691,10 @@ function extractOfferFromText(
     monthlyPayment: isService ? null : (payment?.value ?? null),
     apr: isService ? null : (apr?.value ?? null),
     // Service never populates cashIncentive/salePrice — the offer lives in matches.serviceOffer.
-    cashIncentive: isService ? null : (cash?.value ?? null),
+    // Customer/bonus cash is not a standalone advertised purchase price and is
+    // not part of a lease or APR offer. Keep this legacy field empty for newly
+    // extracted offers; a cash offer is represented by salePrice.
+    cashIncentive: null,
     salePrice: isService ? null : (salePrice?.value ?? null),
     termMonths: isService ? null : (term?.value ?? null),
     dueAtSigning: isService ? null : (due?.value ?? null),
@@ -743,7 +726,7 @@ function extractOfferFromText(
   // near the coupon value (used by extractDisclaimerNear).
   const anchor = isService
     ? serviceOfferText
-    : (payment?.match ?? salePrice?.match ?? cash?.match ?? apr?.match ?? null);
+    : (payment?.match ?? salePrice?.match ?? apr?.match ?? null);
   const anchorIndex = anchor ? text.indexOf(anchor) : -1;
   const anchorContext =
     anchorIndex >= 0
@@ -766,7 +749,6 @@ function extractOfferFromText(
   if (!isService && apr) matches.apr = apr.match;
   if (!isService && term) matches.termMonths = term.match;
   if (!isService && due) matches.dueAtSigning = due.match;
-  if (!isService && cash) matches.cashIncentive = cash.match;
   if (!isService && salePrice) matches.salePrice = salePrice.match;
   if (serviceOfferText) matches.serviceOffer = serviceOfferText;
 
@@ -807,6 +789,10 @@ function extractOfferFromText(
     : Math.min(
         1,
         (0.2 * signalCount +
+          // An explicit advertised purchase price is itself the complete core
+          // term of a cash-purchase offer, so score it more strongly than one
+          // supplemental lease/finance field.
+          (fields.salePrice !== null ? 0.3 : 0) +
           (vehicle.make ? 0.1 : 0) +
           (disclaimer ? 0.1 : 0)) *
           missionProvenanceFactor(hints.missionType) *
@@ -1008,16 +994,20 @@ function offerSig(o: ExtractedOffer): string {
   ].join("|");
 }
 
-/** Splits raw HTML into per-card text chunks using DOM block structure.
- *  Tracks nesting depth to find the level where sibling block elements repeat —
- *  that is the offer-card layer on service-specials pages. Returns one text
- *  string per card, or empty array when no repeating card structure is found. */
-function splitHtmlIntoCards(html: string): string[] {
+interface HtmlBlock {
+  depth: number;
+  text: string;
+}
+
+/** Collects the visible text of bounded DOM blocks while preserving nesting
+ * depth. The later selectors use repeated blocks at one depth as the card
+ * layer, keeping offer fields inside their real HTML container. */
+function collectHtmlBlocks(html: string): HtmlBlock[] {
   const BLOCK = new Set(['div', 'section', 'article', 'li', 'figure', 'aside']);
 
   interface Frame { tag: string; start: number; depth: number; }
   const stack: Frame[] = [];
-  const blocks: Array<{ depth: number; text: string }> = [];
+  const blocks: HtmlBlock[] = [];
 
   const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g;
   let m: RegExpExecArray | null;
@@ -1047,6 +1037,15 @@ function splitHtmlIntoCards(html: string): string[] {
     }
   }
 
+  return blocks;
+}
+
+/** Splits raw HTML into per-card text chunks using DOM block structure.
+ *  Tracks nesting depth to find the level where sibling block elements repeat —
+ *  that is the offer-card layer on service-specials pages. Returns one text
+ *  string per card, or empty array when no repeating card structure is found. */
+function splitHtmlIntoCards(html: string): string[] {
+  const blocks = collectHtmlBlocks(html);
   if (blocks.length === 0) return [];
 
   // A "rich card" has both a price/discount signal AND a recognizable service
@@ -1086,6 +1085,46 @@ function splitHtmlIntoCards(html: string): string[] {
     .map(b => b.text);
 }
 
+/** Finds repeated vehicle-offer cards before page text is flattened. A vehicle
+ * card must name a known model and carry a payment, APR, or advertised purchase
+ * price. The shortest repeated level wins ties, which selects the innermost
+ * complete card instead of a row/container that holds multiple cards. */
+function splitHtmlIntoVehicleCards(html: string): string[] {
+  const blocks = collectHtmlBlocks(html);
+  if (blocks.length === 0) return [];
+
+  const hasVehicleOfferSignal = (text: string) =>
+    /\$\s?[\d,]{2,7}\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i.test(text) ||
+    /[\d]+(?:\.\d+)?\s*%\s*(?:APR\b|financing\b|annual percentage rate\b)/i.test(text) ||
+    extractSalePrice(text) !== null;
+  const isVehicleCard = (text: string) =>
+    findKnownModel(text) !== null && hasVehicleOfferSignal(text);
+
+  const byDepth = new Map<number, string[]>();
+  for (const { depth, text } of blocks) {
+    if (!isVehicleCard(text)) continue;
+    const values = byDepth.get(depth) ?? [];
+    if (!values.includes(text)) values.push(text);
+    byDepth.set(depth, values);
+  }
+
+  let best: string[] = [];
+  let bestAverageLength = Number.POSITIVE_INFINITY;
+  for (const values of byDepth.values()) {
+    if (values.length < 2) continue;
+    const averageLength = values.reduce((sum, text) => sum + text.length, 0) / values.length;
+    if (
+      values.length > best.length ||
+      (values.length === best.length && averageLength < bestAverageLength)
+    ) {
+      best = values;
+      bestAverageLength = averageLength;
+    }
+  }
+
+  return best;
+}
+
 /** Detects combo ad chunks — a single OCR or text window that contains both
  *  an APR offer and a monthly-payment offer. Image-based ad cards commonly
  *  present two alternatives side-by-side (APR column / lease column) with no
@@ -1122,6 +1161,102 @@ function splitComboOffer(offer: ExtractedOffer): ExtractedOffer[] {
   };
 
   return [financeOffer, paymentOffer];
+}
+
+function extractTermAfterAnchor(text: string, anchor: string): { value: number; match: string } | null {
+  const re = new RegExp(
+    `${escapeRe(anchor)}\\s+(?:financing\\s+)?for\\s+(\\d{2,3})\\s*[- ]?\\s*(?:months?|mos?)\\b`,
+    "i"
+  );
+  const match = text.match(re);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (value < 12 || value > 96) return null;
+  const termMatch = match[0].match(/\d{2,3}\s*[- ]?\s*(?:months?|mos?)\b/i);
+  return { value, match: termMatch?.[0] ?? `${value} months` };
+}
+
+/** One repeated DOM card is one vehicle promotion. It may advertise two real
+ * alternatives (lease payment and APR), so split those alternatives once and
+ * resolve each term against its own anchor. Customer-cash copy is deliberately
+ * ignored; it is neither an advertised purchase price nor part of either row. */
+function extractVehicleOffersFromCard(
+  text: string,
+  hints: ExtractHints
+): ExtractedOffer[] {
+  const offer = extractOfferFromText(text, hints);
+  if (!offer) return [];
+
+  const results = splitComboOffer(offer);
+  const payment = extractMonthlyPayment(text);
+  const apr = extractApr(text);
+
+  for (const result of results) {
+    const anchoredTerm =
+      result.monthlyPayment !== null && payment
+        ? extractTermAfterAnchor(text, payment.match)
+        : result.apr !== null && apr
+          ? extractTermAfterAnchor(text, apr.match)
+          : null;
+    if (anchoredTerm) {
+      result.termMonths = anchoredTerm.value;
+      result.matches.termMonths = anchoredTerm.match;
+    }
+    if (result.apr !== null && apr) {
+      result.rawText = contextAround(text, apr.match);
+    }
+  }
+
+  return results;
+}
+
+/** Extracts vehicle offers from one already-bounded text scope. On structured
+ * pages the scope is one DOM card; only the fallback path receives full-page
+ * text. Keeping this helper card-local prevents neighboring models and terms
+ * from being stitched into the same offer. */
+function extractVehicleOffersFromText(
+  text: string,
+  hints: ExtractHints
+): ExtractedOffer[] {
+  if (!text) return [];
+
+  const positions = offerAnchorPositions(text);
+
+  // No payment/APR anchors — try once for an advertised purchase price.
+  if (positions.length === 0) {
+    const offer = extractOfferFromText(text, hints);
+    return offer ? [offer] : [];
+  }
+
+  const results: ExtractedOffer[] = [];
+  const seen = new Set<string>();
+
+  for (const pos of positions) {
+    const chunk = text.slice(
+      Math.max(0, pos - WINDOW_BEFORE),
+      Math.min(text.length, pos + WINDOW_AFTER)
+    );
+    const offer = extractOfferFromText(chunk, hints);
+    if (!offer) continue;
+    for (const split of splitComboOffer(offer)) {
+      const sig = offerSig(split);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      results.push(split);
+    }
+  }
+
+  if (results.length > 0) return results;
+
+  const offer = extractOfferFromText(text, hints);
+  if (!offer) return [];
+  const fallbackSeen = new Set<string>();
+  return splitComboOffer(offer).filter((split) => {
+    const sig = offerSig(split);
+    if (fallbackSeen.has(sig)) return false;
+    fallbackSeen.add(sig);
+    return true;
+  });
 }
 
 /** Reads HTML, segments offer cards, and returns one ExtractedOffer per
@@ -1179,48 +1314,26 @@ export function extractOffers(
     return results;
   }
 
-  const text = htmlToText(cleanHtml);
-  if (!text) return [];
-
-  const positions = offerAnchorPositions(text);
-
-  // No priced anchors at all — try full page (cash-only or promo-only pages).
-  if (positions.length === 0) {
-    const offer = extractOfferFromText(text, hints);
-    return offer ? [offer] : [];
-  }
-
   const results: ExtractedOffer[] = [];
   const seen = new Set<string>();
+  const push = (offer: ExtractedOffer) => {
+    const sig = offerSig(offer);
+    if (seen.has(sig)) return;
+    seen.add(sig);
+    results.push(offer);
+  };
 
-  for (const pos of positions) {
-    const chunk = text.slice(
-      Math.max(0, pos - WINDOW_BEFORE),
-      Math.min(text.length, pos + WINDOW_AFTER)
-    );
-    const offer = extractOfferFromText(chunk, hints);
-    if (!offer) continue;
-    for (const split of splitComboOffer(offer)) {
-      const sig = offerSig(split);
-      if (seen.has(sig)) continue;
-      seen.add(sig);
-      results.push(split);
+  // Structured vehicle-special pages: extract each repeated DOM card in
+  // isolation. Balise/DealerOn cards, for example, keep the complete offer in a
+  // card__coupon/card__body block even though the whole page contains siblings.
+  const cards = splitHtmlIntoVehicleCards(cleanHtml);
+  if (cards.length > 0) {
+    for (const cardText of cards) {
+      for (const offer of extractVehicleOffersFromCard(cardText, hints)) push(offer);
     }
+    return results;
   }
 
-  // All windows duped to each other (e.g. a sticky-header repeating one price) —
-  // fall back to a single full-page extraction so we don't lose the offer.
-  if (results.length === 0) {
-    const offer = extractOfferFromText(text, hints);
-    if (!offer) return [];
-    const fallbackSeen = new Set<string>();
-    return splitComboOffer(offer).filter((s) => {
-      const sig = offerSig(s);
-      if (fallbackSeen.has(sig)) return false;
-      fallbackSeen.add(sig);
-      return true;
-    });
-  }
-
-  return results;
+  // Loose-text/image OCR fallback when the source has no repeated DOM cards.
+  return extractVehicleOffersFromText(htmlToText(cleanHtml), hints);
 }
