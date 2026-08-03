@@ -268,85 +268,91 @@ function isPlaceholderServiceOffer(text: string): boolean {
   return PLACEHOLDER_OFFER_MARKERS.some((mk) => lower.includes(mk));
 }
 
-/** A recognizable service keyword appears somewhere in the text. Used to gate
- *  the fallback anchor path so a discount phrase in unrelated page copy (or
- *  legal boilerplate) is never read as a service offer. */
-function hasServiceContext(text: string): boolean {
-  const lower = text.toLowerCase();
-  return SERVICE_TYPE_KEYWORDS.some(([kw]) => lower.includes(kw));
+interface ServiceTypePattern {
+  pattern: RegExp;
+  label: string;
 }
 
-// Service type keywords in priority order. First match wins.
-// Pairs of [search-substring (lowercase), display label].
-const SERVICE_TYPE_KEYWORDS: [string, string][] = [
-  ["oil change", "Oil Change"],
-  ["oil & filter", "Oil & Filter Change"],
-  ["oil and filter", "Oil & Filter Change"],
-  ["remote start", "Remote Start"],
-  ["brake pad", "Brake Pads & Rotors"],
-  ["rotor", "Brake Pads & Rotors"],
-  ["brake", "Brake Service"],
-  ["tire rotation", "Tire Rotation"],
-  ["price match", "Price Match"],
-  ["cabin air", "Cabin Air Filter"],
-  ["engine air", "Engine Air Filter"],
-  ["air filter", "Air Filter"],
-  ["a/c performance", "A/C Performance Check"],
-  ["a/c check", "A/C Check"],
-  ["air conditioning", "A/C Service"],
-  ["alignment", "Alignment"],
-  ["coolant flush", "Coolant Flush"],
-  ["coolant", "Coolant Service"],
-  ["transmission flush", "Transmission Flush"],
-  ["transmission", "Transmission Service"],
-  ["battery", "Battery"],
-  ["wiper", "Wiper Blades"],
-  ["multi-point", "Multi-Point Inspection"],
-  ["multipoint", "Multi-Point Inspection"],
-  ["inspection", "Inspection"],
-  ["loaner", "Complimentary Loaner"],
-  ["rental", "Complimentary Rental"],
-  ["detail", "Detail"],
-  ["flush", "Fluid Flush"],
+// Recognizable service types in priority order. These are deliberately bounded
+// patterns instead of substring checks: generic words such as "service" and
+// "detail" are page chrome/fine-print vocabulary as often as they are coupon
+// titles. A concrete service name is required before a priced block can become
+// an offer row.
+const SERVICE_TYPE_PATTERNS: ServiceTypePattern[] = [
+  {
+    pattern: /\boil\s+change\b[^$]{0,80}\btire\s+rotation\b|\btire\s+rotation\b[^$]{0,80}\boil\s+change\b/i,
+    label: "Oil Change & Tire Rotation",
+  },
+  { pattern: /\boil\s*(?:&|and)\s*filter\b/i, label: "Oil & Filter Change" },
+  { pattern: /\boil\s+change\b/i, label: "Oil Change" },
+  { pattern: /\bremote\s+start(?:er)?\b/i, label: "Remote Start" },
+  { pattern: /\bin[ -]?cabin\s+microfilter\b|\bcabin\s+microfilter\b|\bmicrofilter\b/i, label: "Cabin Microfilter" },
+  { pattern: /\bcabin\s+air\s+filter\b/i, label: "Cabin Air Filter" },
+  { pattern: /\bengine\s+air\s+filter\b/i, label: "Engine Air Filter" },
+  { pattern: /\bair\s+filter\b/i, label: "Air Filter" },
+  { pattern: /\bbrake\s+pad(?:s)?\b|\bbrake\s+rotor(?:s)?\b|\brotor(?:s)?\b/i, label: "Brake Pads & Rotors" },
+  { pattern: /\bbrake(?:s|\s+service)?\b/i, label: "Brake Service" },
+  { pattern: /\btire\s+rotation\b/i, label: "Tire Rotation" },
+  { pattern: /\bwheel\s+alignment\b|\balignment\b/i, label: "Alignment" },
+  { pattern: /\bcoolant\s+flush\b/i, label: "Coolant Flush" },
+  { pattern: /\bcoolant\b|\bcooling\s+system\b/i, label: "Coolant Service" },
+  { pattern: /\btransmission\s+flush\b/i, label: "Transmission Flush" },
+  { pattern: /\btransmission\b|\bdrive\s*line\b|\bdriveline\b/i, label: "Transmission / Driveline Service" },
+  { pattern: /\bfuel(?:\s*\/\s*air)?\s+induction\b|\bfuel\s+system\b/i, label: "Fuel System Service" },
+  { pattern: /\bpower\s+steering\b/i, label: "Power Steering Service" },
+  { pattern: /\bdifferential\b/i, label: "Differential Service" },
+  { pattern: /\bspark\s+plug(?:s)?\b/i, label: "Spark Plugs" },
+  { pattern: /\b(?:battery|batteries)\b/i, label: "Battery" },
+  { pattern: /\bwiper(?:\s+blade)?s?\b/i, label: "Wiper Blades" },
+  { pattern: /\bmulti[ -]?point\s+inspection\b/i, label: "Multi-Point Inspection" },
+  { pattern: /\bstate\s+inspection\b|\bsafety\s+inspection\b/i, label: "Inspection" },
+  { pattern: /\bfactory[- ](?:required|scheduled)\s+(?:service|maintenance)\b/i, label: "Factory-Scheduled Maintenance" },
+  { pattern: /\baccessor(?:y|ies)\b[^.]{0,40}\binstall(?:ation|ed)?\b/i, label: "Accessory Installation" },
+  {
+    pattern: /\b(?:full|complete|express|interior|exterior|vehicle|auto|car|premium|deluxe|platinum)\s+(?:vehicle\s+)?detail(?:ing)?\b|\bdetail(?:ing)?\s+(?:service|package)\b/i,
+    label: "Vehicle Detailing",
+  },
 ];
 
-/** Returns a clean human label for a service offer from the text window around
- *  the price anchor. Prefers a recognized keyword label; falls back to the
- *  card's own title text (first meaningful phrase before the price) rather
- *  than a generic "Service Special". */
-function buildServiceLabel(chunkText: string): string {
-  const lower = chunkText.toLowerCase();
-  for (const [kw, label] of SERVICE_TYPE_KEYWORDS) {
-    if (lower.includes(kw)) return label;
-  }
-  // Extract the card title: text immediately before the price anchor.
-  // Modal/print-coupon cards prepend a dealer address block; the service name
-  // is always the last meaningful phrase before "STARTING AT $price".
-  // Strategy: find text after the last phone number (which marks the end of the
-  // address block), then strip trailing "STARTING AT".
-  const beforePrice = chunkText.split(/\$\s?[\d,]+/)[0].trim();
-  if (beforePrice.length > 0) {
-    // Find position after the last phone-like sequence (NXX-NXX-XXXX or NXX.NXX.XXXX)
-    const phoneRe = /\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/g;
-    let lastPhoneEnd = -1;
-    let pm: RegExpExecArray | null;
-    while ((pm = phoneRe.exec(beforePrice)) !== null) {
-      lastPhoneEnd = pm.index + pm[0].length;
+const MAX_SERVICE_LABEL_DISTANCE = 180;
+
+function buildServiceLabel(
+  chunkText: string,
+  offerAnchor?: string | null
+): string | null {
+  const anchorStart = offerAnchor ? chunkText.indexOf(offerAnchor) : -1;
+  const anchorEnd = anchorStart >= 0 ? anchorStart + offerAnchor!.length : -1;
+  let best: { distance: number; priority: number; label: string } | null = null;
+
+  for (const [priority, { pattern, label }] of SERVICE_TYPE_PATTERNS.entries()) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const matcher = new RegExp(pattern.source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = matcher.exec(chunkText)) !== null) {
+      if (anchorStart < 0) return label;
+      const matchEnd = match.index + match[0].length;
+      const distance =
+        matchEnd < anchorStart
+          ? anchorStart - matchEnd
+          : match.index > anchorEnd
+            ? match.index - anchorEnd
+            : 0;
+      if (
+        distance <= MAX_SERVICE_LABEL_DISTANCE &&
+        (!best || distance < best.distance || (distance === best.distance && priority < best.priority))
+      ) {
+        best = { distance, priority, label };
+      }
     }
-    const afterPhone = lastPhoneEnd >= 0
-      ? beforePrice.slice(lastPhoneEnd)
-      : beforePrice;
-    const label = afterPhone
-      .replace(/[•\-–—|]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/\s*(starting\s+at|starting|at)\s*$/i, '')
-      .replace(/^[\s,;:®™]+/, '')
-      .trim()
-      .slice(0, 60);
-    if (label.length >= 4) return label;
   }
-  return "Service Special";
+  return best?.label ?? null;
+}
+
+/** A concrete, recognizable service appears somewhere in the text. Used to
+ * gate the fallback anchor path so a discount in page chrome, an address block,
+ * or legal boilerplate is never promoted to an offer. */
+function hasServiceContext(text: string): boolean {
+  return buildServiceLabel(text) !== null;
 }
 
 /** Collapses whitespace and title-normalizes a captured benefit string. */
@@ -659,7 +665,8 @@ function missionProvenanceFactor(mission: MissionType): number {
  *  when the chunk has no priced signal. */
 function extractOfferFromText(
   text: string,
-  hints: ExtractHints
+  hints: ExtractHints,
+  serviceAnchorText?: string
 ): ExtractedOffer | null {
   const payment = extractMonthlyPayment(text);
   const apr = extractApr(text);
@@ -681,7 +688,9 @@ function extractOfferFromText(
   // Service offer text is captured as a human-readable string (e.g. "$25 Off",
   // "25% Off", "Complimentary") — no numeric parse, so a percentage isn't
   // stored as a dollar amount and free/complimentary offers round-trip cleanly.
-  const serviceOfferText = isService ? extractServiceOfferText(text) : null;
+  const serviceOfferText = isService
+    ? (serviceAnchorText ?? extractServiceOfferText(text))
+    : null;
 
   // A service coupon is shop work with a discount — NEVER a lease/finance/cash
   // vehicle offer. Payment, APR, term, due-at-signing, cash, and sale price are
@@ -711,6 +720,15 @@ function extractOfferFromText(
   // Footer/legal boilerplate that shares the service-card DOM depth must never
   // become a coupon — its doc-fee figures aren't real service prices.
   if (isService && isDisclaimerBoilerplate(text)) return null;
+
+  // A monetary value by itself does not tell us what is being offered. Require
+  // a concrete service type; this rejects address/phone blocks, generic
+  // "Service" cards, bare "Detail", and descriptive prose while canonicalizing
+  // known work such as an in-cabin microfilter replacement.
+  const serviceLabel = isService
+    ? buildServiceLabel(text, serviceOfferText)
+    : null;
+  if (isService && !serviceLabel) return null;
 
   // A payment offer is a lease when the ad calls it one or caps annual mileage —
   // both are lease-only markers, so classify treats them like an explicit
@@ -755,12 +773,12 @@ function extractOfferFromText(
   // Service: label = "what's it for" (Oil Change, Brake Service…);
   // offer value lives in matches.serviceOffer ("$25 Off", "25% Off", "Complimentary").
   const rawText = isService
-    ? buildServiceLabel(text)
+    ? serviceLabel
     : contextAround(text, anchor);
 
-  // Service confidence: a clean discount/free signal is the dominant evidence
-  // (0.5), a recognized service label (not the generic fallback) adds 0.3. A
-  // well-extracted service offer therefore clears the AI threshold (0.5) and
+  // Service confidence: a clean monetary signal plus a required, recognized
+  // service label earns 0.8. A well-extracted service offer therefore clears
+  // the AI threshold (0.5) and
   // skips the vehicle-oriented AI pass, which has no business rewriting it.
   //
   // Vehicle confidence: completeness (how many fields parsed) TIMES a provenance
@@ -781,11 +799,7 @@ function extractOfferFromText(
       ? 0.75
       : 1;
   const confidence = isService
-    ? Math.min(
-        1,
-        (hasServiceSignal ? 0.5 : 0) +
-          (rawText !== "Service Special" ? 0.3 : 0)
-      )
+    ? (hasServiceSignal && serviceLabel ? 0.8 : 0)
     : Math.min(
         1,
         (0.2 * signalCount +
@@ -1054,16 +1068,13 @@ function splitHtmlIntoCards(html: string): string[] {
   // element from being counted as a second Remote Start offer.
   const hasOfferSignal = (t: string) =>
     /\$[\d,]+|\d+\s*%\s*off\b|free\b|complimentary\b|price match\b/i.test(t);
-  const hasServiceKeyword = (t: string) =>
-    SERVICE_TYPE_KEYWORDS.some(([kw]) => t.toLowerCase().includes(kw));
-  const isRichCard = (t: string) => hasOfferSignal(t) && hasServiceKeyword(t);
+  const isRichCard = (t: string) => hasOfferSignal(t) && hasServiceContext(t);
 
   // Use rich-card blocks (price + service keyword) to identify which DOM depth
   // is the offer-card layer — that depth has the most sibling rich cards.
-  // Once we know the right depth, return ALL priced blocks at that depth, not
-  // just the keyword-matched ones. This captures offers like "BG Drive Line
-  // Service" or "BG Fuel/Air Induction" whose text has no recognized service
-  // keyword but is clearly a priced offer at the same card depth.
+  // Once we know the right depth, return all priced blocks at that depth. The
+  // shared extraction gate still requires a concrete service type from each
+  // individual block, so nested address or generic text blocks are discarded.
   const richByDepth = new Map<number, number>();
   for (const { depth, text } of blocks) {
     if (!isRichCard(text)) continue;
@@ -1210,6 +1221,28 @@ function extractVehicleOffersFromCard(
   return results;
 }
 
+/** Captured disclaimer modals are already one bounded promotion, even though
+ * they arrive as plain text rather than repeated HTML cards. Treat the whole
+ * disclosure as a single card so lease and APR alternatives inherit the term
+ * adjacent to their own anchor instead of borrowing a neighboring term from a
+ * generic sliding text window. */
+export function extractOffersFromDisclosure(
+  text: string,
+  hints: ExtractHints
+): ExtractedOffer[] {
+  return extractVehicleOffersFromCard(htmlToText(text), hints);
+}
+
+/** One downloaded ad image is also a bounded promotion. Parse its OCR as one
+ * card so side-by-side APR and lease alternatives keep the term nearest their
+ * own value instead of borrowing the other alternative's term. */
+export function extractOffersFromOcrImage(
+  text: string,
+  hints: ExtractHints
+): ExtractedOffer[] {
+  return extractVehicleOffersFromCard(htmlToText(text), hints);
+}
+
 /** Extracts vehicle offers from one already-bounded text scope. On structured
  * pages the scope is one DOM card; only the fallback path receives full-page
  * text. Keeping this helper card-local prevents neighboring models and terms
@@ -1304,7 +1337,7 @@ export function extractOffers(
           Math.min(svcText.length, anchor.pos + WINDOW_AFTER)
         );
         if (!hasServiceContext(chunk)) continue;
-        const offer = extractOfferFromText(chunk, hints);
+        const offer = extractOfferFromText(chunk, hints, anchor.text);
         if (!offer) continue;
         offer.matches.serviceOffer = anchor.text;
         push(offer);

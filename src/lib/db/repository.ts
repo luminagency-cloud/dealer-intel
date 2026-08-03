@@ -237,6 +237,16 @@ export async function getEvidence(id: string): Promise<Evidence | undefined> {
   return row;
 }
 
+export async function getEvidenceByCaptureKey(
+  captureKey: string
+): Promise<Evidence | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(evidence)
+    .where(eq(evidence.captureKey, captureKey));
+  return row;
+}
+
 export async function listEvidenceForRun(
   collectionRunId: string
 ): Promise<Evidence[]> {

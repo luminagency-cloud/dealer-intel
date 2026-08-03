@@ -1,3 +1,3 @@
 const manifest = chrome.runtime.getManifest();
 document.getElementById("status").textContent =
-  `Ready · version ${manifest.version} · protocol 2`;
+  `Ready · version ${manifest.version} · protocol 3`;

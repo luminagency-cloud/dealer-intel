@@ -99,6 +99,32 @@ This phase intentionally does not claim collector parity.
 - Share captures by URL and exploration signature.
 - Preserve the existing site-scoped session and capture-cache semantics.
 - Persist progress so a page reload does not lose the active job.
+
+### Phase 3: Evidence-State Parity — Cutover Blocker
+
+- Known and learned URL handling.
+- Navigation discovery.
+- Lazy-load scrolling.
+- Cookie and overlay handling.
+- Tabs, accordions, carousels, and disclaimers.
+- Pause rotating carousels and traverse by active-slide identity until the
+  first state repeats; do not assume a six-slide maximum.
+- Bind each disclaimer click to the currently active ad and reject award/legal
+  boilerplate that contains no actual offer terms.
+- Failure screenshots and review statuses.
+- Stream each labeled state to the app and wait for durable upload before the
+  next interaction.
+- Store a comparison manifest: state id/kind/order, label, resulting URL, HTML,
+  screenshot, and disclaimer text where present.
+- Verify Balise first, then Dealer Inspire/DDC and Dealer Alchemist. Similar
+  offer totals are not an evidence-parity result.
+
+### Phase 4: Inventory And Operational Hardening
+
+- Harden multi-dealer execution beyond the sequential suite pilot.
+- Pause, resume, retry, and reconnect behavior.
+- Clear Chrome/device status in the admin UI.
+- Windows and macOS verification.
 - Move inventory collection through the same visible-Chrome job mechanism and
   continue writing the existing inventory result model.
 - Preserve the inventory page's authoritative totals and current report
@@ -106,22 +132,6 @@ This phase intentionally does not claim collector parity.
 - After inventory parity is verified, retire the local
   `dealer-inventory-api` process dependency and the
   `src/lib/local-inventory-process.ts` health/autostart check.
-
-### Phase 3: Exploration Parity
-
-- Known and learned URL handling.
-- Navigation discovery.
-- Lazy-load scrolling.
-- Cookie and overlay handling.
-- Tabs, accordions, carousels, and disclaimers.
-- Failure screenshots and review statuses.
-
-### Phase 4: Multi-Dealer Runs
-
-- Harden multi-dealer execution beyond the sequential suite pilot.
-- Pause, resume, retry, and reconnect behavior.
-- Clear Chrome/device status in the admin UI.
-- Windows and macOS verification.
 
 ### Phase 5: Operational Cutover
 
@@ -180,9 +190,28 @@ Completed comparison:
 - Tasca differs by one non-publishable finance extraction; its publishable
   result is identical.
 
-Conclusion: suite-scale Chrome collection parity passed this test. Analysis
-count parity did not; the next comparison work is deterministic offer identity
-and deduplication at Balise, not another scraping workaround.
+Conclusion: suite-scale Chrome transport passed this test. Evidence parity was
+not measured because this run captured only the rendered base state and one
+viewport image per mission. It therefore cannot establish compliance-collection
+parity. Stateful Balise verification is the next gate; analysis identity and
+inventory work follow it.
+
+## Stateful Evidence Verification
+
+- Protocol-3 suite run `f644f98c` stored labeled alternate states across 26
+  dealers, including DDC disclaimer text and Dealer Inspire carousel, tab, and
+  disclaimer evidence. Its original Balise manifest exposed an 11/12 carousel
+  truncation rather than hiding it.
+- Extension 0.3.4 pauses page-level carousel APIs and selects numbered slides
+  by ordinal. Balise proof run `8cd61846` captured the current live hero as nine
+  ordered states with 9/9 coverage plus its offer-bearing disclaimer text.
+- Dealer Alchemist proof run `cadbbb7b` captured Bristol Toyota's finance page
+  and matched the Current collector's base-state manifest. Neither collector
+  found alternate states on that live page.
+
+These proofs promote stateful Chrome collection to a first-order selectable
+pilot with the Current collector retained as the immediate fallback. They do
+not complete inventory migration or justify removing the Current collector.
 
 ## Explicit Non-Goals For Phase 1
 

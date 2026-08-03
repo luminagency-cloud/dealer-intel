@@ -1,6 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
   collectionRuns,
+  evidence,
   getDb,
   missionResults,
   siteMissions,
@@ -10,8 +11,16 @@ import {
 import { getCollectionRun, listWorkItemsForRun } from "@/lib/db/repository";
 import { uploadEvidence } from "@/lib/evidence";
 import { finalizeRunIfDone } from "@/lib/run-executor";
+import { MISSION_EXPLORATION } from "@/lib/collector/mission-knowledge";
 
-export const CHROME_COLLECTOR_PROTOCOL_VERSION = 2;
+export const CHROME_COLLECTOR_PROTOCOL_VERSION = 3;
+
+export type ChromeCaptureStateKind =
+  | "base"
+  | "carousel"
+  | "tab"
+  | "disclaimer"
+  | "failure";
 
 export interface ChromeCollectionItem {
   siteId: string;
@@ -20,6 +29,12 @@ export interface ChromeCollectionItem {
   missionType: MissionType;
   missionName: string;
   url: string;
+  explore: {
+    carousels: boolean;
+    tabs: boolean;
+    accordions: boolean;
+    disclaimers: boolean;
+  };
 }
 
 export interface ChromeCollectionJob {
@@ -64,17 +79,26 @@ export async function startChromeRun(
     throw new ChromeCollectorError("This run has no active work items", 409);
   }
 
-  const chromeItems = items.map(({ site, mission, siteMission }) => ({
-    siteId: site.id,
-    siteName: site.name,
-    missionId: mission.id,
-    missionType: mission.missionType,
-    missionName: mission.name,
-    url:
-      siteMission?.lastKnownUrl?.trim() ||
-      siteMission?.alternateUrls.find((value) => value.trim())?.trim() ||
-      site.url,
-  }));
+  const chromeItems = items.map(({ site, mission, siteMission }) => {
+    const explore = MISSION_EXPLORATION[mission.missionType];
+    return {
+      siteId: site.id,
+      siteName: site.name,
+      missionId: mission.id,
+      missionType: mission.missionType,
+      missionName: mission.name,
+      url:
+        siteMission?.lastKnownUrl?.trim() ||
+        siteMission?.alternateUrls.find((value) => value.trim())?.trim() ||
+        site.url,
+      explore: {
+        carousels: Boolean(explore.carousels),
+        tabs: Boolean(explore.tabs),
+        accordions: Boolean(explore.accordions),
+        disclaimers: Boolean(explore.disclaimers),
+      },
+    };
+  });
 
   const db = getDb();
   if (run.status === "pending") {
@@ -162,40 +186,143 @@ async function requireChromeWorkItem(
   return item;
 }
 
-export async function completeChromeItem(input: {
+export async function uploadChromeCaptureState(input: {
   runId: string;
   siteId: string;
   missionId: string;
+  stateId: string;
+  stateKind: ChromeCaptureStateKind;
+  stateOrder: number;
   finalUrl: string;
   pageTitle: string;
+  label: string;
   html: string;
   screenshot: Uint8Array;
+  textContent?: string;
 }): Promise<void> {
   const item = await requireChromeWorkItem(
     input.runId,
     input.siteId,
     input.missionId
   );
-  const label = `${input.pageTitle.trim() || item.site.name} — ${input.finalUrl}`;
+  const stateId = input.stateId.trim();
+  if (!/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(stateId)) {
+    throw new ChromeCollectorError("Invalid capture state id");
+  }
+  if (!Number.isInteger(input.stateOrder) || input.stateOrder < 0) {
+    throw new ChromeCollectorError("Invalid capture state order");
+  }
+  const manifestStateId = `${input.missionId}:${stateId}`;
+  const artifactPrefix = [
+    input.runId,
+    input.siteId,
+    input.missionId,
+    stateId,
+  ].join(":");
+  const label =
+    input.label.trim() ||
+    `${input.pageTitle.trim() || item.site.name} — ${input.finalUrl}`;
+  const metadata = {
+    captureStateId: manifestStateId,
+    captureState: input.stateKind,
+    sourceUrl: input.finalUrl,
+    captureOrder: input.stateOrder,
+    label,
+  };
 
   await uploadEvidence({
     collectionRunId: input.runId,
     siteId: input.siteId,
     missionType: item.mission.missionType,
-    evidenceType: "html_snapshot",
-    fileName: "page.html",
+    evidenceType:
+      input.stateKind === "base" ? "html_snapshot" : "state_html_snapshot",
+    fileName: `${stateId}.html`,
     body: Buffer.from(input.html, "utf8"),
-    label,
+    captureKey: `${artifactPrefix}:html`,
+    ...metadata,
   });
   await uploadEvidence({
     collectionRunId: input.runId,
     siteId: input.siteId,
     missionType: item.mission.missionType,
-    evidenceType: "screenshot",
-    fileName: "page.png",
+    evidenceType:
+      input.stateKind === "disclaimer"
+        ? "disclaimer_screenshot"
+        : input.stateKind === "failure"
+          ? "failure_screenshot"
+        : "screenshot",
+    fileName: `${stateId}.png`,
     body: input.screenshot,
-    label,
+    textContent: input.textContent,
+    captureKey: `${artifactPrefix}:screenshot`,
+    ...metadata,
   });
+
+  await getDb()
+    .update(missionResults)
+    .set({ status: "running" })
+    .where(
+      and(
+        eq(missionResults.collectionRunId, input.runId),
+        eq(missionResults.siteId, input.siteId),
+        eq(missionResults.missionId, input.missionId)
+      )
+    );
+}
+
+async function chromeStateIds(input: {
+  runId: string;
+  siteId: string;
+  missionId: string;
+  missionType: MissionType;
+}): Promise<Set<string>> {
+  const rows = await getDb()
+    .select({ captureStateId: evidence.captureStateId })
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.collectionRunId, input.runId),
+        eq(evidence.siteId, input.siteId),
+        eq(evidence.missionType, input.missionType),
+        isNotNull(evidence.captureStateId)
+      )
+    );
+  const prefix = `${input.missionId}:`;
+  return new Set(
+    rows
+      .map((row) => row.captureStateId)
+      .filter((value): value is string => Boolean(value?.startsWith(prefix)))
+  );
+}
+
+export async function completeChromeItem(input: {
+  runId: string;
+  siteId: string;
+  missionId: string;
+  finalUrl: string;
+  stateCount: number;
+}): Promise<void> {
+  const item = await requireChromeWorkItem(
+    input.runId,
+    input.siteId,
+    input.missionId
+  );
+  if (!Number.isInteger(input.stateCount) || input.stateCount < 1) {
+    throw new ChromeCollectorError("Chrome collection returned no capture states");
+  }
+  const stateIds = await chromeStateIds({
+    ...input,
+    missionType: item.mission.missionType,
+  });
+  if (!stateIds.has(`${input.missionId}:base`)) {
+    throw new ChromeCollectorError("Chrome collection did not upload its base state", 409);
+  }
+  if (stateIds.size < input.stateCount) {
+    throw new ChromeCollectorError(
+      `Chrome uploaded ${stateIds.size} of ${input.stateCount} capture states`,
+      409
+    );
+  }
 
   const now = new Date();
   const db = getDb();
@@ -235,12 +362,21 @@ export async function failChromeItem(input: {
   missionId: string;
   error: string;
 }): Promise<void> {
-  await requireChromeWorkItem(input.runId, input.siteId, input.missionId);
+  const item = await requireChromeWorkItem(
+    input.runId,
+    input.siteId,
+    input.missionId
+  );
+  const stateIds = await chromeStateIds({
+    ...input,
+    missionType: item.mission.missionType,
+  });
+  const partialCapture = stateIds.size > 0;
   await getDb()
     .update(missionResults)
     .set({
-      status: "failure",
-      pagesCaptured: 0,
+      status: partialCapture ? "needs_review" : "failure",
+      pagesCaptured: stateIds.has(`${input.missionId}:base`) ? 1 : 0,
       error: input.error.slice(0, 1000),
       completedAt: new Date(),
     })

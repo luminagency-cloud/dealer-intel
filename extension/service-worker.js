@@ -1,6 +1,12 @@
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const NAVIGATION_TIMEOUT_MS = 45_000;
+const CAPTURE_ACK_TIMEOUT_MS = 120_000;
+const CAROUSEL_SAFETY_LIMIT = 30;
+const CAROUSEL_DETECTION_TIMEOUT_MS = 8_000;
+const MAX_TABS = 8;
+const DISCLAIMER_SAFETY_LIMIT = 30;
 let activeSession = null;
+const pendingCaptureAcks = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,6 +33,13 @@ async function waitForTabComplete(tabId) {
   });
 }
 
+async function waitAfterInteraction(tabId, delayMs) {
+  await sleep(100);
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.status !== "complete") await waitForTabComplete(tabId);
+  await sleep(delayMs);
+}
+
 async function closeActiveSession() {
   const session = activeSession;
   activeSession = null;
@@ -45,7 +58,10 @@ async function ensureSiteSession(item) {
       const tab = await chrome.tabs.get(activeSession.tabId);
       await chrome.windows.update(activeSession.windowId, { focused: true });
       if (tab.url !== item.url) {
-        await chrome.tabs.update(activeSession.tabId, { url: item.url, active: true });
+        await chrome.tabs.update(activeSession.tabId, {
+          url: item.url,
+          active: true,
+        });
         await waitForTabComplete(activeSession.tabId);
       }
       return activeSession;
@@ -60,6 +76,7 @@ async function ensureSiteSession(item) {
     url: item.url,
     focused: true,
     type: "normal",
+    state: "maximized",
   });
   const windowId = created.id;
   const tabId = created.tabs?.[0]?.id;
@@ -72,38 +89,34 @@ async function ensureSiteSession(item) {
   return activeSession;
 }
 
-/** Best-effort consent suppression inside every accessible frame. The injected
- * function is deliberately self-contained because Chrome serializes it rather
- * than preserving service-worker closures. */
+/** Best-effort consent suppression inside every accessible frame. */
 async function suppressConsentObstructions(tabId) {
   await chrome.scripting
     .executeScript({
       target: { tabId, allFrames: true },
       func: async () => {
         const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        // Offer widgets are frequently classified as third-party content. A
+        // collector must render it before falling back to a rejection action.
         const actionPatterns = [
-          /^deny (?:optional |targeting )?cookies?$/i,
-          /^reject(?: all| optional| targeting)?(?: cookies?)?$/i,
-          /^decline(?: all)?(?: cookies?)?$/i,
-          /^(?:use )?necessary cookies only$/i,
           /^allow all cookies$/i,
           /^allow targeting cookies$/i,
           /^accept all(?: cookies)?$/i,
           /^accept cookies$/i,
           /^i (?:agree|accept)$/i,
           /^got it$/i,
+          /^deny (?:optional |targeting )?cookies?$/i,
+          /^reject(?: all| optional| targeting)?(?: cookies?)?$/i,
+          /^decline(?: all)?(?: cookies?)?$/i,
+          /^(?:use )?necessary cookies only$/i,
         ];
         const consentWords = /cookie|privacy|consent|targeting|tracking/i;
         const roots = [document];
-
-        // Consent managers increasingly render inside open shadow roots.
         for (let index = 0; index < roots.length; index += 1) {
-          const root = roots[index];
-          for (const element of root.querySelectorAll("*")) {
+          for (const element of roots[index].querySelectorAll("*")) {
             if (element.shadowRoot) roots.push(element.shadowRoot);
           }
         }
-
         const candidates = roots.flatMap((root) =>
           Array.from(
             root.querySelectorAll(
@@ -161,16 +174,91 @@ async function suppressConsentObstructions(tabId) {
     .catch(() => []);
 }
 
-async function collectItem(item) {
-  const { windowId, tabId } = await ensureSiteSession(item);
-
-  await sleep(1_500);
+/** Closes generic promotional overlays and hides common chat widgets. Offer
+ * disclaimer dialogs are opened only later, after this preparation pass. */
+async function suppressPageObstructions(tabId) {
   await suppressConsentObstructions(tabId);
+  await chrome.scripting
+    .executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        const isVisible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        };
+        const closeSelectors = [
+          '[role="dialog"] button[aria-label*="close" i]',
+          '[role="dialog"] button[title*="close" i]',
+          '[role="dialog"] button[class*="close" i]',
+          'div[class*="modal" i] button[aria-label*="close" i]',
+          'div[class*="popup" i] button[aria-label*="close" i]',
+        ];
+        for (const selector of closeSelectors) {
+          const button = Array.from(document.querySelectorAll(selector)).find(
+            isVisible
+          );
+          if (button) {
+            button.click();
+            break;
+          }
+        }
+        const chatSelectors = [
+          'iframe[id*="chat" i]',
+          'iframe[src*="chat" i]',
+          'iframe[title*="chat" i]',
+          '[id*="livechat" i]',
+          '[class*="chat-widget" i]',
+          '[id*="drift-widget" i]',
+          '#intercom-container',
+          '[class*="intercom-launcher" i]',
+          '[id*="podium" i]',
+          '[id*="gubagoo" i]',
+          '[id*="carnow" i]',
+          '[id*="activengage" i]',
+        ];
+        for (const selector of chatSelectors) {
+          for (const element of document.querySelectorAll(selector)) {
+            element.style.setProperty("display", "none", "important");
+          }
+        }
+      },
+    })
+    .catch(() => []);
+}
 
+async function preparePage(tabId, expandAccordions) {
+  await sleep(1_500);
+  await suppressPageObstructions(tabId);
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: async () => {
+    args: [Boolean(expandAccordions)],
+    func: async (shouldExpandAccordions) => {
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        const loading = Array.from(document.querySelectorAll("body *")).some(
+          (element) => {
+            if (!(element instanceof HTMLElement) || element.offsetParent === null) {
+              return false;
+            }
+            const ownText = Array.from(element.childNodes)
+              .filter((node) => node.nodeType === Node.TEXT_NODE)
+              .map((node) => node.textContent || "")
+              .join("")
+              .trim();
+            return /^loading(?:\.{3}|…)?(?:\s+[\w -]{0,40})?$/i.test(ownText);
+          }
+        );
+        if (!loading) break;
+        await pause(250);
+      }
+
       for (let step = 0; step < 25; step += 1) {
         if (window.innerHeight + window.scrollY >= document.body.scrollHeight) break;
         window.scrollBy(0, 700);
@@ -178,11 +266,34 @@ async function collectItem(item) {
       }
       window.scrollTo(0, 0);
       await pause(300);
+
+      if (shouldExpandAccordions) {
+        const selectors = [
+          'button[aria-expanded="false"]',
+          '[class*="accordion" i] [aria-expanded="false"]',
+          'details:not([open]) summary',
+        ];
+        let expanded = 0;
+        for (const selector of selectors) {
+          for (const element of document.querySelectorAll(selector)) {
+            if (expanded >= 15) break;
+            if (!(element instanceof HTMLElement) || element.offsetParent === null) {
+              continue;
+            }
+            element.click();
+            expanded += 1;
+            await pause(150);
+          }
+          if (expanded >= 15) break;
+        }
+        if (expanded > 0) await pause(500);
+      }
     },
   });
-  // Consent managers can appear on a delay or re-open after scrolling.
-  await suppressConsentObstructions(tabId);
+  await suppressPageObstructions(tabId);
+}
 
+async function pageMetadata(tabId) {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => ({
@@ -191,14 +302,891 @@ async function collectItem(item) {
       html: document.documentElement.outerHTML,
     }),
   });
-  const screenshotDataUrl = await chrome.tabs.captureVisibleTab(windowId, {
-    format: "png",
-  });
-
-  return { ...result, screenshotDataUrl };
+  if (!result?.finalUrl || !result?.html) {
+    throw new Error("Chrome could not read the rendered dealer page");
+  }
+  return result;
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+async function captureFullPage(tabId) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.sendCommand(target, "Page.enable");
+    const metrics = await chrome.debugger.sendCommand(
+      target,
+      "Page.getLayoutMetrics"
+    );
+    const content = metrics?.cssContentSize || metrics?.contentSize;
+    if (!content?.width || !content?.height) {
+      throw new Error("Chrome could not measure the full dealer page");
+    }
+    const result = await chrome.debugger.sendCommand(
+      target,
+      "Page.captureScreenshot",
+      {
+        format: "png",
+        fromSurface: true,
+        captureBeyondViewport: true,
+        clip: {
+          x: 0,
+          y: 0,
+          width: Math.ceil(content.width),
+          height: Math.ceil(content.height),
+          scale: 1,
+        },
+      }
+    );
+    if (!result?.data) throw new Error("Chrome returned an empty full-page image");
+    return `data:image/png;base64,${result.data}`;
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+async function captureState(tabId, windowId, options) {
+  const metadata = await pageMetadata(tabId);
+  const screenshotDataUrl = options.fullPage
+    ? await captureFullPage(tabId)
+    : await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+  return {
+    stateId: options.stateId,
+    stateKind: options.stateKind,
+    stateOrder: options.stateOrder,
+    finalUrl: metadata.finalUrl,
+    pageTitle: metadata.pageTitle,
+    label: options.label,
+    html: metadata.html,
+    screenshotDataUrl,
+    ...(options.textContent ? { textContent: options.textContent } : {}),
+  };
+}
+
+function captureAckKey(collectionRequestId, stateId) {
+  return `${collectionRequestId}:${stateId}`;
+}
+
+async function emitCaptureState(dealerIntelTabId, collectionRequestId, state) {
+  const key = captureAckKey(collectionRequestId, state.stateId);
+  if (pendingCaptureAcks.has(key)) {
+    throw new Error(`Capture state ${state.stateId} is already awaiting upload`);
+  }
+  const acknowledged = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingCaptureAcks.delete(key);
+      reject(new Error(`Timed out uploading ${state.label}`));
+    }, CAPTURE_ACK_TIMEOUT_MS);
+    pendingCaptureAcks.set(key, {
+      resolve: () => {
+        clearTimeout(timeout);
+        pendingCaptureAcks.delete(key);
+        resolve();
+      },
+      reject: (error) => {
+        clearTimeout(timeout);
+        pendingCaptureAcks.delete(key);
+        reject(error);
+      },
+    });
+  });
+
+  try {
+    await chrome.tabs.sendMessage(dealerIntelTabId, {
+      type: "DEALER_INTEL_CAPTURE_STATE",
+      collectionRequestId,
+      state,
+    });
+  } catch (error) {
+    const pending = pendingCaptureAcks.get(key);
+    pending?.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+  await acknowledged;
+}
+
+async function clickNextTab(tabId) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const selectors = [
+        '[role="tablist"] [role="tab"]',
+        ".nav-tabs a",
+        ".nav-tabs button",
+      ];
+      const root = document.documentElement;
+      let selectorIndex = Number(root.dataset.dealerIntelTabSelector || "-1");
+      if (selectorIndex < 0) {
+        selectorIndex = selectors.findIndex(
+          (selector) => document.querySelectorAll(selector).length >= 2
+        );
+        if (selectorIndex < 0) return null;
+        root.dataset.dealerIntelTabSelector = String(selectorIndex);
+        root.dataset.dealerIntelTabIndex = "1";
+      }
+      const tabs = Array.from(document.querySelectorAll(selectors[selectorIndex]));
+      const index = Number(root.dataset.dealerIntelTabIndex || "1");
+      if (index >= tabs.length || index >= 8) return null;
+      root.dataset.dealerIntelTabIndex = String(index + 1);
+      const tab = tabs[index];
+      if (!(tab instanceof HTMLElement) || tab.offsetParent === null) {
+        return { skipped: true };
+      }
+      const text = (tab.innerText || tab.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80);
+      tab.click();
+      return {
+        index: index + 1,
+        label: text ? `Tab ${index + 1}: ${text}` : `Tab ${index + 1}`,
+      };
+    },
+  });
+  return result || null;
+}
+
+/** Reads the first visible promotional carousel through its own active-state
+ * markers. The fixed safety cap is only a runaway guard; normal completion is
+ * detected when the active slide identity repeats or the next control stops. */
+async function readPrimaryCarouselState(tabId, pauseRotation = false) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    args: [pauseRotation],
+    func: (shouldPause) => {
+      const nextSelectors = [
+        'button[aria-label*="next picture" i]',
+        'button[data-slide="next"]',
+        ".carousel-control-next",
+        ".slick-next",
+        ".swiper-button-next",
+        '[class*="carousel" i] button[aria-label*="next" i]',
+        '[class*="slider" i] button[aria-label*="next" i]',
+        'button[aria-label="Next slide" i]',
+      ];
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      };
+      const resolveContainer = (next) => {
+        const controlledId = next.getAttribute("aria-controls");
+        if (controlledId) {
+          const controlled = document.getElementById(controlledId);
+          if (controlled) return controlled;
+        }
+        const target = next.getAttribute("data-target");
+        if (target?.startsWith("#")) {
+          const controlled = document.getElementById(target.slice(1));
+          if (controlled) return controlled;
+        }
+        return next.closest(
+          '[role="region"], .carousel, .slick-slider, .swiper, [class*="carousel" i], [class*="slider" i]'
+        );
+      };
+      let next = null;
+      for (const selector of nextSelectors) {
+        next = Array.from(document.querySelectorAll(selector)).find(isVisible);
+        if (next) break;
+      }
+      if (!(next instanceof HTMLElement)) return null;
+      const container = resolveContainer(next);
+      if (!(container instanceof HTMLElement)) return null;
+      container.dataset.dealerIntelPrimaryCarousel = "true";
+
+      if (shouldPause) {
+        const pause = Array.from(
+          container.querySelectorAll(
+            'button[aria-label*="pause" i], button[title*="pause" i]'
+          )
+        ).find(isVisible);
+        if (pause instanceof HTMLElement) pause.click();
+      }
+
+      const slideSelectors = [
+        '[aria-label*="carousel slide number" i]',
+        ".carousel-item",
+        ".item",
+        ".slick-slide",
+        ".swiper-slide",
+      ];
+      const slides = [];
+      for (const selector of slideSelectors) {
+        for (const slide of container.querySelectorAll(selector)) {
+          if (!slides.includes(slide)) slides.push(slide);
+        }
+      }
+      const active = slides.find(
+        (slide) =>
+          slide.matches(
+            ".active, .slick-active, .swiper-slide-active, [aria-current='true']"
+          ) && isVisible(slide)
+      ) || slides.find(isVisible);
+      if (!(active instanceof HTMLElement)) return null;
+
+      const aria = active.getAttribute("aria-label") || "";
+      const numbered = aria.match(/slide\s+number\s+(\d+)\s+of\s+(\d+)/i);
+      const slickIndex = active.getAttribute("data-slick-index");
+      const image = active.querySelector("img");
+      const imageAlt = (image?.getAttribute("alt") || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const imageSrc = image?.currentSrc || image?.getAttribute("src") || "";
+      const text = (active.innerText || "").replace(/\s+/g, " ").trim();
+      const ordinal = numbered
+        ? Number(numbered[1])
+        : slickIndex !== null && Number.isFinite(Number(slickIndex))
+          ? Number(slickIndex) + 1
+          : null;
+      const total = numbered ? Number(numbered[2]) : null;
+      const fallbackIdentity = [aria, slickIndex, imageSrc, imageAlt, text]
+        .filter(Boolean)
+        .join("|");
+      if (!fallbackIdentity) return null;
+      const baseLabel =
+        ordinal && total
+          ? `Carousel slide ${ordinal} of ${total}`
+          : ordinal
+            ? `Carousel slide ${ordinal}`
+            : "Carousel slide";
+      const hasDisclaimer = Array.from(
+        active.querySelectorAll("button, a, [role='button']")
+      ).some((element) =>
+        /disclaimer/i.test(
+          [
+            element.textContent,
+            element.getAttribute("aria-label"),
+            element.getAttribute("title"),
+          ]
+            .filter(Boolean)
+            .join(" ")
+        )
+      );
+      return {
+        fingerprint: fallbackIdentity.slice(0, 1000),
+        ordinal,
+        total,
+        label: imageAlt ? `${baseLabel} — ${imageAlt}` : baseLabel,
+        adLabel: imageAlt || baseLabel,
+        hasDisclaimer,
+        nextDisabled:
+          next.hasAttribute("disabled") ||
+          next.getAttribute("aria-disabled") === "true" ||
+          next.classList.contains("disabled"),
+      };
+    },
+  });
+  return result || null;
+}
+
+async function waitForPrimaryCarouselState(tabId, pauseRotation = false) {
+  const deadline = Date.now() + CAROUSEL_DETECTION_TIMEOUT_MS;
+  do {
+    const state = await readPrimaryCarouselState(tabId, pauseRotation);
+    if (state) return state;
+    await sleep(250);
+  } while (Date.now() < deadline);
+  return null;
+}
+
+async function pausePrimaryCarousel(tabId) {
+  await chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => {
+        const container = document.querySelector(
+          '[data-dealer-intel-primary-carousel="true"]'
+        );
+        if (!(container instanceof HTMLElement)) return;
+        container.setAttribute("data-interval", "false");
+        container.setAttribute("data-bs-interval", "false");
+        container.removeAttribute("data-ride");
+        container.removeAttribute("data-bs-ride");
+        container.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+
+        const page = /** @type {any} */ (window);
+        const jquery = page.jQuery || page.$;
+        if (jquery?.fn?.carousel) jquery(container).carousel("pause");
+        const bootstrapCarousel = page.bootstrap?.Carousel?.getInstance?.(container);
+        bootstrapCarousel?.pause?.();
+      },
+    })
+    .catch(() => []);
+}
+
+async function advancePrimaryCarousel(
+  tabId,
+  beforeFingerprint,
+  targetOrdinal = null
+) {
+  for (let clickAttempt = 0; clickAttempt < 2; clickAttempt += 1) {
+    const [{ result: clicked }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [targetOrdinal],
+      func: (ordinal) => {
+        const container = document.querySelector(
+          '[data-dealer-intel-primary-carousel="true"]'
+        );
+        if (!(container instanceof HTMLElement)) return false;
+        const isVisible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        };
+        if (Number.isInteger(ordinal) && ordinal > 0) {
+          const zeroBased = ordinal - 1;
+          const indicator = container.querySelector(
+            `[data-slide-to="${zeroBased}"], [data-bs-slide-to="${zeroBased}"]`
+          );
+          if (indicator instanceof HTMLElement && isVisible(indicator)) {
+            indicator.click();
+            return true;
+          }
+        }
+        const next = Array.from(
+          container.querySelectorAll(
+            'button[aria-label*="next picture" i], button[data-slide="next"], .carousel-control-next, .slick-next, .swiper-button-next, button[aria-label*="next slide" i]'
+          )
+        ).find(isVisible);
+        if (!(next instanceof HTMLElement)) return false;
+        // DealerOn temporarily disables this control during its transition.
+        // A DOM click is still accepted after that transition settles, so do
+        // not turn the animation state into an early end-of-carousel signal.
+        next.click();
+        return true;
+      },
+    });
+    if (!clicked) return null;
+    const deadline = Date.now() + 4_000;
+    while (Date.now() < deadline) {
+      await sleep(100);
+      const state = await readPrimaryCarouselState(tabId);
+      if (
+        state &&
+        state.fingerprint !== beforeFingerprint &&
+        (!targetOrdinal || state.ordinal === targetOrdinal)
+      ) {
+        await pausePrimaryCarousel(tabId);
+        await sleep(350);
+        return (await readPrimaryCarouselState(tabId)) || state;
+      }
+    }
+  }
+  return null;
+}
+
+async function openActiveCarouselDisclaimer(tabId) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const container = document.querySelector(
+        '[data-dealer-intel-primary-carousel="true"]'
+      );
+      if (!(container instanceof HTMLElement)) return null;
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      };
+      const slides = Array.from(
+        container.querySelectorAll(
+          '[aria-label*="carousel slide number" i], .carousel-item, .item, .slick-slide, .swiper-slide'
+        )
+      );
+      const active = slides.find(
+        (slide) =>
+          slide.matches(
+            ".active, .slick-active, .swiper-slide-active, [aria-current='true']"
+          ) && isVisible(slide)
+      ) || slides.find(isVisible);
+      if (!(active instanceof HTMLElement)) return null;
+      const trigger = Array.from(
+        active.querySelectorAll("button, a, [role='button']")
+      ).find(
+        (element) =>
+          isVisible(element) &&
+          /disclaimer/i.test(
+            [
+              element.textContent,
+              element.getAttribute("aria-label"),
+              element.getAttribute("title"),
+            ]
+              .filter(Boolean)
+              .join(" ")
+          )
+      );
+      if (!(trigger instanceof HTMLElement)) return null;
+      trigger.dataset.dealerIntelDisclaimerSeen = "true";
+      const embeddedDisclosure = trigger.getAttribute("data-content") || "";
+      const embeddedHasOffer =
+        /\$\s?[\d,]+(?:\.\d{2})?/i.test(embeddedDisclosure) ||
+        /\b\d+(?:\.\d+)?\s*%\s*(?:apr|financing|off)?\b/i.test(
+          embeddedDisclosure
+        ) ||
+        /\b(?:due at signing|monthly payment|per month|\/\s*mo\b)/i.test(
+          embeddedDisclosure
+        );
+      // DealerOn places the full disclosure in data-content. Use it to avoid
+      // even opening award/brag boilerplate that happens to say Disclaimer.
+      if (embeddedDisclosure && !embeddedHasOffer) return null;
+      const imageAlt = (active.querySelector("img")?.getAttribute("alt") || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const pathBefore = window.location.pathname;
+      trigger.click();
+      return { pathBefore, preAnchor: imageAlt.slice(0, 120) };
+    },
+  });
+  return result || null;
+}
+
+async function openNextDisclaimer(tabId) {
+  /** Self-contained because Chrome serializes it into each accessible frame. */
+  function findOrOpenDisclaimer(shouldOpen) {
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+    const candidates = [];
+    const selectors = [
+      ".ddc-offer-disclosure",
+      ".disclaimertoggle",
+      '[class*="offer" i] button[class*="disclaimer" i]',
+      '[class*="offer" i] a[class*="disclaimer" i]',
+      '[class*="disclaimer" i][role="button"]',
+      '[class*="disclaimer" i]:is(button, a)',
+    ];
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (!candidates.includes(element)) candidates.push(element);
+      }
+    }
+    for (const element of document.querySelectorAll(
+      "button, a, [role='button'], div, span"
+    )) {
+      const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+      if (
+        /^(?:view\s+)?(?:details\s*&\s*)?disclaimer$/i.test(text) ||
+        /^offer details$/i.test(text)
+      ) {
+        const nestedExact = Array.from(element.children).some((child) =>
+          (child.textContent || "").replace(/\s+/g, " ").trim() === text
+        );
+        if (!nestedExact && !candidates.includes(element)) candidates.push(element);
+      }
+    }
+
+    const priceRe = /\$\s?[\d,]+(?:\.\d{2})?(?:\s?\/?\s?(?:mo|month|week|wk))?/i;
+    for (const element of candidates) {
+      if (!(element instanceof HTMLElement)) continue;
+      if (element.dataset.dealerIntelDisclaimerSeen === "true") continue;
+      if (
+        element.closest(
+          'footer, nav, [role="navigation"], [class*="footer" i], [id*="footer" i], [data-dealer-intel-primary-carousel="true"]'
+        ) ||
+        !isVisible(element)
+      ) {
+        continue;
+      }
+
+      let card = element;
+      for (let depth = 0; depth < 8 && card.parentElement; depth += 1) {
+        const parent = card.parentElement;
+        if (
+          priceRe.test(parent.innerText || "") ||
+          parent.querySelector("h1,h2,h3,h4")
+        ) {
+          card = parent;
+          break;
+        }
+        card = parent;
+      }
+      const cardText = (card.innerText || "").replace(/\s+/g, " ").trim();
+      const valuelessRebate =
+        /\brebates?\b/i.test(cardText) &&
+        !/\$|\d+\s*%|\d+\s*(?:\/\s*)?(?:mo|month|apr)\b|\bapr\b/i.test(
+          cardText
+        );
+      if (valuelessRebate) continue;
+      const embeddedDisclosure = element.getAttribute("data-content") || "";
+      const embeddedHasOffer =
+        /\$\s?[\d,]+(?:\.\d{2})?/i.test(embeddedDisclosure) ||
+        /\b\d+(?:\.\d+)?\s*%\s*(?:apr|financing|off)?\b/i.test(
+          embeddedDisclosure
+        ) ||
+        /\b(?:due at signing|monthly payment|per month|\/\s*mo\b)/i.test(
+          embeddedDisclosure
+        );
+      if (embeddedDisclosure && !embeddedHasOffer) continue;
+
+      if (!shouldOpen) return { found: true };
+      element.dataset.dealerIntelDisclaimerSeen = "true";
+      element.dataset.dealerIntelActiveDisclaimer = "true";
+      const heading = card.querySelector("h1,h2,h3,h4,[class*='title' i]");
+      const headingText = (heading?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const price = cardText.match(priceRe)?.[0]?.trim() || "";
+      const preAnchor = [headingText, price]
+        .filter(Boolean)
+        .join(" — ")
+        .slice(0, 120);
+      element.scrollIntoView({ block: "center" });
+      element.click();
+      return { found: true, preAnchor };
+    }
+    return null;
+  }
+
+  const frameMatches = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    args: [false],
+    func: findOrOpenDisclaimer,
+  });
+  const pathBefore = new URL((await chrome.tabs.get(tabId)).url).pathname;
+  for (const match of frameMatches) {
+    if (!match.result?.found) continue;
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [match.frameId] },
+      args: [true],
+      func: findOrOpenDisclaimer,
+    });
+    if (result?.found) {
+      return {
+        pathBefore,
+        preAnchor: result.preAnchor || "",
+        frameId: match.frameId,
+      };
+    }
+  }
+  return null;
+}
+
+function hasOfferTerms(text) {
+  return (
+    /\$\s?[\d,]+(?:\.\d{2})?/i.test(text) ||
+    /\b\d+(?:\.\d+)?\s*%\s*(?:apr|financing|off)?\b/i.test(text) ||
+    /\b(?:due at signing|monthly payment|per month|\/\s*mo\b)/i.test(text)
+  );
+}
+
+async function readDisclaimer(tabId, frameId = 0) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    func: () => {
+      const selector =
+        '[class*="modal" i],[role="dialog"],[class*="dialog" i],[class*="popup" i]';
+      const visible = Array.from(document.querySelectorAll(selector)).filter(
+        (element) =>
+          element instanceof HTMLElement &&
+          element.offsetParent !== null &&
+          (element.innerText || "").trim().length > 20
+      );
+      visible.sort((a, b) => b.innerText.length - a.innerText.length);
+      let disclosure = visible[0] || null;
+      if (!disclosure) {
+        const trigger = document.querySelector(
+          '[data-dealer-intel-active-disclaimer="true"]'
+        );
+        let card = trigger?.parentElement || null;
+        for (let depth = 0; card && depth < 8; depth += 1) {
+          const candidate = Array.from(
+            card.querySelectorAll(
+              '.disclaimerwrap.open .disclaimer, .disclaimerwrap.open, [class*="disclaimer" i].open, [class*="details" i].open, [aria-expanded="true"] + *'
+            )
+          ).find(
+            (element) =>
+              element instanceof HTMLElement &&
+              element !== trigger &&
+              element.offsetParent !== null &&
+              (element.innerText || "").trim().length > 20
+          );
+          if (candidate instanceof HTMLElement) {
+            disclosure = candidate;
+            break;
+          }
+          card = card.parentElement;
+        }
+      }
+      if (!disclosure) return { anchor: "", text: "" };
+      const full = disclosure.innerText.replace(/\s+/g, " ").trim();
+      let anchor = full;
+      const cut = anchor.search(/disclaimer/i);
+      if (cut > 0) anchor = anchor.slice(0, cut).trim();
+      anchor = anchor
+        .replace(/\b(never\s+expires?|expires?\s+\d[\d/\-.]*|exp\.?\s+\d[\d/\-.]*)\b.*/i, "")
+        .replace(/\b(request\s+more\s+info|more\s+info|learn\s+more|get\s+coupon|print\s+coupon|schedule\s+service|book\s+now|shop\s+now|view\s+\d+\s+qualifying\s+vehicle|view\s+vehicle\s+details|view\s+details|open\s+in\s+same\s+tab)\b.*/i, "")
+        .trim();
+      return { anchor: anchor.slice(0, 110), text: full.slice(0, 8000) };
+    },
+  });
+  return result || { anchor: "", text: "" };
+}
+
+async function closeDisclaimer(tabId, frameId = 0) {
+  await chrome.scripting
+    .executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: () => {
+        const trigger = document.querySelector(
+          '[data-dealer-intel-active-disclaimer="true"]'
+        );
+        let card = trigger?.parentElement || null;
+        for (let depth = 0; card && depth < 8; depth += 1) {
+          const inlineClose = card.querySelector(
+            '.disclaimerclose, [class*="disclaimer" i][class*="close" i], [class*="details" i] button[aria-label*="close" i]'
+          );
+          if (
+            inlineClose instanceof HTMLElement &&
+            inlineClose.offsetParent !== null
+          ) {
+            inlineClose.click();
+            trigger?.removeAttribute("data-dealer-intel-active-disclaimer");
+            return;
+          }
+          card = card.parentElement;
+        }
+        const dialogs = Array.from(
+          document.querySelectorAll(
+            '[class*="modal" i],[role="dialog"],[class*="dialog" i],[class*="popup" i]'
+          )
+        ).filter(
+          (element) => element instanceof HTMLElement && element.offsetParent !== null
+        );
+        for (const dialog of dialogs) {
+          const close = dialog.querySelector(
+            'button[aria-label*="close" i], button[title*="close" i], button[class*="close" i], [class*="close" i][role="button"]'
+          );
+          if (close instanceof HTMLElement) {
+            close.click();
+            trigger?.removeAttribute("data-dealer-intel-active-disclaimer");
+            return;
+          }
+        }
+        for (const target of [document.activeElement, document, window]) {
+          target?.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Escape",
+              code: "Escape",
+              bubbles: true,
+            })
+          );
+        }
+        trigger?.removeAttribute("data-dealer-intel-active-disclaimer");
+      },
+    })
+    .catch(() => []);
+  await sleep(300);
+}
+
+async function collectItem(item, dealerIntelTabId, collectionRequestId) {
+  const { windowId, tabId } = await ensureSiteSession(item);
+  let order = 0;
+  let stateCount = 0;
+  let baseUrl = item.url;
+
+  try {
+    await preparePage(tabId, item.explore?.accordions);
+    // Stop autoplay before any evidence is captured. Otherwise a timed rotation
+    // can change the active ad between DOM inspection, screenshot, and click.
+    let carousel = item.explore?.carousels
+      ? await waitForPrimaryCarouselState(tabId, true)
+      : null;
+    if (carousel) {
+      await pausePrimaryCarousel(tabId);
+      carousel = (await readPrimaryCarouselState(tabId)) || carousel;
+    }
+    const initial = await pageMetadata(tabId);
+    baseUrl = initial.finalUrl;
+    const base = await captureState(tabId, windowId, {
+      stateId: "base",
+      stateKind: "base",
+      stateOrder: order++,
+      label: `${initial.pageTitle || item.siteName} — ${initial.finalUrl}`,
+      fullPage: true,
+    });
+    await emitCaptureState(dealerIntelTabId, collectionRequestId, base);
+    stateCount += 1;
+
+    if (item.explore?.tabs) {
+      for (let attempt = 0; attempt < MAX_TABS - 1; attempt += 1) {
+        const tab = await clickNextTab(tabId);
+        if (!tab) break;
+        if (tab.skipped) continue;
+        await waitAfterInteraction(tabId, 600);
+        const state = await captureState(tabId, windowId, {
+          stateId: `tab-${tab.index}`,
+          stateKind: "tab",
+          stateOrder: order++,
+          label: tab.label,
+          fullPage: false,
+        });
+        await emitCaptureState(dealerIntelTabId, collectionRequestId, state);
+        stateCount += 1;
+      }
+    }
+
+    if (item.explore?.carousels && carousel) {
+      const seenSlides = new Set();
+      let traversal = 0;
+      while (
+        carousel &&
+        !seenSlides.has(carousel.fingerprint) &&
+        traversal < CAROUSEL_SAFETY_LIMIT
+      ) {
+        seenSlides.add(carousel.fingerprint);
+        traversal += 1;
+        const slideOrdinal = carousel.ordinal || traversal;
+        const carouselStateId = `carousel-${slideOrdinal}`;
+        const state = await captureState(tabId, windowId, {
+          stateId: carouselStateId,
+          stateKind: "carousel",
+          stateOrder: order++,
+          label: carousel.label,
+          fullPage: false,
+        });
+        await emitCaptureState(dealerIntelTabId, collectionRequestId, state);
+        stateCount += 1;
+
+        // Disclosures belong to the active ad, so open them while that exact
+        // slide is still selected. Award/legal boilerplate is rejected after
+        // opening unless the modal contains real price/APR/payment terms.
+        if (item.explore?.disclaimers && carousel.hasDisclaimer) {
+          const trigger = await openActiveCarouselDisclaimer(tabId);
+          if (trigger) {
+            await waitAfterInteraction(tabId, 1_000);
+            const afterOpen = await pageMetadata(tabId);
+            if (new URL(afterOpen.finalUrl).pathname === trigger.pathBefore) {
+              const modal = await readDisclaimer(tabId);
+              if (hasOfferTerms(modal.text)) {
+                const disclosure = await captureState(tabId, windowId, {
+                  stateId: `${carouselStateId}-disclaimer`,
+                  stateKind: "disclaimer",
+                  stateOrder: order++,
+                  label: `${carousel.adLabel || trigger.preAnchor || carousel.label} — Disclaimer`,
+                  textContent: modal.text,
+                  fullPage: false,
+                });
+                await emitCaptureState(
+                  dealerIntelTabId,
+                  collectionRequestId,
+                  disclosure
+                );
+                stateCount += 1;
+              }
+              await closeDisclaimer(tabId);
+              await pausePrimaryCarousel(tabId);
+            } else {
+              await chrome.tabs.goBack(tabId).catch(() => {});
+              await waitForTabComplete(tabId).catch(() => {});
+              carousel = await readPrimaryCarouselState(tabId, true);
+              if (carousel) await pausePrimaryCarousel(tabId);
+            }
+          }
+        }
+
+        if (
+          carousel?.nextDisabled &&
+          (!carousel.total || !carousel.ordinal || carousel.ordinal >= carousel.total)
+        ) {
+          break;
+        }
+        const next = await advancePrimaryCarousel(
+          tabId,
+          carousel.fingerprint,
+          carousel.total && carousel.ordinal
+            ? (carousel.ordinal % carousel.total) + 1
+            : null
+        );
+        if (!next || seenSlides.has(next.fingerprint)) break;
+        carousel = next;
+      }
+    }
+
+    if (item.explore?.disclaimers) {
+      let disclaimerNumber = 0;
+      for (
+        let attempt = 0;
+        attempt < DISCLAIMER_SAFETY_LIMIT &&
+        disclaimerNumber < DISCLAIMER_SAFETY_LIMIT;
+        attempt += 1
+      ) {
+        const trigger = await openNextDisclaimer(tabId);
+        if (!trigger) break;
+        await waitAfterInteraction(tabId, 1_000);
+        const afterOpen = await pageMetadata(tabId);
+        if (new URL(afterOpen.finalUrl).pathname !== trigger.pathBefore) {
+          await chrome.tabs.goBack(tabId).catch(() => {});
+          await waitForTabComplete(tabId).catch(() => {});
+          continue;
+        }
+        const modal = await readDisclaimer(tabId, trigger.frameId);
+        if (!hasOfferTerms(modal.text)) {
+          await closeDisclaimer(tabId, trigger.frameId);
+          continue;
+        }
+        disclaimerNumber += 1;
+        const label =
+          trigger.preAnchor || modal.anchor || `Disclaimer ${disclaimerNumber}`;
+        const state = await captureState(tabId, windowId, {
+          stateId: `disclaimer-${disclaimerNumber}`,
+          stateKind: "disclaimer",
+          stateOrder: order++,
+          label,
+          textContent: modal.text || undefined,
+          fullPage: false,
+        });
+        await emitCaptureState(dealerIntelTabId, collectionRequestId, state);
+        stateCount += 1;
+        await closeDisclaimer(tabId, trigger.frameId);
+      }
+    }
+
+    return {
+      finalUrl: baseUrl,
+      pageTitle: initial.pageTitle,
+      stateCount,
+    };
+  } catch (error) {
+    try {
+      const failure = await captureState(tabId, windowId, {
+        stateId: `failure-${order}`,
+        stateKind: "failure",
+        stateOrder: order,
+        label: `Capture failure: ${
+          error instanceof Error ? error.message : String(error)
+        }`.slice(0, 180),
+        fullPage: false,
+      });
+      await emitCaptureState(dealerIntelTabId, collectionRequestId, failure);
+    } catch {
+      // Preserve the first error; failure evidence is best-effort.
+    }
+    throw error;
+  }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.command === "PING") {
     sendResponse({
       ok: true,
@@ -208,9 +1196,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message?.command === "ACK_CAPTURE_STATE") {
+    const { collectionRequestId, stateId, ok, error } = message.payload || {};
+    const pending = pendingCaptureAcks.get(
+      captureAckKey(collectionRequestId, stateId)
+    );
+    if (!pending) {
+      sendResponse({ ok: false, error: "Capture state is no longer pending" });
+      return false;
+    }
+    if (ok) pending.resolve();
+    else pending.reject(new Error(error || `Upload failed for ${stateId}`));
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message?.command === "COLLECT_ITEM") {
-    collectItem(message.payload)
-      .then((capture) => sendResponse({ ok: true, capture }))
+    const dealerIntelTabId = sender.tab?.id;
+    const collectionRequestId = message.collectionRequestId;
+    if (dealerIntelTabId === undefined || !collectionRequestId) {
+      sendResponse({ ok: false, error: "Chrome collection request has no source tab" });
+      return false;
+    }
+    collectItem(message.payload, dealerIntelTabId, collectionRequestId)
+      .then((summary) => sendResponse({ ok: true, summary }))
       .catch((error) =>
         sendResponse({
           ok: false,

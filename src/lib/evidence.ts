@@ -10,6 +10,7 @@ import {
   createEvidence,
   deleteEvidence as deleteEvidenceRow,
   getEvidence,
+  getEvidenceByCaptureKey,
 } from "@/lib/db/repository";
 import type { Evidence, EvidenceType, MissionType } from "@/lib/db";
 
@@ -31,7 +32,7 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 export function isHtmlEvidence(type: EvidenceType): boolean {
-  return type === "html_snapshot";
+  return type === "html_snapshot" || type === "state_html_snapshot";
 }
 
 function extensionFor(evidenceType: EvidenceType, fileName: string): string {
@@ -53,7 +54,20 @@ export async function uploadEvidence(input: {
   /** Full captured text (e.g. a disclaimer modal's fine print). See
    *  evidence.textContent. */
   textContent?: string | null;
+  /** Stable artifact identity for retry-safe streamed captures. */
+  captureKey?: string | null;
+  /** Shared identity and metadata for a rendered UI state. */
+  captureStateId?: string | null;
+  captureState?: string | null;
+  sourceUrl?: string | null;
+  captureOrder?: number | null;
 }): Promise<Evidence> {
+  const captureKey = input.captureKey?.trim() || null;
+  if (captureKey) {
+    const existing = await getEvidenceByCaptureKey(captureKey);
+    if (existing) return existing;
+  }
+
   const ext = extensionFor(input.evidenceType, input.fileName);
   const key = `runs/${input.collectionRunId}/${input.evidenceType}/${randomUUID()}.${ext}`;
 
@@ -66,17 +80,36 @@ export async function uploadEvidence(input: {
     })
   );
 
-  return createEvidence({
-    collectionRunId: input.collectionRunId,
-    siteId: input.siteId,
-    missionType: input.missionType,
-    evidenceType: input.evidenceType,
-    label: input.label?.trim() || null,
-    textContent: input.textContent?.trim() || null,
-    ...(isHtmlEvidence(input.evidenceType)
-      ? { htmlUrl: key }
-      : { screenshotUrl: key }),
-  });
+  try {
+    return await createEvidence({
+      collectionRunId: input.collectionRunId,
+      siteId: input.siteId,
+      missionType: input.missionType,
+      evidenceType: input.evidenceType,
+      captureKey,
+      captureStateId: input.captureStateId?.trim() || null,
+      captureState: input.captureState?.trim() || null,
+      sourceUrl: input.sourceUrl?.trim() || null,
+      captureOrder: input.captureOrder ?? null,
+      label: input.label?.trim() || null,
+      textContent: input.textContent?.trim() || null,
+      ...(isHtmlEvidence(input.evidenceType)
+        ? { htmlUrl: key }
+        : { screenshotUrl: key }),
+    });
+  } catch (error) {
+    // A simultaneous retry may have won the unique capture-key race after the
+    // preflight read. Remove this request's now-unreferenced object and return
+    // the winner; otherwise clean up and preserve the original database error.
+    await getR2Client()
+      .send(new DeleteObjectCommand({ Bucket: getR2Bucket(), Key: key }))
+      .catch(() => {});
+    if (captureKey) {
+      const existing = await getEvidenceByCaptureKey(captureKey);
+      if (existing) return existing;
+    }
+    throw error;
+  }
 }
 
 /** Object key for an evidence row, regardless of evidence type. */

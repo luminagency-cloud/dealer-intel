@@ -348,6 +348,7 @@ export const missionResults = pgTable(
 export const evidenceTypeEnum = pgEnum("evidence_type", [
   "screenshot",
   "html_snapshot",
+  "state_html_snapshot",
   "failure_screenshot",
   "disclaimer_screenshot",
 ]);
@@ -357,42 +358,59 @@ export type EvidenceType = (typeof evidenceTypeEnum.enumValues)[number];
 export const EVIDENCE_TYPE_LABELS: Record<EvidenceType, string> = {
   screenshot: "Screenshot",
   html_snapshot: "HTML Snapshot",
+  state_html_snapshot: "State HTML Snapshot",
   failure_screenshot: "Failure Screenshot",
   disclaimer_screenshot: "Disclaimer Screenshot",
 };
 
 /** Screenshots, disclaimers, and HTML captures (AD-005, AD-010). URLs point
  *  at object storage; upload/retrieval services arrive in Phase 4. */
-export const evidence = pgTable("evidence", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  collectionRunId: uuid("collection_run_id")
-    .notNull()
-    .references(() => collectionRuns.id, { onDelete: "cascade" }),
-  siteId: uuid("site_id")
-    .notNull()
-    .references(() => sites.id, { onDelete: "cascade" }),
-  missionType: missionTypeEnum("mission_type").notNull(),
-  evidenceType: evidenceTypeEnum("evidence_type").notNull(),
-  screenshotUrl: text("screenshot_url"),
-  htmlUrl: text("html_url"),
-  /** Human-readable name captured at collection time so identical-typed rows
-   *  are distinguishable in the viewer: page title + path for page captures,
-   *  slide/tab labels for exploration shots, and — for disclaimer shots — the
-   *  ad-anchor text (vehicle + price from the disclaimer's ad card). That
-   *  anchor is also the join key tying a disclaimer screenshot back to its
-   *  offer for the compliance pass (which pairs ad image + disclaimer text in
-   *  one call). Null on legacy rows captured before labeling existed. */
-  label: text("label"),
-  /** Text scraped from the source at capture time. For disclaimer shots this is
-   *  the disclaimer modal's full text (offer + fine print) — the real
-   *  disclosure the compliance pass needs, captured directly so no OCR is
-   *  required and so it isn't lost when the modal closes before the HTML
-   *  snapshot. Null for captures with no associated text. */
-  textContent: text("text_content"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const evidence = pgTable(
+  "evidence",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    collectionRunId: uuid("collection_run_id")
+      .notNull()
+      .references(() => collectionRuns.id, { onDelete: "cascade" }),
+    siteId: uuid("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    missionType: missionTypeEnum("mission_type").notNull(),
+    evidenceType: evidenceTypeEnum("evidence_type").notNull(),
+    screenshotUrl: text("screenshot_url"),
+    htmlUrl: text("html_url"),
+    /** Stable per-artifact key supplied by stateful collectors. It makes an
+     *  interrupted Chrome upload safe to retry without creating duplicate
+     *  evidence. Null for legacy/current-collector evidence. */
+    captureKey: text("capture_key"),
+    /** Groups the HTML and screenshot belonging to one visible UI state. */
+    captureStateId: text("capture_state_id"),
+    /** Machine-readable state kind: base, carousel, tab, accordion, etc. */
+    captureState: text("capture_state"),
+    /** Resulting browser URL for this state, including modal query/hash state. */
+    sourceUrl: text("source_url"),
+    /** Capture order within one mission result. */
+    captureOrder: integer("capture_order"),
+    /** Human-readable name captured at collection time so identical-typed rows
+     *  are distinguishable in the viewer: page title + path for page captures,
+     *  slide/tab labels for exploration shots, and — for disclaimer shots — the
+     *  ad-anchor text (vehicle + price from the disclaimer's ad card). That
+     *  anchor is also the join key tying a disclaimer screenshot back to its
+     *  offer for the compliance pass (which pairs ad image + disclaimer text in
+     *  one call). Null on legacy rows captured before labeling existed. */
+    label: text("label"),
+    /** Text scraped from the source at capture time. For disclaimer shots this is
+     *  the disclaimer modal's full text (offer + fine print) — the real
+     *  disclosure the compliance pass needs, captured directly so no OCR is
+     *  required and so it isn't lost when the modal closes before the HTML
+     *  snapshot. Null for captures with no associated text. */
+    textContent: text("text_content"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex("evidence_capture_key_unique").on(table.captureKey)]
+);
 
 export const offerTypeEnum = pgEnum("offer_type", [
   "lease",

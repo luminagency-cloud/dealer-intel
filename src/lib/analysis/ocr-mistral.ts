@@ -29,6 +29,23 @@ export interface OcrArtifact {
 const MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr";
 let mistralUnauthorized = false;
 
+/** Converts Mistral's Markdown-oriented OCR response into the plain visible
+ * text expected by the deterministic offer extractor. The raw per-page
+ * Markdown remains available in `pages` for audit/debugging. */
+export function normalizeOcrText(text: string): string {
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s{0,3}(?:[-+*]|\d+[.)])\s+/gm, "")
+    .replace(/[\*_~`]+/g, "")
+    .replace(/\\([\\`*_{\[\]()#+\-.!>])/g, "$1")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function mistralModel(): string {
   return process.env.MISTRAL_OCR_MODEL || "mistral-ocr-latest";
 }
@@ -174,7 +191,9 @@ export async function runMistralOcr(
     return {
       provider: "mistral",
       model,
-      imageText: pages.map((p) => p.markdown || p.text).filter(Boolean).join("\n\n"),
+      imageText: normalizeOcrText(
+        pages.map((p) => p.markdown || p.text).filter(Boolean).join("\n\n")
+      ),
       pages,
     };
   } catch (err) {

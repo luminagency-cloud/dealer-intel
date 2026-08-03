@@ -12,6 +12,10 @@ Dealer Intel is a collect -> analyze -> report pipeline.
 Collection creates raw evidence. Analysis reads evidence and creates structured
 offers/compliance grades. Reporting reads published snapshots.
 
+Captured disclaimer text is analyzed as one bounded promotion. Lease-payment
+and APR alternatives are split inside that disclosure and each term is resolved
+against its own anchor, preventing a finance term from leaking into a lease row.
+
 The important boundary: analysis never scrapes, and core offer/compliance
 reporting never reads live run data or visits dealer sites.
 
@@ -49,6 +53,31 @@ and reuses one visible Chrome window for all selected missions on a dealer.
 Chrome progress is database-backed: reopening or reloading a running run
 automatically resumes only its unfinished items, while a browser lock prevents
 two Dealer Intel tabs from driving the same run.
+
+Chrome protocol 3 is stateful. The extension prepares the visible page, expands
+mission-selected accordions, captures a true full-page base image through the
+Chrome DevTools protocol, then opens and captures selected tabs, carousel
+slides, and ad disclaimers. Each state carries a stable id, kind, order, label,
+resulting URL, rendered HTML, screenshot, and optional extracted disclaimer
+text. The extension sends one state to the authenticated app page and waits for
+its upload acknowledgement before changing the UI again. Stable capture keys
+make interrupted uploads safe to retry. A partial interaction failure becomes
+`needs_review` when any evidence was already stored.
+
+The app currently requires extension 0.3.4 or newer. Collection windows open
+maximized for deterministic desktop layouts. Primary-carousel discovery polls
+for late widget injection, and traversal retries transient/no-op Next clicks so
+an animation-time disabled control does not silently truncate the manifest.
+Numbered carousels are selected by ordinal and paused through their page-level
+widget API so a disclosure upload cannot let autoplay skip the next slide.
+
+Carousel exploration is state-driven, not count-driven. The extension pauses
+autoplay, reads the platform's active slide identity and any ordinal/total (for
+example `slide 4 of 12`), captures that state, advances, and stops when the
+identity repeats or the advertised final ordinal is reached. A safety ceiling
+only prevents a broken widget from looping forever. Disclaimers are opened
+while their exact slide remains active and are retained only when the opened
+text contains price, APR, monthly-payment, or due-at-signing terms.
 
 Inventory remains on its existing page/batch and local-service path during the
 phase-one proof. Phase two moves its page collection into the same visible
@@ -92,6 +121,13 @@ Stored evidence includes:
 - failure screenshots,
 - disclaimer screenshots,
 - captured disclaimer text on `evidence.text_content`.
+
+Stateful Chrome evidence also records `capture_key`, `capture_state_id`,
+`capture_state`, `source_url`, and `capture_order`. The base state's HTML uses
+`html_snapshot` and remains normal analysis input. Alternate-state HTML uses
+`state_html_snapshot`: it is retained for audit and manifest comparison but is
+deliberately excluded from offer extraction so one rotating ad is not parsed
+again merely because its surrounding page was captured in several UI states.
 
 Evidence files live in R2. Database rows store object keys and metadata.
 

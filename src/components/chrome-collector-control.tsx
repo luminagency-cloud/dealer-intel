@@ -5,7 +5,31 @@ import { useEffect, useRef, useState } from "react";
 
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
-const PROTOCOL_VERSION = 2;
+const EVENT_TYPE = "DEALER_INTEL_EXTENSION_EVENT";
+const PROTOCOL_VERSION = 3;
+const MIN_EXTENSION_VERSION = "0.3.4";
+
+function compareVersions(left: string, right: string): number {
+  const a = left.split(".").map((part) => Number(part) || 0);
+  const b = right.split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const delta = (a[index] || 0) - (b[index] || 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+interface ChromeCaptureState {
+  stateId: string;
+  stateKind: "base" | "carousel" | "tab" | "disclaimer" | "failure";
+  stateOrder: number;
+  finalUrl: string;
+  pageTitle: string;
+  label: string;
+  html: string;
+  screenshotDataUrl: string;
+  textContent?: string;
+}
 
 interface ChromeJobItem {
   siteId: string;
@@ -13,6 +37,13 @@ interface ChromeJobItem {
   url: string;
   siteName: string;
   missionName: string;
+  missionType: string;
+  explore: {
+    carousels: boolean;
+    tabs: boolean;
+    accordions: boolean;
+    disclaimers: boolean;
+  };
 }
 
 interface ExtensionResponse {
@@ -20,18 +51,22 @@ interface ExtensionResponse {
   error?: string;
   protocolVersion?: number;
   version?: string;
-  capture?: {
+  summary?: {
     finalUrl: string;
     pageTitle: string;
-    html: string;
-    screenshotDataUrl: string;
+    stateCount: number;
   };
 }
 
 function extensionRequest(
-  command: "PING" | "COLLECT_ITEM" | "CLOSE_SESSION",
+  command:
+    | "PING"
+    | "COLLECT_ITEM"
+    | "ACK_CAPTURE_STATE"
+    | "CLOSE_SESSION",
   payload?: unknown,
-  timeoutMs = 2_000
+  timeoutMs = 2_000,
+  onCaptureState?: (state: ChromeCaptureState) => Promise<void>
 ): Promise<ExtensionResponse> {
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
@@ -47,6 +82,39 @@ function extensionRequest(
     }, timeoutMs);
 
     function onMessage(event: MessageEvent) {
+      if (
+        event.source === window &&
+        event.data?.type === EVENT_TYPE &&
+        event.data?.requestId === requestId &&
+        event.data?.state
+      ) {
+        const state = event.data.state as ChromeCaptureState;
+        const upload = onCaptureState
+          ? onCaptureState(state)
+          : Promise.reject(new Error("No capture-state uploader is available"));
+        void upload
+          .then(() =>
+            extensionRequest(
+              "ACK_CAPTURE_STATE",
+              { collectionRequestId: requestId, stateId: state.stateId, ok: true },
+              5_000
+            )
+          )
+          .catch((error) =>
+            extensionRequest(
+              "ACK_CAPTURE_STATE",
+              {
+                collectionRequestId: requestId,
+                stateId: state.stateId,
+                ok: false,
+                error:
+                  error instanceof Error ? error.message : "Evidence upload failed",
+              },
+              5_000
+            ).catch(() => undefined)
+          );
+        return;
+      }
       if (
         event.source !== window ||
         event.data?.type !== RESPONSE_TYPE ||
@@ -74,6 +142,40 @@ async function responseError(response: Response): Promise<string> {
   } catch {
     return `Request failed (${response.status})`;
   }
+}
+
+async function uploadCaptureState(
+  runId: string,
+  item: ChromeJobItem,
+  state: ChromeCaptureState
+): Promise<void> {
+  const form = new FormData();
+  form.set("action", "state");
+  form.set("siteId", item.siteId);
+  form.set("missionId", item.missionId);
+  form.set("stateId", state.stateId);
+  form.set("stateKind", state.stateKind);
+  form.set("stateOrder", String(state.stateOrder));
+  form.set("finalUrl", state.finalUrl);
+  form.set("pageTitle", state.pageTitle || item.siteName);
+  form.set("label", state.label);
+  form.set("html", state.html);
+  if (state.textContent) form.set("textContent", state.textContent);
+  const screenshotResponse = await fetch(state.screenshotDataUrl);
+  if (!screenshotResponse.ok) {
+    throw new Error(`Could not read Chrome screenshot (${screenshotResponse.status})`);
+  }
+  form.set(
+    "screenshot",
+    await screenshotResponse.blob(),
+    `${state.stateId}.png`
+  );
+
+  const response = await fetch(`/api/collector/runs/${runId}/result`, {
+    method: "POST",
+    body: form,
+  });
+  if (!response.ok) throw new Error(await responseError(response));
 }
 
 export function ChromeCollectorControl({
@@ -117,6 +219,14 @@ export function ChromeCollectorControl({
           `Chrome Collector protocol mismatch (app ${PROTOCOL_VERSION}, extension ${ping.protocolVersion ?? "unknown"}). Reload the extension.`
         );
       }
+      if (
+        !ping.version ||
+        compareVersions(ping.version, MIN_EXTENSION_VERSION) < 0
+      ) {
+        throw new Error(
+          `Chrome Collector ${ping.version ?? "unknown"} is outdated. Reload extension ${MIN_EXTENSION_VERSION} before starting this run.`
+        );
+      }
 
       setMessage(`Chrome Collector ${ping.version ?? ""} detected. Preparing run…`);
       const startResponse = await fetch(`/api/collector/runs/${runId}/start`, {
@@ -143,28 +253,28 @@ export function ChromeCollectorControl({
           const extensionResult = await extensionRequest(
             "COLLECT_ITEM",
             item,
-            90_000
+            10 * 60_000,
+            async (state) => {
+              setMessage(
+                `${index + 1}/${preparedJob.items.length}: Uploading ${item.siteName} — ${state.label}…`
+              );
+              await uploadCaptureState(runId, item, state);
+            }
           );
-          if (!extensionResult.ok || !extensionResult.capture) {
+          if (!extensionResult.ok || !extensionResult.summary) {
             throw new Error(extensionResult.error || "Chrome capture failed");
           }
 
-          const capture = extensionResult.capture;
+          const summary = extensionResult.summary;
           const resultForm = new FormData();
+          resultForm.set("action", "complete");
           resultForm.set("siteId", item.siteId);
           resultForm.set("missionId", item.missionId);
-          resultForm.set("finalUrl", capture.finalUrl);
-          resultForm.set("pageTitle", capture.pageTitle || item.siteName);
-          resultForm.set("html", capture.html);
-          const screenshotResponse = await fetch(capture.screenshotDataUrl);
-          resultForm.set(
-            "screenshot",
-            await screenshotResponse.blob(),
-            "chrome-visible.png"
-          );
+          resultForm.set("finalUrl", summary.finalUrl);
+          resultForm.set("stateCount", String(summary.stateCount));
 
           setMessage(
-            `${index + 1}/${preparedJob.items.length}: Uploading ${item.siteName} evidence…`
+            `${index + 1}/${preparedJob.items.length}: Finalizing ${summary.stateCount} ${item.siteName} evidence state${summary.stateCount === 1 ? "" : "s"}…`
           );
           const resultResponse = await fetch(
             `/api/collector/runs/${runId}/result`,
@@ -179,6 +289,7 @@ export function ChromeCollectorControl({
           const errorMessage =
             error instanceof Error ? error.message : "Chrome capture failed";
           const failureForm = new FormData();
+          failureForm.set("action", "failure");
           failureForm.set("siteId", item.siteId);
           failureForm.set("missionId", item.missionId);
           failureForm.set("error", errorMessage);

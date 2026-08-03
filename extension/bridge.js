@@ -11,7 +11,9 @@ window.addEventListener("message", (event) => {
   }
 
   const { requestId, command, payload } = event.data;
-  chrome.runtime.sendMessage({ command, payload }, (response) => {
+  chrome.runtime.sendMessage(
+    { command, payload, collectionRequestId: requestId },
+    (response) => {
     const runtimeError = chrome.runtime.lastError;
     window.postMessage(
       {
@@ -23,6 +25,25 @@ window.addEventListener("message", (event) => {
       },
       window.location.origin
     );
-  });
+    }
+  );
 });
 
+chrome.runtime.onMessage.addListener((message) => {
+  if (
+    message?.type !== "DEALER_INTEL_CAPTURE_STATE" ||
+    typeof message.collectionRequestId !== "string" ||
+    !message.state
+  ) {
+    return false;
+  }
+  window.postMessage(
+    {
+      type: "DEALER_INTEL_EXTENSION_EVENT",
+      requestId: message.collectionRequestId,
+      state: message.state,
+    },
+    window.location.origin
+  );
+  return false;
+});

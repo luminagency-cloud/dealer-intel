@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Dealer Intel Chrome Collector",
   "description": "Collects dealer evidence in a visible Chrome browser for Dealer Intel.",
-  "version": "0.2.1",
-  "permissions": ["activeTab", "scripting", "tabs", "windows"],
+  "version": "0.3.4",
+  "permissions": ["activeTab", "debugger", "scripting", "tabs", "windows"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service-worker.js"

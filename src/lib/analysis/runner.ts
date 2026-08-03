@@ -16,6 +16,8 @@ import { isMistralConfigured } from "@/lib/env";
 import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
 import {
   extractOffers,
+  extractOffersFromDisclosure,
+  extractOffersFromOcrImage,
   findKnownModel,
   htmlToText,
   findServiceCouponImages,
@@ -1020,10 +1022,23 @@ async function processAnalysis(
     for (const { evidence: row, site } of disclaimerEvidence) {
       if (row.missionType === "service_specials") continue;
       const text = row.textContent!;
-      const extracted = extractOffers(text, {
+      const extracted = extractOffersFromDisclosure(text, {
         missionType: row.missionType,
         brand: site.brand,
       });
+      const disclaimerMissionKey = `${row.siteId}:${row.missionType}`;
+      const pricedDisclosureCount = extracted.filter((offer) =>
+        ["lease", "finance", "cash"].includes(offer.offerType)
+      ).length;
+      if (pricedDisclosureCount > 0) {
+        // Coverage describes what the evidence supplied, not how many new rows
+        // survived run-wide dedup. The same ad can be captured by homepage and
+        // finance missions; a duplicate still means OCR is unnecessary here.
+        disclaimerOffersByMission.set(
+          disclaimerMissionKey,
+          (disclaimerOffersByMission.get(disclaimerMissionKey) ?? 0) + pricedDisclosureCount
+        );
+      }
 
       const prog = analysisProgress.get(runId);
       if (prog) prog.processed += 1;
@@ -1123,11 +1138,6 @@ async function processAnalysis(
           disclaimerText,
           confidence: effective.confidence,
         });
-        disclaimerOffersByMission.set(
-          `${row.siteId}:${row.missionType}`,
-          (disclaimerOffersByMission.get(`${row.siteId}:${row.missionType}`) ?? 0) + 1
-        );
-
         const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
         const result = COMPLIANCE_TYPES.includes(effective.offerType)
           ? await grader.grade({
@@ -1256,7 +1266,10 @@ async function processAnalysis(
         if (!(await isAdSizedImage(imageBuf))) continue;
         const artifact = await runMistralOcr(imageBuf);
         if (!artifact || !artifact.imageText.trim()) continue;
-        const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
+        const extracted = extractOffersFromOcrImage(artifact.imageText, {
+          missionType: htmlRow.missionType,
+          brand: site.brand,
+        });
         console.log(`[analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
         for (const offer of extracted) {
           if (offer.confidence < 0.3) continue;
@@ -1585,7 +1598,17 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       for (const { evidence: row, site } of disclaimerRows) {
         if (row.missionType === "service_specials") continue;
         const text = row.textContent!;
-        const extracted = extractOffers(text, { missionType: row.missionType, brand: site.brand });
+        const extracted = extractOffersFromDisclosure(text, { missionType: row.missionType, brand: site.brand });
+        const disclaimerMissionKey = `${row.siteId}:${row.missionType}`;
+        const pricedDisclosureCount = extracted.filter((offer) =>
+          ["lease", "finance", "cash"].includes(offer.offerType)
+        ).length;
+        if (pricedDisclosureCount > 0) {
+          disclaimerOffersByMission.set(
+            disclaimerMissionKey,
+            (disclaimerOffersByMission.get(disclaimerMissionKey) ?? 0) + pricedDisclosureCount
+          );
+        }
         const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
         const screenshotBuffer = await getEvidenceBody(row);
         for (const offer of extracted) {
@@ -1611,7 +1634,6 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(text) ?? deriveAnnualMileage(disclaimerText, effective.termMonths) ?? deriveAnnualMileage(text, effective.termMonths) : null;
           if (isUnmodeledPricedOffer(effective.offerType, effective.vehicleModel)) continue;
           await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
-          disclaimerOffersByMission.set(`${row.siteId}:${row.missionType}`, (disclaimerOffersByMission.get(`${row.siteId}:${row.missionType}`) ?? 0) + 1);
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
             ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })
@@ -1692,7 +1714,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             if (!(await isAdSizedImage(imageBuf))) continue;
             const artifact = await runMistralOcr(imageBuf);
             if (!artifact || !artifact.imageText.trim()) continue;
-            const extracted = extractOffers(artifact.imageText, { missionType: htmlRow.missionType, brand: site.brand });
+            const extracted = extractOffersFromOcrImage(artifact.imageText, {
+              missionType: htmlRow.missionType,
+              brand: site.brand,
+            });
             console.log(`[partial-analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
             for (const offer of extracted) {
               pageFoundOffer = (await insertImageExtractedOffer({

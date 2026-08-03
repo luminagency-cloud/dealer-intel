@@ -99,48 +99,81 @@ Status: **implemented**
 
 ### Chrome Extension Collector Pilot
 
-Status: **matched-suite proof in progress**. See
-`Docs/Chrome Extension Collector Plan.md`.
+Status: **first-order selectable pilot; the Current collector remains the
+production fallback**. See `Docs/Chrome Extension Collector Plan.md`.
 
 - Runs can select the Current collector or Chrome extension collector.
 - The current collector remains the production fallback.
-- The one-item proof passed. The current extension processes a selected suite
+- The one-item and suite-transport proofs passed. The extension processes a selected suite
   sequentially, reusing one visible Chrome window for each dealer's missions
-  and storing HTML plus a screenshot for every result.
+  and storing evidence through the existing model.
 - Reloading or reopening a running Chrome run automatically resumes only the
   unfinished items. A browser lock prevents duplicate collection when the same
   run is open in two Dealer Intel tabs.
 - The first matched baseline is Current run `f931930e`: Anchor Nissan Suite,
   five dealers, three missions per dealer, 15 pages, and 72 analyzed offers.
-- Matched Chrome run `e6562632` also captured all 15 pages and settled every
-  item successfully. Four of five dealers matched publishable counts exactly;
-  Balise produced six extra publishable analysis rows despite materially
-  matching source-page content, making analysis deduplication the next parity
-  issue rather than collection reliability.
-- Phase two brings inventory through the same visible-Chrome mechanism. The
-  existing `dealer-inventory-api` process check/autostart remains in place only
-  until the extension path reproduces the current inventory results reliably.
+- Matched Chrome run `e6562632` also captured 15 base pages and settled every
+  item successfully, but it predated stateful capture. Its similar offer counts
+  prove suite transport, not compliance-evidence parity: it did not deliberately
+  capture carousel slides, tabs, accordions, or opened disclaimers.
+- Protocol 3 / extension 0.3.4 streams labeled UI states one at a time and waits
+  for each authenticated upload before continuing. It captures a full-page base
+  state plus mission-selected carousel, tab, accordion-expanded, and disclaimer
+  states. HTML for alternate states is stored for audit but excluded from the
+  normal HTML analysis input; disclaimer text remains first-class evidence.
+- Extension 0.3.4 makes the desktop layout deterministic, waits for
+  late-injected carousels, and retries transition-time no-op Next clicks. The
+  extension pauses page-level carousel APIs and selects numbered slides by
+  ordinal so uploads cannot race autoplay. The app rejects older extension
+  patches before it changes run state.
+- Live extension-0.3.4 run `8cd61846` completed Balise's current nine-slide
+  DealerOn hero with a 9/9 ordered carousel manifest and stored its
+  offer-bearing disclaimer text. Run `cadbbb7b` matched the Current collector's
+  base-state evidence on Bristol Toyota's Dealer Alchemist finance page. The
+  protocol-3 suite run `f644f98c` also established real DDC disclaimer capture
+  and Dealer Inspire carousel/tab/disclaimer capture; Nucar Nissan stored 11
+  carousel states and 21 labeled disclaimer states.
+- The stateful evidence gate has passed on live DealerOn, DDC, and Dealer
+  Inspire pages. Dealer Alchemist has matched base-state evidence, but a live
+  page exposing an ad-specific alternate disclaimer state is still needed for
+  that narrower platform check.
 
-Done when:
+Verified for the selectable pilot:
 
 - Missing/disabled extension preflight leaves the run untouched and presents a
   clear switch to the Current collector.
 - A Chrome proof run stores evidence in the existing model and reaches the
   normal ready-to-analyze state.
-- Matched current/Chrome test runs establish whether visible Chrome materially
-  improves blocked dealer collection.
+- Balise pauses its advertised homepage carousel, captures every unique active
+  slide, and stores disclosures only for slides whose opened text contains real
+  price/APR/payment terms. The original regression exposed 12 slides; the
+  current live proof exposed and captured all 9. Award/brag-slide boilerplate
+  is not offer-disclaimer evidence.
+- DealerOn, Dealer Inspire, and DDC proof runs establish live platform coverage
+  for carousel, tab/accordion, and ad-specific disclaimer states. Dealer
+  Alchemist currently has live base-state parity.
+- `node scripts/compare-evidence-manifests.mjs <current> <chrome> [site]`
+  reports manifest parity by dealer, mission, and state kind.
+
+Remaining before making Chrome the default or retiring Current:
+
+- Verify a Dealer Alchemist page that actually exposes an ad-specific
+  disclaimer state; the current Bristol Toyota page exposes only the base state
+  to both collectors.
+- Exercise interrupted-run recovery and the same evidence checks on macOS.
 - Inventory parity is verified before removing the sibling inventory service
   and its local DLL/process check.
 
-### 1. Dealer Inspire / Dealer Alchemist Disclaimer Capture
+### 1. Dealer Alchemist Disclaimer Capture
 
-Known risk: disclaimer modal selectors may not match these platforms on all
-real dealer pages.
+Dealer Inspire disclaimer capture passed on live pages. The remaining narrow
+risk is Dealer Alchemist: the current Bristol Toyota test page exposes no
+ad-specific modal or alternate disclaimer state to either collector.
 
 Done when:
 
-- Real Dealer Inspire and Dealer Alchemist pages capture ad-specific disclaimer
-  text into `evidence.text_content`.
+- A real Dealer Alchemist page with an ad-specific disclaimer interaction
+  captures that text into `evidence.text_content`.
 - Captured text is tied to the ad, not footer/legal boilerplate.
 
 ### 2. Report Trend Deltas
