@@ -1,8 +1,17 @@
+// Order matters: shared lifecycle, then navigation and tallying, then every
+// platform adapter (each self-registers into `inventoryPlatformAdapters`),
+// then the dispatcher that reads that registry.
 importScripts(
   "inventory/shared.js",
   "inventory/navigate.js",
+  "inventory/tally.js",
   "inventory/adapters/dealer-com.js",
   "inventory/adapters/dealer-inspire.js",
+  "inventory/adapters/dealer-on.js",
+  "inventory/adapters/apollo.js",
+  "inventory/adapters/dealer-alchemist.js",
+  "inventory/adapters/dealer-masters.js",
+  "inventory/adapters/sokal.js",
   "inventory.js"
 );
 
@@ -13,8 +22,6 @@ const CAROUSEL_SAFETY_LIMIT = 30;
 const CAROUSEL_DETECTION_TIMEOUT_MS = 8_000;
 const MAX_TABS = 8;
 const DISCLAIMER_SAFETY_LIMIT = 30;
-const INVENTORY_TIMEOUT_PER_MAKE_MS = 60_000;
-const INVENTORY_CLEANUP_GRACE_MS = 5_000;
 const ACTIVE_INVENTORY_SESSION_KEY = "dealerIntelActiveInventorySession";
 let activeSession = null;
 let activeSessionTimeout = null;
@@ -75,11 +82,32 @@ async function closeActiveSession() {
 
 const activeInventorySessionRecovery = closeActiveSession();
 
-async function ensureSiteSession(item) {
+/**
+ * Open (or reuse) the single collection window for a dealer.
+ *
+ * `landingUrl` is the page to open at. Inventory collection passes the SRP it
+ * already knows, so it does not have to load the homepage and then immediately
+ * navigate away from it. Callers that genuinely want the homepage (evidence
+ * capture) omit it and get `item.url`.
+ */
+async function ensureSiteSession(item, landingUrl) {
   await activeInventorySessionRecovery;
   if (!item?.url || !item?.siteId) {
     throw new Error("Collection job did not include a dealer and URL");
   }
+
+  // Same-origin guard: a bad stored path must not send the collection window
+  // to another site, so anything off-origin falls back to the dealer homepage.
+  const opensAt = (() => {
+    if (!landingUrl) return item.url;
+    try {
+      return new URL(landingUrl).origin === new URL(item.url).origin
+        ? landingUrl
+        : item.url;
+    } catch {
+      return item.url;
+    }
+  })();
 
   if (activeSession?.siteId === item.siteId) {
     try {
@@ -102,7 +130,7 @@ async function ensureSiteSession(item) {
       if (!sameSite) {
         // No `active: true`: this tab is the only tab in its own collection
         // window, so activating it only serves to steal the operator's focus.
-        await chrome.tabs.update(activeSession.tabId, { url: item.url });
+        await chrome.tabs.update(activeSession.tabId, { url: opensAt });
         await waitForTabComplete(activeSession.tabId);
       }
       return activeSession;
@@ -122,7 +150,7 @@ async function ensureSiteSession(item) {
   // dialog at narrow widths, and the readers target the desktop layout. A
   // fixed size keeps that deterministic across machines and screen sizes.
   const created = await chrome.windows.create({
-    url: item.url,
+    url: opensAt,
     focused: true,
     type: "normal",
     width: 1440,
@@ -138,10 +166,11 @@ async function ensureSiteSession(item) {
   await chrome.storage.local.set({
     [ACTIVE_INVENTORY_SESSION_KEY]: activeSession,
   });
-  const makePasses = Math.max(1, item.makeAllowList?.length || 1);
+  // Derived from the collection budget itself, so the window can never be
+  // reclaimed out from under a collection that is still legitimately running.
   activeSessionTimeout = setTimeout(() => {
     closeActiveSession().catch(() => {});
-  }, INVENTORY_TIMEOUT_PER_MAKE_MS * makePasses + INVENTORY_CLEANUP_GRACE_MS);
+  }, inventoryShared.sessionLifetimeMs(item.makeAllowList?.length));
   await waitForTabComplete(tabId);
   return activeSession;
 }

@@ -263,7 +263,11 @@
 
   async function collect({ item, helpers, runtime }) {
     const warnings = [];
-    const { tabId } = await helpers.ensureSiteSession(item);
+    const { tabId } = await inventoryNavigate.openInventorySession({
+      item,
+      platform: "dealer_inspire",
+      helpers,
+    });
 
     const landing = await inventoryNavigate.resolveInventoryPage({
       tabId,

@@ -95,8 +95,39 @@
     };
   }
 
+  /**
+   * The wall-clock budget one dealer's inventory collection gets.
+   *
+   * Sized from what the adapters actually do rather than from a round number.
+   * Per make: two SRP navigations (filter, then in-transit) plus two model
+   * facet reads, whose own poll ceiling is 10s each. Fixed cost: opening the
+   * session window, loading the homepage, reaching the SRP, and reading the
+   * make and status facets once.
+   *
+   * The previous 30s + 30s/make could not cover that for even a single make —
+   * a one-make dealer was given 60s for roughly 85s of work, so it failed on
+   * the clock every time and reported the last tier it happened to be in.
+   *
+   * Exported so the session watchdog derives from the SAME number. The two
+   * used to be computed independently (60s/make + 5s there, 30s + 30s/make
+   * here), which for one make put the window teardown 5s after the collection
+   * deadline — close enough that cleanup raced the work still in flight and
+   * produced "No tab with id" mid-run.
+   */
+  function collectionBudgetMs(makeCount) {
+    const makePasses = Math.max(1, makeCount || 1);
+    return 45_000 + makePasses * 45_000;
+  }
+
+  /** Never let the window be reclaimed while collection may still be using it. */
+  function sessionLifetimeMs(makeCount) {
+    return collectionBudgetMs(makeCount) + 30_000;
+  }
+
   globalThis.inventoryShared = {
+    collectionBudgetMs,
     createRuntime,
+    sessionLifetimeMs,
     sleep,
     throwIfCancelled,
     waitFor,

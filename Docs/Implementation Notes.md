@@ -1,6 +1,6 @@
 # Implementation Notes
 
-_Last updated: August 3, 2026_
+_Last updated: August 4, 2026_
 
 This is the compact map of how the system works. The open work list lives in
 `Docs/Implementation Roadmap.md`.
@@ -81,30 +81,129 @@ text contains price, APR, monthly-payment, or due-at-signing terms.
 
 Inventory uses the same visible Chrome extension transport while preserving the
 existing inventory result and reporting models. Platform behavior is isolated:
-`extension/inventory.js` dispatches only to a registered adapter. The current
-pass registers Dealer.com (`ddc`) and Dealer Inspire (`dealer_inspire`). Other
-platforms fail closed until they get an adapter, and `extension/inventory.js`
+`extension/inventory.js` dispatches only to a registered adapter. Every dealer
+platform in the database now has one — Dealer.com (`ddc`), Dealer Inspire
+(`dealer_inspire`), DealerOn (`dealer_on`), Apollo/Team Velocity (`apollo`),
+Dealer Alchemist (`dealer_alchemist`), Dealer Masters (`dealer_masters`), and
+Sokal (`sokal`). Anything else still fails closed, and `extension/inventory.js`
 sniffs the live page when `sites.platform` (free text) matches no adapter.
 
-**Hard rule: models are only ever read with a single make selected.** An
-unfiltered SRP yields a whole-dealership model dump, which is wrong for any
-multi-brand store and silently corrupts reporting. On Dealer.com the site
-enforces this too — the `model` facet group does not exist in the DOM until a
-make is applied. Adapters therefore loop one make at a time, apply it, and only
-then read models. Verified live on a CDJR store: `?make=Chrysler&status=1-1`
-returns Pacifica 3 + Voyager 4 = 7, matching its "7 Vehicles Matching" exactly.
+`src/lib/inventory-platforms.ts` is the app's single copy of that list. It gates
+both the server refusing to seed a batch and the client disabling the run
+button; those were two independent sets before and could disagree.
+
+Adapters fall into two families, and which family a platform lands in is a
+property of the platform, not a style choice:
+
+- **Facet readers** (Dealer.com, Dealer Inspire, Dealer Alchemist) navigate to
+  a filtered SRP URL per make and per status and read the rendered model facet.
+- **Source readers** (DealerOn, Apollo, Dealer Masters) read the data the page
+  itself is built from. Each row already carries its own make, so these do no
+  per-make navigation at all and the whole dealer costs a couple of requests.
+
+Source readers are preferred wherever a source exists, because they sidestep
+both the model-facet trap below and incremental rendering. DealerOn in
+particular renders one vehicle card on a page advertising 356.
+
+The source readers and what they read:
+
+- DealerOn: `dealeron_tagging_data` on the SRP gives `dealerId`/`pageId`, then
+  `/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/<dealerId>/<pageId>` with
+  `baseFilter=dHlwZT0nbic=` (base64 `type='n'`) and `pn=96`. Each card carries
+  make, model, and in-stock/in-transit flags.
+- Apollo: the SRP embeds `selectedFilters`, `accountId`, and `campaignId` as
+  page script variables; `/api/Inventory/getinventorymultiselectionfilters/v2`
+  returns every model with its make attached. On-lot and in-transit are two
+  calls because availability is a request flag, not a facet value.
+- Dealer Masters: these are Gatsby sites that ship the whole inventory to the
+  browser once and filter it client-side, so no filter URL round-trips.
+  `/page-data/<route>/page-data.json` holds `allInventoryJson.nodes`, one node
+  per vehicle. Statuses beginning `_` are vehicles the build marks as not for
+  display; the store's own result count excludes them, so we do too.
+
+Every fetch is issued from inside the dealer's own page, so it is same-origin
+and carries whatever session the visible browser already established.
+
+Two further platform traps are worth keeping in mind:
+
+- Dealer Alchemist's model facet is hierarchical, and the same model can appear
+  under more than one parent — "Corolla Cross" is both its own family and a
+  child of "Corolla". Summing parents overstated a live Toyota store by 16
+  against its advertised 270; the child rows deduped by name reconciled to 270
+  exactly. Read children, never parents.
+- Sokal sits behind DataDome. Visible Chrome is the right place for it: the
+  window is on the operator's screen, so the adapter waits for an interstitial
+  to clear rather than failing on sight, and tells the operator to clear it in
+  that window if it does not.
+
+`extension/inventory/tally.js` holds the counting all adapters share: fold rows
+into make/model buckets, hold them against the dealer's configured make
+allow-list (mapping the site's spelling onto the operator's — "RAM" becomes
+"Ram"), and reconcile subtotals. It knows nothing about selectors, URLs, or
+navigation. The Dealer.com and Dealer Inspire adapters predate it and still
+carry their own equivalent; they are verified against 52 live dealers and were
+left alone.
+
+`sites.brand` is the per-dealer make allow-list every adapter filters on, and
+it is authoritative. When a live store disagrees with it, suspect `sites.url`
+before the brand: a dealer that consolidates two franchise sites into one keeps
+its record and changes its URL.
+
+A configured make can still legitimately come back empty — a brand that is
+simply sold out this week. What that means depends on how the store was read,
+which is the line the tally's `enumerated` flag draws:
+
+- Enumerated sources (DealerOn, Apollo, Dealer Masters) read the whole lot in
+  one pass, so an absent make is confirmed absent. The make is dropped from the
+  subtotals with no warning, matching what the API baseline stores.
+- Facet readers cannot tell "none in stock" from "the refinement silently
+  failed", so they keep the zero subtotal row and warn.
+
+That difference is not cosmetic. `scripts/compare-inventory-batches.mjs` treats
+a make present on one side and absent on the other as a hard failure, with none
+of the ±2 tolerance it allows model rows, so an enumerated adapter that
+published a zero row would fail its own matched-batch check.
+
+`missingMakes` is reported either way for diagnostics; only the warning and the
+subtotal row differ.
+
+**Hard rule: a model row is only ever stored against a make we actually
+observed for it.** An unfiltered model facet yields a whole-dealership model
+dump, which is wrong for any multi-brand store and silently corrupts reporting.
+
+For facet readers that means reading models with exactly one make selected. On
+Dealer.com the site enforces it too — the `model` facet group does not exist in
+the DOM until a make is applied. Those adapters loop one make at a time, apply
+it, and only then read models. Verified live on a CDJR store:
+`?make=Chrysler&status=1-1` returns Pacifica 3 + Voyager 4 = 7, matching its
+"7 Vehicles Matching" exactly.
+
+Source readers satisfy the same rule without filtering, because every row they
+read names its own make. Apollo's model rows carry a `make` field; DealerOn and
+Dealer Masters enumerate vehicles. A row whose make is absent or unreadable is
+dropped, never attributed to a default.
 
 Navigation and filtering are URL-driven, not click-driven.
 `extension/inventory/navigate.js` resolves the SRP in tiers — page already
-loaded, stored `sites.inventory_path`, platform default
-(`/new-inventory/index.htm`, `/new-vehicles/`), then href-ranked link discovery
-— and every failure records what each tier saw. Filters are applied by
-navigating: Dealer.com uses `?make=<Make>&status=1-1` (on the lot) and
-`status=7-7` (in transit); Dealer Inspire uses LightningVRP's `_dFR[...]`
-refinements. These are public URL contracts the dealer's own site links to, so
-they outlast the DOM churn that broke the previous menu/facet click paths. Each
-adapter verifies the filter actually applied and records zero with a warning
-rather than reporting unfiltered counts.
+loaded, stored `sites.inventory_path`, platform default, then href-ranked link
+discovery — and every failure records what each tier saw. Platform defaults are
+`/new-inventory/index.htm` (Dealer.com), `/new-vehicles/` (Dealer Inspire,
+Dealer Alchemist, Sokal), `/searchnew.aspx` (DealerOn), `/inventory/new`
+(Apollo), and `/new-inventory/` (Dealer Masters).
+
+Filters are applied by navigating: Dealer.com uses `?make=<Make>&status=1-1`
+(on the lot) and `status=7-7` (in transit); Dealer Inspire uses LightningVRP's
+`_dFR[...]` refinements; Dealer Alchemist uses `?make=<Make>&status=In Stock`
+/ `In Transit`. These are public URL contracts the dealer's own site links to,
+so they outlast the DOM churn that broke the previous menu/facet click paths.
+Each adapter verifies the filter actually applied and records zero with a
+warning rather than reporting unfiltered counts.
+
+Dealer Alchemist needs a different proof than the others. Its status checkbox
+does not reliably render as checked after a cold load, but its status facet is
+disjunctive — the counts ignore the status refinement itself — so the result
+total landing exactly on the requested status's own count is what proves the
+refinement applied, and proves the unfiltered set was not what got read.
 
 Two DDC DOM traps the reader must keep handling: facet panels render collapsed
 and populate `.panel-collapse` only on expand (so a container holding zero

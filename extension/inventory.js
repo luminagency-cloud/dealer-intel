@@ -54,6 +54,17 @@
       if (/dealer alchemist|dealeralchemist|dealervenom|app\/themes\/dv-framework/i.test(html)) {
         return "dealer_alchemist";
       }
+      if (
+        /dealermasters|dealer-masters/i.test(html) ||
+        document.querySelector("label.options-list-v2__item")
+      ) {
+        return "dealer_masters";
+      }
+      // Deliberately not keyed on the DataDome interstitial. Sokal sits behind
+      // it, but so do sites on other platforms, and a challenge page carries
+      // none of its host platform's markers — matching it here would route
+      // every challenged dealer to the Sokal adapter.
+      if (/sokal/i.test(html)) return "sokal";
       return "unknown";
     });
   }
@@ -62,8 +73,16 @@
     const configured = adapterFor(item?.platform);
     if (configured) return { adapter: configured, detected: null };
 
-    // Nothing matched the stored value — open the site and look.
-    const { tabId } = await helpers.ensureSiteSession(item);
+    // Nothing matched the stored value — open the site and look. The platform
+    // is exactly what we do not know yet, so there is no default path to aim
+    // at, but an operator-stored `inventoryPath` still beats the homepage:
+    // facet markup is itself one of the strongest platform signals, so landing
+    // on the SRP makes the sniff below more accurate as well as cheaper.
+    const { tabId } = await inventoryNavigate.openInventorySession({
+      item,
+      platform: null,
+      helpers,
+    });
     const detected = await detectPlatform(tabId).catch(() => "unknown");
     const sniffed = adapterFor(detected);
     if (sniffed) return { adapter: sniffed, detected };
@@ -73,18 +92,18 @@
         item?.platform || "unknown platform"
       }${
         detected && detected !== "unknown" ? ` (page looks like ${detected})` : ""
-      }. This pass supports Dealer.com and Dealer Inspire.`
+      }. Registered platforms: ${[
+        ...new Set(
+          (globalThis.inventoryPlatformAdapters || []).map((adapter) => adapter.id)
+        ),
+      ].join(", ")}.`
     );
   }
 
   async function collectInventory(item, helpers) {
     const { adapter, detected } = await resolveAdapter(item, helpers);
 
-    // URL-driven collection is roughly two page loads per make rather than a
-    // click sequence per facet, so the budget no longer has to cover a chain
-    // of settle waits. It still scales with make count.
-    const makePasses = Math.max(1, item.makeAllowList?.length || 1);
-    const timeoutMs = 30_000 + makePasses * 30_000;
+    const timeoutMs = inventoryShared.collectionBudgetMs(item.makeAllowList?.length);
 
     const result = await inventoryShared.withTimeout(
       (signal) =>

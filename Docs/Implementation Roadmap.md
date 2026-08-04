@@ -1,6 +1,6 @@
 # Dealer Intel Working List
 
-_Last updated: August 3, 2026_
+_Last updated: August 4, 2026_
 
 This is the current human-readable status and backlog. If something is done, it
 should not live here as future work.
@@ -82,12 +82,13 @@ Status: **implemented and locally configured**
 - News and inventory are wired into the current ops flow.
 - Inventory runs through the inventory page/batch flow and appears in report
   views as an Inventory Snapshot section.
-- Inventory collection is moving to visible Chrome one platform at a time. The
-  current pass supports Dealer.com (`ddc`) and Dealer Inspire
-  (`dealer_inspire`) and fails closed for other platforms. Each adapter owns its
-  navigation, filter containers, apply/settle behavior, and count reader. The
-  sibling `dealer-inventory-api` remains the matched baseline until every
-  dealer on the active platform passes.
+- Visible-Chrome inventory now has an adapter for every platform in the dealer
+  table: Dealer.com (`ddc`), Dealer Inspire (`dealer_inspire`), DealerOn
+  (`dealer_on`), Apollo (`apollo`), Dealer Alchemist (`dealer_alchemist`),
+  Dealer Masters (`dealer_masters`), and Sokal (`sokal`). Each adapter owns its
+  navigation, filtering, and count reading. Unknown platforms still fail
+  closed. The sibling `dealer-inventory-api` remains the matched baseline until
+  every dealer on a platform passes.
 - The Inventory page exposes separate API-baseline and Chrome run buttons plus
   a Cancel Run control that stops the queue and closes the Chrome collection
   window.
@@ -168,16 +169,49 @@ Remaining before making Chrome the default or retiring Current:
   disclaimer state; the current Bristol Toyota page exposes only the base state
   to both collectors.
 - Exercise interrupted-run recovery and the same evidence checks on macOS.
-- Visible-Chrome inventory now has separate Dealer.com and Dealer Inspire
-  adapters. Run every dealer on each platform as its own API-baseline batch and
-  Chrome batch; accept only totals within two vehicles and complete
-  make/status/model reconciliation via `scripts/compare-inventory-batches.mjs`.
-  Dealer.com still needs its full live matrix after the unpacked extension is
-  reloaded. Dealer Inspire needs the same 14-dealer matrix. After both pass,
-  build and verify separate DealerOn, Apollo, and remaining-platform adapters
-  before removing the sibling inventory service.
+- Run every dealer on each platform as its own API-baseline batch and Chrome
+  batch; accept only totals within two vehicles and complete make/status/model
+  reconciliation via `scripts/compare-inventory-batches.mjs`. Dealer.com (38
+  dealers) and Dealer Inspire (14) still need their full live matrices after
+  the unpacked extension is reloaded. DealerOn (4), Apollo (3), Dealer
+  Alchemist (1), Dealer Masters (1), and Sokal (1) have adapters but no matched
+  batch yet — see the platform-adapter item below. The sibling inventory
+  service comes out only after every platform passes.
 
-### 1. Dealer Alchemist Disclaimer Capture
+### 1. Matched Batches For The New Inventory Platforms
+
+Adapters exist for DealerOn, Apollo, Dealer Alchemist, Dealer Masters, and
+Sokal, and every dealer on those platforms is now selectable on the Inventory
+page. What has been proved so far is the data path, not a stored run: the
+reader logic was executed against each live dealer site and reconciled to that
+site's own advertised total.
+
+- DealerOn: Balise Nissan 67, Paul Masse 356 (Buick 126 / GMC 230), Pride
+  Hyundai 153, Station Buick GMC 298 (Buick 41 / GMC 257) — all exact against
+  "Showing all N".
+- Apollo: Shoreline CDJR 90 on-lot / 17 in-transit, Route 6 Kia 130 / 0, Toyota
+  of Dartmouth 61 / 59 — make totals and model totals agree exactly.
+- Dealer Alchemist: Bristol Toyota 52 on-lot, 48 in-transit — deduped child
+  rows sum exactly to the advertised total for both.
+- Dealer Masters: Kia of East Hartford 122 — matches the store's own "122
+  vehicles found" and its make facet.
+
+Done when:
+
+- Each of those dealers has run as a real Chrome batch and an API-baseline
+  batch, reconciled with `scripts/compare-inventory-batches.mjs`.
+- Sokal has run at all. Its DataDome interstitial blocked every attempt to read
+  Kia of Old Saybrook during development, so that adapter's model reader is the
+  one piece here written from the sibling service's behavior rather than from
+  the live page. Expect to correct it on first run.
+
+`sites.brand` is the per-dealer make allow-list and is what every adapter
+filters on. It is authoritative; when it disagrees with a live store, suspect
+`sites.url` first. Station Buick GMC read as GMC-only on August 4 because its
+URL still pointed at the separate GMC site; against its combined site the same
+adapter returns Buick 41 and GMC 257, matching the record.
+
+### 2. Dealer Alchemist Disclaimer Capture
 
 Dealer Inspire disclaimer capture passed on live pages. The remaining narrow
 risk is Dealer Alchemist: the current Bristol Toyota test page exposes no
@@ -189,7 +223,7 @@ Done when:
   captures that text into `evidence.text_content`.
 - Captured text is tied to the ad, not footer/legal boilerplate.
 
-### 2. Report Trend Deltas
+### 3. Report Trend Deltas
 
 Snapshot history exists, but true current-vs-prior deltas are still backlog.
 
@@ -198,7 +232,7 @@ Done when:
 - Reports compare the current published snapshot with the prior group snapshot.
 - Deltas come from published snapshots, not live run data.
 
-### 3. Month-To-Date Sales In Reports
+### 4. Month-To-Date Sales In Reports
 
 Inventory is already in reports. Month-to-date sales is still unresolved.
 
@@ -207,7 +241,7 @@ Done when:
 - Month-to-date sales has a known source.
 - The ingestion and report model are defined, if we decide to include it.
 
-### 4. Remote Operator Access
+### 5. Remote Operator Access
 
 Status: **planned, not yet implemented**. See
 `Docs/-future/Remote Operator Setup Plan.md`.

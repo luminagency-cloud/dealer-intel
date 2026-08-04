@@ -27,6 +27,10 @@
     ddc: "/new-inventory/index.htm",
     dealer_inspire: "/new-vehicles/",
     dealer_alchemist: "/new-vehicles/",
+    dealer_on: "/searchnew.aspx",
+    apollo: "/inventory/new",
+    dealer_masters: "/new-inventory/",
+    sokal: "/new-vehicles/",
   };
 
   // Ranked best-first. Mirrors the ranking the sibling inventory service
@@ -35,6 +39,11 @@
     /\/new-inventory\/index\.htm(?:[?#]|$)/i,
     /\/new-inventory\/?(?:[?#]|$)/i,
     /\/new-vehicles\/?(?:[?#]|$)/i,
+    // DealerOn's SRP. Ranked with the canonical paths rather than below the
+    // loose patterns: it is an exact, unambiguous entry point, and no other
+    // platform serves anything at this URL.
+    /\/searchnew\.aspx(?:[?#]|$)/i,
+    /\/inventory\/new\/?(?:[?#]|$)/i,
     /new-vehicle-inventory/i,
     /new-inventory/i,
     /new-vehicles/i,
@@ -46,7 +55,8 @@
   const HREF_EXCLUDE =
     /used|pre-owned|preowned|certified|cpo|special|offer|finance|service|parts|trade|rental|commercial/i;
 
-  const HREF_INCLUDE = /new-inventory|new-vehicles|new-vehicle-inventory|inventory/i;
+  const HREF_INCLUDE =
+    /new-inventory|new-vehicles|new-vehicle-inventory|inventory|searchnew\.aspx/i;
 
   async function execute(tabId, func, args = []) {
     const [{ result }] = await chrome.scripting.executeScript({
@@ -96,6 +106,47 @@
     }
   }
 
+  /** Does this URL's path look like an inventory search page? */
+  function looksLikeInventoryUrl(value) {
+    const parsed = safeUrl(value);
+    if (!parsed) return false;
+    const path = `${parsed.pathname}${parsed.search}`;
+    return HREF_INCLUDE.test(path) && !HREF_EXCLUDE.test(path);
+  }
+
+  /**
+   * The URL a collection session should OPEN at.
+   *
+   * The homepage is a bad first destination and was only ever the default
+   * because the session had nowhere else to start. It carries no facets, so
+   * tier 1 rejects it every time and we then pay for a SECOND full page load
+   * to reach an SRP whose URL we already knew before the browser opened. On a
+   * Dealer.com store that wasted load cost several seconds of the collection
+   * budget for nothing.
+   *
+   * The homepage's only real job is tier 4 link discovery, which is a
+   * fallback — and the primary nav it reads from is present on every page of
+   * the site anyway, SRP included.
+   *
+   * So: the operator's stored path, then the platform's canonical path, and
+   * the homepage only when we genuinely know nothing better.
+   */
+  function preferredLandingUrl(item, platform) {
+    const home = item?.url || null;
+    const path =
+      item?.inventoryPath || (platform ? PLATFORM_INVENTORY_PATHS[platform] : null);
+    if (path && home) return absoluteUrl(home, path) || home;
+    return home;
+  }
+
+  /**
+   * Open (or reuse) the dealer's collection session, landing directly on the
+   * best inventory URL we can name up front rather than on the homepage.
+   */
+  async function openInventorySession({ item, platform, helpers }) {
+    return helpers.ensureSiteSession(item, preferredLandingUrl(item, platform));
+  }
+
   /**
    * Navigate the collection tab and wait for the NEW page to settle.
    *
@@ -105,13 +156,27 @@
    * "complete" and return immediately — every readiness check then runs
    * against stale markup and a perfectly good SRP looks unreachable.
    *
-   * Matching on pathname alone is not enough here either: each make pass
-   * navigates the same `/new-inventory/index.htm` with different query
-   * params, so we wait to actually observe the load begin.
+   * So this loop waits for the navigation to COMMIT, and nothing more.
+   *
+   * It deliberately does NOT wait for `tab.status === "complete"`. That status
+   * tracks the window `load` event, which on a dealer SRP fires only after
+   * every ad, pixel and chat widget has settled — measured at 12.3s on a
+   * Dealer.com store whose markup was complete at 2.5s. Waiting for it cost
+   * ~10s of dead time on each of the three navigations per make and was the
+   * single largest consumer of the collection budget. `waitForTabComplete`
+   * below already waits on `document.readyState`, which is the signal that
+   * actually predicts whether the facets are readable.
+   *
+   * Commit is detected by the tab's URL, not by its status. Matching on
+   * pathname alone would not be enough — each make pass navigates the same
+   * `/new-inventory/index.htm` with different query params — but `tab.url`
+   * carries the query string, so a full-URL comparison separates them.
    */
   async function goto(tabId, url, helpers, runtime) {
     runtime.throwIfCancelled();
     const target = safeUrl(url);
+    const bare = (value) => (value ? value.href.split("#")[0] : null);
+    const before = await currentUrl(tabId).catch(() => null);
     // No `active: true`. The collection tab is the only tab in its own
     // window, so activating it on every filter navigation bought nothing and
     // yanked focus away from the operator dozens of times per batch.
@@ -130,16 +195,24 @@
       } catch {
         break;
       }
-      if (tab.status === "loading") {
-        sawLoading = true;
-      } else if (tab.status === "complete") {
-        const committed = safeUrl(tab.url);
-        const exact =
-          committed && target && committed.href.split("#")[0] === target.href.split("#")[0];
-        // Either we watched this navigation run, or the tab is already
-        // sitting on exactly the URL we asked for.
-        if (sawLoading || exact) break;
-      }
+      if (tab.status === "loading") sawLoading = true;
+
+      const committed = safeUrl(tab.url);
+      // The tab is showing something other than the page we started from, so
+      // the navigation has committed — whether or not the site redirected us
+      // somewhere other than the URL we asked for.
+      const moved = Boolean(committed && before && committed.href !== before);
+      // Re-navigating to the URL already displayed (a reload) never "moves",
+      // so pair the exact match with having watched the load begin.
+      const exact = Boolean(committed && target && bare(committed) === bare(target));
+      if (moved || (exact && sawLoading)) break;
+
+      // `before` is unknown when the pre-navigation tab refused script
+      // injection (about:blank, an error page, a cross-origin interstitial).
+      // Without it `moved` can never be true, so fall back to the status
+      // signal rather than spinning here for the whole commit window.
+      if (!before && sawLoading && tab.status === "complete") break;
+
       await runtime.sleep(150);
     }
 
@@ -204,14 +277,6 @@
     return href;
   }
 
-  /**
-   * Walk the navigation tiers until `inspect(tabId)` reports a usable page.
-   *
-   * `inspect` returns a state object carrying `ready`, so the adapter
-   * decides what "usable SRP" means for its platform. Every rejected tier is
-   * recorded in `warnings` so a dealer that had to fall back is visible in the
-   * stored result rather than silently slower.
-   */
   function describeObserved(observed) {
     if (!observed || typeof observed !== "object") return "no page state";
     return Object.entries(observed)
@@ -220,6 +285,41 @@
       .join(" ");
   }
 
+  // How long a freshly navigated page gets to render its facets before the
+  // tier is written off. `goto` now returns at readyState "interactive"
+  // rather than at the window load event, so the first sample can legitimately
+  // land before a client-rendered facet rail exists.
+  const READINESS_TIMEOUT_MS = 8_000;
+
+  /**
+   * Poll `inspect` until the page reports ready, and return the last state we
+   * observed either way.
+   *
+   * A single immediate sample makes readiness a race against whatever the page
+   * happened to have rendered in that instant. Polling turns "not ready yet"
+   * into "not ready after N seconds", which is the question the tier actually
+   * wants answered.
+   */
+  async function pollReadiness(tabId, inspect, runtime) {
+    let last = null;
+    const deadline = Date.now() + READINESS_TIMEOUT_MS;
+    do {
+      runtime.throwIfCancelled();
+      last = await inspect(tabId);
+      if (last?.ready) return last;
+      await runtime.sleep(400);
+    } while (Date.now() < deadline);
+    return last;
+  }
+
+  /**
+   * Walk the navigation tiers until `inspect(tabId)` reports a usable page.
+   *
+   * `inspect` returns a state object carrying `ready`, so the adapter
+   * decides what "usable SRP" means for its platform. Every rejected tier is
+   * recorded in `warnings` so a dealer that had to fall back is visible in the
+   * stored result rather than silently slower.
+   */
   async function resolveInventoryPage(options) {
     const {
       tabId,
@@ -246,6 +346,36 @@
       );
     };
 
+    // A cancelled run is not a tier that failed. Swallowing the abort here let
+    // the resolver keep walking tiers after the collection budget had already
+    // expired and the session window had been torn down, so the reported cause
+    // became "no anchors matched an inventory URL pattern" (scanned against a
+    // dead tab) instead of "we ran out of time on the first navigation".
+    //
+    // Cancellation is decided by asking the abort signal, never by matching the
+    // error text. Legitimate per-tier failures carry timeout wording of their
+    // own ("Timed out waiting for the dealer page to become interactive") and
+    // must NOT abandon the remaining tiers.
+    const rethrowIfCancelled = (error) => {
+      const abort = (() => {
+        try {
+          runtime.throwIfCancelled();
+          return null;
+        } catch (cancellation) {
+          return cancellation;
+        }
+      })();
+      const fatal = abort ?? (error?.name === "AbortError" ? error : null);
+      if (!fatal) return;
+      // Keep the diagnostics we accumulated: knowing the clock ran out during
+      // tier 3 is the whole story, and it is lost if the trace dies here.
+      if (trace.length > 0) {
+        warnings.push(...trace);
+        fatal.navigationTrace = trace;
+      }
+      throw fatal;
+    };
+
     const tryCandidate = async (url, label) => {
       if (!url) {
         record(label, url, "no URL to try");
@@ -259,6 +389,7 @@
       try {
         await goto(tabId, url, helpers, runtime);
       } catch (error) {
+        rethrowIfCancelled(error);
         record(
           label,
           url,
@@ -268,8 +399,9 @@
       }
       let result;
       try {
-        result = await inspect(tabId);
+        result = await pollReadiness(tabId, inspect, runtime);
       } catch (error) {
+        rethrowIfCancelled(error);
         record(
           label,
           url,
@@ -282,19 +414,44 @@
       return null;
     };
 
-    // Tier 1 — already there. ensureSiteSession may have landed directly on a
-    // stored SRP URL, in which case no navigation is needed at all.
+    // Tier 1 — the page the session already opened. `openInventorySession`
+    // lands directly on the best inventory URL we could name, so in the normal
+    // case this tier IS the whole navigation and nothing below ever runs.
     runtime.throwIfCancelled();
+    const here = await currentUrl(tabId).catch(() => null);
+    // Give a real SRP the same readiness poll a navigated-to candidate gets;
+    // a homepage landing (unknown platform, no stored path) is checked once
+    // and abandoned, since polling it for seconds only delays the fallback.
+    const landedOnCandidate = looksLikeInventoryUrl(here);
     let landed = null;
     try {
-      landed = await inspect(tabId);
+      landed = landedOnCandidate
+        ? await pollReadiness(tabId, inspect, runtime)
+        : await inspect(tabId);
     } catch (error) {
+      rethrowIfCancelled(error);
       record("Landing page", null, `page inspection failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (landed?.ready) return landed;
     if (landed) record("Landing page", landed.url, "not a usable inventory page", landed);
 
-    const base = (await currentUrl(tabId).catch(() => null)) || item.url;
+    // Resolve the stored and default paths against the site ROOT, not against
+    // whatever page we are sitting on. Now that the session opens on the SRP,
+    // using the current page as the base would append a relative stored path
+    // to it ("new-inventory/" -> "/new-inventory/new-inventory/"). The origin
+    // is taken from the live URL so a www/https redirect is still honoured.
+    const base = (() => {
+      const origin = safeUrl(here)?.origin || safeUrl(item.url)?.origin;
+      return origin ? `${origin}/` : item.url;
+    })();
+
+    // The landing URL has now been tried and rejected. Record it so the tiers
+    // below do not reload the identical page they just watched fail — with the
+    // session opening on the platform default path, tier 3 would otherwise be
+    // a guaranteed repeat of tier 1.
+    for (const tried of [here, preferredLandingUrl(item, platform)]) {
+      if (tried && !attempted.includes(tried)) attempted.push(tried);
+    }
 
     // Tier 2 — the path the operator stored for this dealer.
     if (item.inventoryPath) {
@@ -319,15 +476,23 @@
       record(`${platform} default path`, null, "no default path for this platform");
     }
 
-    // Tier 4 — discover a link from the dealer's own markup. Go home first so
-    // we are reading the full primary nav rather than whatever a failed tier
-    // left on screen.
+    // Tier 4 — discover a link from the dealer's own markup.
+    //
+    // This is the one and only reason collection ever loads the homepage, and
+    // it only happens once every named URL above has already failed. The nav
+    // we scan is on every page of the site, so this load is not strictly
+    // required — but by this point the tab is sitting on whatever a failed
+    // tier left on screen (often a 404 or a redirect target with a stripped
+    // nav), and the homepage is the one page guaranteed to carry the full
+    // primary menu.
     try {
       await goto(tabId, item.url, helpers, runtime);
-    } catch {
+    } catch (error) {
+      rethrowIfCancelled(error);
       // Discovery below still works against whatever page is loaded.
     }
     const discovered = await discoverInventoryHref(tabId).catch((error) => {
+      rethrowIfCancelled(error);
       record(
         "Link discovery",
         null,
@@ -408,6 +573,9 @@
     discoverInventoryHref,
     execute,
     goto,
+    looksLikeInventoryUrl,
+    openInventorySession,
+    preferredLandingUrl,
     resolveInventoryPage,
     withParams,
   };

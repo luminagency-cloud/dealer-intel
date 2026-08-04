@@ -9,6 +9,7 @@ import {
   type ChromeInventoryResult,
   type CollectAndStoreResult,
 } from "@/lib/inventory";
+import { supportsChromeInventory } from "@/lib/inventory-platforms";
 
 /**
  * Background inventory batch execution. The "Run" server action seeds/extends
@@ -326,8 +327,6 @@ export interface ChromeInventoryJobItem {
   inventoryPath: string | null;
 }
 
-const chromeInventoryPlatforms = new Set(["ddc", "dealer_inspire"]);
-
 async function requireChromeInventorySites(siteIds: string[]) {
   const rows = await getDb()
     .select({ id: sites.id, name: sites.name, platform: sites.platform })
@@ -338,13 +337,11 @@ async function requireChromeInventorySites(siteIds: string[]) {
   if (missing.length > 0) {
     throw new Error("One or more selected dealers no longer exist");
   }
-  const unsupported = rows.filter(
-    (row) => !chromeInventoryPlatforms.has((row.platform ?? "").trim().toLowerCase())
-  );
+  const unsupported = rows.filter((row) => !supportsChromeInventory(row.platform));
   if (unsupported.length > 0) {
     throw new Error(
-      `This visible-inventory pass supports Dealer.com and Dealer Inspire only. Remove: ${unsupported
-        .map((row) => row.name)
+      `Visible-inventory collection has no adapter for these dealers' platforms. Remove: ${unsupported
+        .map((row) => `${row.name} (${row.platform?.trim() || "no platform set"})`)
         .join(", ")}`
     );
   }

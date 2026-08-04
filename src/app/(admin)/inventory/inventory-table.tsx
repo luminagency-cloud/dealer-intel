@@ -13,6 +13,7 @@ import {
   requireInventoryExtension,
   runChromeInventoryJob,
 } from "./inventory-chrome";
+import { supportsChromeInventory } from "@/lib/inventory-platforms";
 
 export type MakeSubtotal = { make: string; inStock: number; inTransit: number | null };
 export type ModelRow = { make: string; model: string; inStock: number | null; inTransit: number | null; status: string };
@@ -60,12 +61,6 @@ type BatchStatusPayload = {
       }
   >;
 };
-
-const chromeInventoryPlatforms = new Set(["ddc", "dealer_inspire"]);
-
-function supportsChromeInventory(platform: string | null): boolean {
-  return chromeInventoryPlatforms.has(platform?.trim().toLowerCase() ?? "");
-}
 
 export function InventoryTable({
   sites,
@@ -572,7 +567,7 @@ export function InventoryTable({
                   disabled={scopeDisabled || chromeScopeHasUnsupported}
                   title={
                     chromeScopeHasUnsupported
-                      ? "This pass supports Dealer.com and Dealer Inspire dealers only. Choose supported rows individually or select only supported dealers."
+                      ? "Some selected dealers have a platform visible Chrome has no adapter for. Choose supported rows individually, or set the dealer's platform if it is missing."
                       : undefined
                   }
                   className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
