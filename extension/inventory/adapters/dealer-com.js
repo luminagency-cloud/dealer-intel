@@ -1,176 +1,90 @@
-/* global chrome */
+/* global inventoryNavigate */
 
+/**
+ * Dealer.com (DDC) inventory via public SRP URLs.
+ *
+ * Filtering is done by navigating to `?make=<Make>&status=<value>` rather than
+ * by clicking facet checkboxes. Those params are part of DDC's public URL
+ * contract — the dealer's own site links to them and customers bookmark them —
+ * so they survive DOM and widget churn that breaks click paths. `status=1-1`
+ * (on the lot) and `status=7-7` (in transit) are stable across DDC stores;
+ * the human-readable status labels are not, which is why we never match on
+ * them.
+ *
+ * The only unavoidable DOM dependency is reading per-model counts. That reader
+ * is deliberately generic: it locates the facet by shape rather than by a
+ * hardcoded id list, so a `model` -> `modelFamily` style rename does not take
+ * the adapter down.
+ */
 (() => {
-  const FACETS = {
-    make: ["make"],
-    model: ["model", "model-family", "modelFamily"],
-    status: ["status"],
+  const ON_LOT_STATUS = "1-1";
+  const IN_TRANSIT_STATUS = "7-7";
+
+  // Facet identification is by shape. `want` matches the container's id or its
+  // heading; `reject` kills near-misses — most importantly the model-YEAR
+  // facet, whose label also contains "model" on several DDC themes.
+  const FACET_MATCHERS = {
+    make: { want: "(^|[^a-z])make|manufacturer|brand", reject: "model|year" },
+    model: { want: "(^|[^a-z])model", reject: "year|trim|body|transmission|drive" },
+    status: { want: "status|availability|in.?transit|on.?the.?lot", reject: "price|payment|msrp|year" },
   };
 
-  async function execute(tabId, func, args = []) {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func,
-      args,
-    });
-    return result;
-  }
+  const execute = (tabId, func, args) => inventoryNavigate.execute(tabId, func, args);
 
-  async function mouseClick(tabId, point, runtime) {
-    if (!point) return false;
-    runtime.throwIfCancelled();
-    let attached = false;
-    try {
-      await chrome.debugger.attach({ tabId }, "1.3");
-      attached = true;
-      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-        type: "mouseMoved",
-        x: point.x,
-        y: point.y,
-      });
-      await runtime.sleep(250);
-      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-        type: "mousePressed",
-        x: point.x,
-        y: point.y,
-        button: "left",
-        clickCount: 1,
-      });
-      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-        type: "mouseReleased",
-        x: point.x,
-        y: point.y,
-        button: "left",
-        clickCount: 1,
-      });
-      return true;
-    } finally {
-      if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
-    }
-  }
-
-  async function navigationPoint(tabId, mode, avoidPoint = null) {
-    return execute(
-      tabId,
-      (navigationMode, pointToAvoid) => {
-        const clean = (value) =>
-          String(value || "")
-            .replace(/[\uE000-\uF8FF]/g, "")
-            .replace(/\s+/g, " ")
-            .trim();
-        const visible = (element) => {
-          const rect = element.getBoundingClientRect();
-          const style = getComputedStyle(element);
-          return (
-            rect.width > 10 &&
-            rect.height > 10 &&
-            style.display !== "none" &&
-            style.visibility !== "hidden"
-          );
-        };
-        const candidates = Array.from(
-          document.querySelectorAll("a, button, [role=menuitem]")
-        )
-          .filter((element) => {
-            if (!(element instanceof HTMLElement) || !visible(element)) return false;
-            if (navigationMode !== "primary") return true;
-            const rect = element.getBoundingClientRect();
-            return rect.top >= -20 && rect.top <= Math.min(innerHeight * 0.45, 420);
-          })
-          .map((element) => {
-            const text = clean(
-              element.innerText ||
-                element.getAttribute("aria-label") ||
-                element.getAttribute("title")
-            );
-            const href = element instanceof HTMLAnchorElement ? element.href : "";
-            let score = -100;
-            if (navigationMode === "primary") {
-              if (/^new inventory$/i.test(text)) score = 140;
-              else if (/^new vehicles?$/i.test(text)) score = 130;
-              else if (/^shop new$/i.test(text)) score = 120;
-              else if (/^new$/i.test(text)) score = 100;
-            } else {
-              if (/^view all new/i.test(text)) score = 180;
-              else if (/^all new(?: inventory| vehicles?)?$/i.test(text)) score = 170;
-              else if (/^new (?:[a-z0-9&-]+\s+)*(?:vehicle\s+)?inventory$/i.test(text)) score = 160;
-              else if (/^new vehicles?$/i.test(text)) score = 150;
-              else if (/^shop (?:all )?new/i.test(text)) score = 140;
-            }
-            if (/used|pre-owned|certified|special|offer|service|parts/i.test(text)) {
-              score = -100;
-            }
-            if (/\/new-inventory\/index\.htm(?:[?#]|$)/i.test(href)) score += 80;
-            else if (/\/new-inventory\//i.test(href)) score += 30;
-            const rect = element.getBoundingClientRect();
-            const x = rect.left + rect.width / 2;
-            const y = rect.top + rect.height / 2;
-            if (navigationMode === "primary" && rect.top < 200) score += 30;
-            if (
-              navigationMode === "submenu" &&
-              pointToAvoid &&
-              Math.hypot(x - pointToAvoid.x, y - pointToAvoid.y) < 36
-            ) {
-              score = -100;
-            }
-            return { element, text, href, score, x, y };
-          })
-          .filter((candidate) => candidate.score > 0)
-          .sort((left, right) => right.score - left.score);
-        const chosen = candidates[0];
-        if (!chosen) return null;
-        chosen.element.scrollIntoView({ block: "nearest", inline: "nearest" });
-        chosen.element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-        chosen.element.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-        return {
-          x: chosen.x,
-          y: chosen.y,
-          text: chosen.text,
-          href: chosen.href,
-        };
-      },
-      [mode, avoidPoint]
-    );
-  }
+  // -------------------------------------------------------------------------
+  // Page shape
+  // -------------------------------------------------------------------------
 
   async function inventoryPageState(tabId) {
     return execute(tabId, () => {
-      const visible = (element) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.display !== "none" &&
-          style.visibility !== "hidden"
-        );
-      };
       const clean = (value) =>
         String(value || "")
-          .replace(/[\uE000-\uF8FF]/g, "")
+          .replace(/[-]/g, "")
           .replace(/\s+/g, " ")
           .trim();
-      const facet = (id) =>
-        document.querySelector(`[data-facet-group="${id}"]`) ||
-        document.getElementById(id);
-      const modelFacet = facet("model") || facet("model-family") || facet("modelFamily");
-      const provider = document.querySelector('meta[name="providerID" i]')?.getAttribute("content");
-      const isDdc = /^ddc$/i.test(provider || "") || Boolean(globalThis.DDC);
+      // Style-only, no geometry: a backgrounded tab has no computed layout,
+      // so anything keyed on getBoundingClientRect() reads as hidden there.
+      const displayed = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden";
+      };
+
+      const provider = document
+        .querySelector('meta[name="providerID" i]')
+        ?.getAttribute("content");
+      // NOTE: injected scripts run in the isolated world, so page globals like
+      // window.DDC are NOT visible here. Every signal below must be DOM-based.
+      const isDdc = Boolean(
+        /^ddc$/i.test(provider || "") ||
+          document.querySelector("[data-widget-name^='ws-inv'], [data-facet-group]") ||
+          document.querySelector(
+            'link[href*="dealer.com"], script[src*="dealer.com"], img[src*="dealer.com"]'
+          )
+      );
+      const facetGroups = document.querySelectorAll("[data-facet-group], [data-facet]").length;
+      const vehicles = document.querySelectorAll(
+        "[data-vehicle], [data-inventory-id], .vehicle-card, [class*='vehicle-card' i]"
+      ).length;
+
+      // Result count read only from elements whose job is reporting it.
+      // Marketing headings are excluded on purpose: an <h2> reading "Over 500
+      // vehicles in stock!" used to poison this and fail the whole dealer.
       const countElements = Array.from(
         document.querySelectorAll(
-          '[data-testid*="result-count" i], [data-testid*="inventory-count" i], [data-inventory-count], .inventory-count, .results-count, .result-count, .vehicle-count, [role=status], [aria-live], h1, h2'
+          '[data-testid*="result-count" i], [data-testid*="inventory-count" i], [data-inventory-count], .inventory-count, .results-count, .result-count, .vehicle-count, [role=status]'
         )
-      ).filter(visible);
+      ).filter(displayed);
       const patterns = [
         /showing\s+\d+\s*[-–]\s*\d+\s+of\s+([\d,]+)/i,
-        /(?:search\s+)?results?\s*\(?\s*([\d,]+)\s*\)?/i,
-        /([\d,]+)\s+(?:new\s+)?vehicles?(?:\s+found|\s+available)?/i,
-        /([\d,]+)\s+matches/i,
+        /^\s*([\d,]+)\s+(?:new\s+)?vehicles?\b/i,
+        /^\s*([\d,]+)\s+results?\b/i,
+        /^\s*results?\s*\(\s*([\d,]+)\s*\)/i,
       ];
       let total = null;
       for (const element of countElements) {
         const text = clean(element.innerText || element.getAttribute("aria-label"));
-        if (!text || text.length > 140) continue;
+        if (!text || text.length > 90) continue;
         for (const pattern of patterns) {
           const match = text.match(pattern);
           if (!match) continue;
@@ -182,416 +96,199 @@
         }
         if (total !== null) break;
       }
-      const modelSignature = modelFacet
-        ? Array.from(modelFacet.querySelectorAll("input, [role=checkbox]"))
-            .slice(0, 80)
-            .map((control) => {
-              const input = control instanceof HTMLInputElement ? control : null;
-              const label =
-                (input?.id
-                  ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`)
-                  : null) || control.closest("label") || control.parentElement;
-              return clean(label?.textContent || control.getAttribute("aria-label"));
-            })
-            .filter(Boolean)
-            .join("|")
-        : "";
-      const busy = Array.from(
-        document.querySelectorAll(
-          '[aria-busy="true"], .loading, .is-loading, .spinner, [class*="loading" i]'
-        )
-      ).some(visible);
+
       return {
         url: location.href,
-        ready: Boolean(modelFacet),
         isDdc,
+        provider: provider || null,
+        facetGroups,
+        vehicles,
+        // The thing we actually need from a page is filterable inventory. A
+        // homepage carousel satisfies "has vehicles" but has no facets, so
+        // facets — not vehicle cards — are what make a page usable.
+        hasControls: facetGroups > 0,
         total,
-        modelSignature,
-        busy,
       };
     });
   }
 
-  async function adoptInventoryChildTab(tabId, helpers) {
-    const tabs = await chrome.tabs.query({});
-    const child = tabs.find(
-      (tab) =>
-        tab.id !== undefined &&
-        tab.openerTabId === tabId &&
-        typeof tab.url === "string" &&
-        /\/new-inventory\/index\.htm(?:[?#]|$)/i.test(tab.url)
-    );
-    if (!child?.id || !child.url) return false;
-    await chrome.tabs.remove(child.id).catch(() => {});
-    await chrome.tabs.update(tabId, { url: child.url, active: true });
-    await helpers.waitForTabComplete(tabId);
-    return true;
-  }
+  // -------------------------------------------------------------------------
+  // Facet reading
+  //
+  // One injected pass: locate the facet by shape, expand it if collapsed, and
+  // read its rows. Kept in a single function so the container-finding logic
+  // exists exactly once.
+  // -------------------------------------------------------------------------
 
-  async function waitForInventoryPage(tabId, helpers, runtime, timeoutMs = 12_000) {
-    return runtime.waitFor(
-      async () => {
-        const state = await inventoryPageState(tabId);
-        return state.ready && state.isDdc ? state : null;
-      },
-      {
-        timeoutMs,
-        intervalMs: 300,
-        message: "Dealer.com New Inventory did not expose its model facet",
-      }
-    );
-  }
-
-  async function navigateToInventory(tabId, helpers, runtime, warnings) {
-    await runtime.suppressPopups(tabId);
-    const primary = await navigationPoint(tabId, "primary");
-    if (!primary) {
-      throw new Error("Dealer.com top navigation did not expose New Inventory");
-    }
-
-    await runtime.sleep(350);
-    let submenu = await navigationPoint(tabId, "submenu", primary);
-    if (submenu) {
-      await mouseClick(tabId, submenu, runtime);
-      await helpers.waitAfterInteraction(tabId, 1_200).catch(() => {});
-      try {
-        return await waitForInventoryPage(tabId, helpers, runtime);
-      } catch {
-        if (await adoptInventoryChildTab(tabId, helpers).catch(() => false)) {
-          return waitForInventoryPage(tabId, helpers, runtime);
-        }
-      }
-    }
-
-    await mouseClick(tabId, primary, runtime);
-    await helpers.waitAfterInteraction(tabId, 700).catch(() => {});
-    try {
-      return await waitForInventoryPage(tabId, helpers, runtime, 5_000);
-    } catch {
-      if (await adoptInventoryChildTab(tabId, helpers).catch(() => false)) {
-        return waitForInventoryPage(tabId, helpers, runtime);
-      }
-    }
-
-    submenu = await navigationPoint(tabId, "submenu", primary);
-    if (submenu) {
-      await mouseClick(tabId, submenu, runtime);
-      await helpers.waitAfterInteraction(tabId, 1_200).catch(() => {});
-      return waitForInventoryPage(tabId, helpers, runtime);
-    }
-
-    warnings.push("Dealer.com top-menu navigation did not reach /new-inventory/index.htm.");
-    throw new Error("Could not reach Dealer.com New Inventory through its visible top menu");
-  }
-
-  async function openFacet(tabId, facetIds) {
+  async function readFacetOnce(tabId, kind) {
+    const matcher = FACET_MATCHERS[kind];
     return execute(
       tabId,
-      (ids) => {
-        const visible = (element) => {
-          const rect = element.getBoundingClientRect();
-          const style = getComputedStyle(element);
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !== "none" &&
-            style.visibility !== "hidden"
-          );
-        };
-        const container = ids
-          .map(
-            (id) =>
-              document.querySelector(`[data-facet-group="${id}"]`) ||
-              document.getElementById(id)
-          )
-          .find(Boolean);
-        if (!(container instanceof HTMLElement)) return { found: false, opened: false };
-        const controls = Array.from(
-          container.querySelectorAll('input[type="checkbox"], [role="checkbox"]')
+      (wantSource, rejectSource) => {
+        const want = new RegExp(wantSource, "i");
+        const reject = new RegExp(rejectSource, "i");
+        const clean = (value) =>
+          String(value || "")
+            .replace(/[-]/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const CONTROL_SELECTOR =
+          'input[type="checkbox"], [role="checkbox"], a[data-value], button[aria-label*="matched vehicles" i]';
+
+        // Find the tightest container whose id or heading looks like this
+        // facet.
+        //
+        // Deliberately does NOT require the container to already hold
+        // controls. DDC renders every facet panel collapsed and populates
+        // `.panel-collapse` only on expand, so a live SRP reports zero
+        // checkboxes for `make`, `model` and the rest until each is opened.
+        // Requiring controls here meant the container was skipped before the
+        // expand step could ever run — the facet could never be read at all.
+        let best = null;
+        const groups = document.querySelectorAll(
+          "[data-facet-group], [data-facet], fieldset, section, div[id], li[id]"
         );
-        const choicesVisible = controls.some((control) => {
-          if (visible(control)) return true;
-          const input = control instanceof HTMLInputElement ? control : null;
-          const label =
-            (input?.id
-              ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`)
-              : null) || control.closest("label") || control.parentElement;
-          return Boolean(label && visible(label));
-        });
-        if (!choicesVisible) {
-          const trigger = container.querySelector(
-            'button[aria-controls], [data-toggle="collapse"], .panel-heading button, button, [role="button"]'
+        for (const group of groups) {
+          const facetAttr = clean(
+            group.getAttribute("data-facet-group") || group.getAttribute("data-facet")
           );
-          if (trigger instanceof HTMLElement) {
+          const id = clean(group.id);
+          const heading = clean(
+            group.querySelector("legend, h2, h3, h4, [role=heading], button")?.textContent
+          );
+          if (!want.test(`${facetAttr} ${id} ${heading}`)) continue;
+          if (reject.test(`${facetAttr} ${id} ${heading}`)) continue;
+
+          // Rank by how authoritative the match is, THEN by subtree size.
+          //
+          // Ranking on size alone picked DDC's inner `.panel-collapse` div
+          // (its id also contains "model") over the real
+          // `[data-facet-group="model"]` container. The inner div holds no
+          // expand button, so the panel could never be opened and the facet
+          // always read empty.
+          const tier =
+            facetAttr && want.test(facetAttr) ? 0 : id && want.test(id) ? 1 : 2;
+          const score = tier * 1_000_000 + group.getElementsByTagName("*").length;
+          if (!best || score < best.score) best = { group, score };
+        }
+        if (!best) return { found: false, expanded: false, rows: [] };
+
+        const container = best.group;
+        const controls = Array.from(container.querySelectorAll(CONTROL_SELECTOR));
+
+        // Presence in the DOM, NOT rendered visibility.
+        //
+        // Chrome stops computing layout for backgrounded and occluded pages,
+        // so getBoundingClientRect() collapses to zero there. Gating on
+        // visibility meant the collector silently stopped working the moment
+        // the operator switched to another tab or window. DDC only inserts
+        // these controls on expand, so their presence is already the signal
+        // we need.
+        if (controls.length === 0) {
+          const trigger = container.querySelector(
+            'button[aria-expanded], button[aria-controls], [data-toggle="collapse"], .panel-heading button, button, [role="button"]'
+          );
+          // Only click a panel that is actually shut. The caller polls this
+          // function, and clicking an already-open panel would toggle it
+          // closed again on every poll.
+          const alreadyOpen = trigger?.getAttribute("aria-expanded") === "true";
+          if (trigger instanceof HTMLElement && !alreadyOpen) {
             trigger.scrollIntoView({ block: "center" });
             trigger.click();
           }
+          // Rows are read on the caller's next poll once the panel populates.
+          return { found: true, expanded: false, rows: [] };
         }
-        return { found: true, opened: choicesVisible };
-      },
-      [facetIds]
-    );
-  }
 
-  async function ensureFacetOpen(tabId, facetIds, runtime) {
-    const opened = await openFacet(tabId, facetIds);
-    if (!opened.found) return false;
-    if (!opened.opened) await runtime.sleep(350);
-    return true;
-  }
-
-  async function readFacetRows(tabId, facetIds, kind) {
-    return execute(
-      tabId,
-      (ids, facetKind) => {
-        const clean = (value) =>
-          String(value || "")
-            .replace(/[\uE000-\uF8FF]/g, "")
-            .replace(/\s+/g, " ")
-            .replace(/^([A-Za-z][A-Za-z0-9 -]+)\s+\1\b/i, "$1")
-            .trim();
-        const container = ids
-          .map(
-            (id) =>
-              document.querySelector(`[data-facet-group="${id}"]`) ||
-              document.getElementById(id)
-          )
-          .find(Boolean);
-        if (!container) return [];
-
-        const controls = Array.from(
-          container.querySelectorAll(
-            'input[type="checkbox"], [role="checkbox"], button[aria-label*="matched vehicles" i]'
-          )
-        );
         const rows = [];
         for (const control of controls) {
           const input = control instanceof HTMLInputElement ? control : null;
           const labelElement =
             (input?.id
               ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`)
-              : null) || control.closest("label") || control.parentElement;
+              : null) ||
+            control.closest("label") ||
+            control.parentElement;
           const aria = clean(control.getAttribute("aria-label"));
           const label = clean(labelElement?.innerText || labelElement?.textContent || aria);
-          const value = clean(input?.value || control.getAttribute("data-value") || "");
+          const rawValue = clean(control.getAttribute("data-value") || input?.value || "");
+
+          // Two shapes in the wild:
+          //   aria: "Model: Grand Cherokee. 12 matched vehicles"
+          //   text: "Grand Cherokee (12)" / "Grand Cherokee 12"
           const semantic = (aria || label).match(
             /^[^:]+:\s*(.+?)\.\s*([\d,]+)\s+matched vehicles?/i
           );
           const counted = (aria || label).match(
-            /^(.+?)\s+\(?([\d,]+)\)?(?:\s+(?:available|vehicles?|matches?))?$/i
+            /^(.+?)\s*\(?([\d,]+)\)?(?:\s+(?:available|vehicles?|matches?))?$/i
           );
-          let name = clean(semantic?.[1] || counted?.[1] || label || value);
+
+          // Prefer the human label over the control value. Values are opaque
+          // tokens on some themes and full labels on others; the label is
+          // consistently the display name.
+          const name = clean(semantic?.[1] || counted?.[1] || label || rawValue);
+          if (!name || /^(?:clear|all|view|apply|close|reset)\b/i.test(name)) continue;
           const countText = semantic?.[2] || counted?.[2] || "";
-          const count = countText ? Number(countText.replace(/,/g, "")) : null;
-          if (
-            (facetKind === "make" || facetKind === "model") &&
-            value &&
-            !/^(?:true|false|on|off|\d+-\d+)$/i.test(value)
-          ) {
-            name = value;
-          }
-          if (!name || /^(?:clear|all|view|apply|close)\b/i.test(name)) continue;
+          const parsedCount = countText ? Number(countText.replace(/,/g, "")) : null;
+
           const selected = input
             ? input.checked
             : control.getAttribute("aria-checked") === "true" ||
               control.getAttribute("aria-pressed") === "true" ||
-              control.classList.contains("selected") ||
-              control.classList.contains("active");
-          rows.push({ name, value, count, selected });
+              /(?:^|\s)(?:selected|active|is-selected|is-active|checked)(?:\s|$)/i.test(
+                control.className || ""
+              );
+
+          rows.push({
+            name,
+            value: rawValue,
+            count: Number.isFinite(parsedCount) ? parsedCount : null,
+            selected: Boolean(selected),
+          });
         }
 
         const byKey = new Map();
         for (const row of rows) {
           const key = row.name.toLowerCase();
           const previous = byKey.get(key);
-          if (!previous || (row.count ?? -1) > (previous.count ?? -1)) {
-            byKey.set(key, row);
-          }
+          if (!previous || (row.count ?? -1) > (previous.count ?? -1)) byKey.set(key, row);
         }
-        return [...byKey.values()];
+        return { found: true, expanded: true, rows: [...byKey.values()] };
       },
-      [facetIds, kind]
+      [matcher.want, matcher.reject]
     );
   }
 
-  async function clickApplyIfPresent(tabId, facetIds) {
-    return execute(
-      tabId,
-      (ids) => {
-        const visible = (element) => {
-          const rect = element.getBoundingClientRect();
-          const style = getComputedStyle(element);
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !== "none" &&
-            style.visibility !== "hidden"
-          );
-        };
-        const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
-        const container = ids
-          .map(
-            (id) =>
-              document.querySelector(`[data-facet-group="${id}"]`) ||
-              document.getElementById(id)
-          )
-          .find(Boolean);
-        const scopes = [container, ...document.querySelectorAll('[role="dialog"], dialog')].filter(Boolean);
-        for (const scope of scopes) {
-          const apply = Array.from(
-            scope.querySelectorAll("a, button, [role=button]")
-          ).find((element) => {
-            if (!visible(element)) return false;
-            const label = clean(element.innerText || element.getAttribute("aria-label"));
-            return /^(?:apply(?: filters?)?|view\s+[\d,]+\s+matches|view results|(?:show|see)\s+[\d,]+\s+(?:vehicles?|results?))$/i.test(label);
-          });
-          if (apply instanceof HTMLElement) {
-            apply.click();
-            return true;
-          }
-        }
-        return false;
-      },
-      [facetIds]
-    );
-  }
-
-  async function clickFacetOption(tabId, facetIds, kind, row, shouldSelect) {
-    return execute(
-      tabId,
-      (ids, facetKind, requested, desired) => {
-        const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
-        const normalize = (value) => clean(value).toLowerCase();
-        const container = ids
-          .map(
-            (id) =>
-              document.querySelector(`[data-facet-group="${id}"]`) ||
-              document.getElementById(id)
-          )
-          .find(Boolean);
-        if (!container) return false;
-        const controls = Array.from(
-          container.querySelectorAll(
-            'input[type="checkbox"], [role="checkbox"], button[aria-label*="matched vehicles" i]'
-          )
-        );
-        for (const control of controls) {
-          const input = control instanceof HTMLInputElement ? control : null;
-          const labelElement =
-            (input?.id
-              ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`)
-              : null) || control.closest("label") || control.parentElement;
-          const aria = clean(control.getAttribute("aria-label"));
-          const label = clean(labelElement?.innerText || labelElement?.textContent || aria);
-          const semantic = (aria || label).match(/^[^:]+:\s*(.+?)\.\s*[\d,]+\s+matched vehicles?/i);
-          const counted = (aria || label).match(/^(.+?)\s+\(?[\d,]+\)?(?:\s+(?:available|vehicles?|matches?))?$/i);
-          const value = clean(input?.value || control.getAttribute("data-value") || "");
-          let name = clean(semantic?.[1] || counted?.[1] || label || value);
-          if (
-            (facetKind === "make" || facetKind === "model") &&
-            value &&
-            !/^(?:true|false|on|off|\d+-\d+)$/i.test(value)
-          ) {
-            name = value;
-          }
-          if (
-            normalize(name) !== normalize(requested.name) &&
-            normalize(value) !== normalize(requested.value)
-          ) {
-            continue;
-          }
-          const selected = input
-            ? input.checked
-            : control.getAttribute("aria-checked") === "true" ||
-              control.getAttribute("aria-pressed") === "true" ||
-              control.classList.contains("selected") ||
-              control.classList.contains("active");
-          if (selected === desired) return true;
-          const clickTarget =
-            labelElement instanceof HTMLElement && labelElement !== container
-              ? labelElement
-              : control;
-          if (!(clickTarget instanceof HTMLElement)) return false;
-          clickTarget.scrollIntoView({ block: "center" });
-          clickTarget.click();
-          return true;
-        }
-        return false;
-      },
-      [facetIds, kind, row, Boolean(shouldSelect)]
-    );
-  }
-
-  async function toggleFacetOption(
-    tabId,
-    facetIds,
-    kind,
-    row,
-    shouldSelect,
-    runtime
-  ) {
-    await ensureFacetOpen(tabId, facetIds, runtime);
-    const before = await inventoryPageState(tabId);
-    const clicked = await clickFacetOption(
-      tabId,
-      facetIds,
-      kind,
-      row,
-      shouldSelect
-    );
-    if (!clicked) return false;
-    await clickApplyIfPresent(tabId, facetIds);
-
-    await runtime.waitFor(
-      async () => {
-        const [state, rows] = await Promise.all([
-          inventoryPageState(tabId),
-          readFacetRows(tabId, facetIds, kind),
-        ]);
-        const target = rows.find(
-          (candidate) =>
-            candidate.name.toLowerCase() === row.name.toLowerCase() ||
-            (row.value && candidate.value.toLowerCase() === row.value.toLowerCase())
-        );
-        if (!target || Boolean(target.selected) !== Boolean(shouldSelect) || state.busy) {
-          return null;
-        }
-        const changed =
-          state.url !== before.url ||
-          state.total !== before.total ||
-          state.modelSignature !== before.modelSignature ||
-          Boolean(target.selected) !== Boolean(row.selected);
-        return changed ? state : null;
-      },
-      {
-        timeoutMs: 10_000,
-        intervalMs: 250,
-        message: `Dealer.com did not settle after changing ${kind} ${row.name}`,
-      }
-    );
-    await runtime.sleep(450);
-    return true;
-  }
-
-  async function setExclusiveFacet(tabId, kind, target, shouldSelect, runtime) {
-    const facetIds = FACETS[kind];
-    if (!(await ensureFacetOpen(tabId, facetIds, runtime))) return false;
-    return runtime.selectExclusive({
-      target,
-      shouldSelect,
-      readOptions: () => readFacetRows(tabId, facetIds, kind),
-      toggle: (row, desired) =>
-        toggleFacetOption(tabId, facetIds, kind, row, desired, runtime),
-    });
+  /** Read a facet, giving a collapsed panel a moment to expand and render. */
+  async function readFacetRows(tabId, kind, runtime, timeoutMs = 10_000) {
+    const result = await runtime
+      .waitFor(
+        async () => {
+          const attempt = await readFacetOnce(tabId, kind);
+          if (!attempt.found) return null;
+          return attempt.rows.length > 0 ? attempt : null;
+        },
+        { timeoutMs, intervalMs: 250, message: `Dealer.com ${kind} facet did not render rows` }
+      )
+      .catch(() => null);
+    return result?.rows ?? [];
   }
 
   function plausibleModelName(name) {
     const normalized = String(name || "").replace(/\s+/g, " ").trim();
     if (!normalized || normalized.length > 80) return false;
-    if (/\b(?:sales|service|parts|directions|contact|results?|matches|vehicles?|inventory|stock:)\b/i.test(normalized)) {
+    if (
+      /\b(?:sales|service|parts|directions|contact|results?|matches|vehicles?|inventory|stock:)\b/i.test(
+        normalized
+      )
+    ) {
       return false;
     }
-    if (/\b(?:road|rd\.?|street|st\.?|avenue|ave\.?|lane|ln\.?|boulevard|blvd\.?|drive|dr\.?|highway|hwy\.?)\b.*[,•]/i.test(normalized)) {
+    if (
+      /\b(?:road|rd\.?|street|st\.?|avenue|ave\.?|lane|ln\.?|boulevard|blvd\.?|drive|dr\.?|highway|hwy\.?)\b.*[,•]/i.test(
+        normalized
+      )
+    ) {
       return false;
     }
     return /[A-Za-z0-9]/.test(normalized);
@@ -599,78 +296,71 @@
 
   function canonicalModel(make, model) {
     const cleaned = String(model || "").replace(/\s+/g, " ").trim();
-    if (/^ram$/i.test(make) && !/^ram\b/i.test(cleaned)) {
-      return `Ram ${cleaned}`;
-    }
+    if (/^ram$/i.test(make) && !/^ram\b/i.test(cleaned)) return `Ram ${cleaned}`;
     return cleaned;
   }
 
-  async function readReconciledModels(tabId, make, runtime) {
-    if (!(await ensureFacetOpen(tabId, FACETS.model, runtime))) {
-      throw new Error(`${make}: Dealer.com did not expose its Model facet`);
-    }
-    const rows = await runtime.waitFor(
-      async () => {
-        const values = (await readFacetRows(tabId, FACETS.model, "model"))
-          .filter((row) => Number.isFinite(row.count) && plausibleModelName(row.name))
-          .map((row) => ({
-            name: canonicalModel(make, row.name),
-            count: row.count,
-          }));
-        return values.length > 0 ? values : null;
-      },
-      {
-        timeoutMs: 8_000,
-        intervalMs: 300,
-        message: `${make}: Dealer.com Model opened without count rows`,
-      }
-    );
+  /** Per-model counts for whatever filter the current URL already applies. */
+  async function readModelCounts(tabId, make, runtime) {
+    const rows = (await readFacetRows(tabId, "model", runtime))
+      .filter((row) => Number.isFinite(row.count) && plausibleModelName(row.name))
+      .map((row) => ({ name: canonicalModel(make, row.name), count: row.count }));
+
     const byName = new Map();
-    for (const row of rows) {
-      byName.set(row.name, (byName.get(row.name) || 0) + row.count);
-    }
+    for (const row of rows) byName.set(row.name, (byName.get(row.name) || 0) + row.count);
     const models = [...byName.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, count]) => ({ name, count }));
-    const modelTotal = models.reduce((sum, row) => sum + row.count, 0);
-    const state = await inventoryPageState(tabId);
-    if (state.total !== null && Math.abs(state.total - modelTotal) > 2) {
-      throw new Error(
-        `${make}: Dealer.com Model counts total ${modelTotal}, but the result count is ${state.total}`
-      );
-    }
-    return { models, total: modelTotal, visibleTotal: state.total };
+    return { models, total: models.reduce((sum, row) => sum + row.count, 0) };
   }
 
-  function classifyStatus(row) {
-    const value = String(row.value || "").toLowerCase();
-    const label = String(row.name || "")
-      .replace(/[\u2010-\u2015]/g, "-")
-      .replace(/\s+/g, " ")
-      .trim()
+  // -------------------------------------------------------------------------
+  // Filter verification
+  // -------------------------------------------------------------------------
+
+  /**
+   * Confirm the make filter actually applied. A store that ignores URL params
+   * would otherwise return unfiltered counts that look plausible and silently
+   * inflate every make. Accepts either the URL keeping the param or the make
+   * facet reporting the make as selected.
+   */
+  async function verifyMakeApplied(tabId, make) {
+    return execute(
+      tabId,
+      (wanted) => {
+        const normalize = (value) =>
+          String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+        const target = normalize(wanted);
+        const param = new URL(location.href).searchParams.get("make");
+        if (param && normalize(param).split(",").includes(target)) return true;
+        return Array.from(
+          document.querySelectorAll(
+            '[data-facet-group="make"] input, #make input, input[name="make" i]'
+          )
+        ).some((input) => input.checked && normalize(input.value) === target);
+      },
+      [make]
+    );
+  }
+
+  /** Does this store publish an on-lot / in-transit split at all? */
+  async function readStatusSplit(tabId, runtime) {
+    const rows = await readFacetRows(tabId, "status", runtime, 6_000);
+    const label = rows
+      .map((row) => `${row.name} ${row.value}`)
+      .join(" ")
+      .replace(/[‐-―]/g, "-")
       .toLowerCase();
-    if (value === "1-1" || /\b(?:on\s+(?:the\s+)?lot|in[- ]?stock|at\s+(?:the\s+)?dealer|available\s+now)\b/.test(label)) {
-      return "inStock";
-    }
-    if (value === "7-7" || /\b(?:in[- ]?transit|incoming|inbound)\b/.test(label)) {
-      return "inTransit";
-    }
-    if (/\b(?:being\s+built|in\s+production|on\s+order|factory\s+order|dealer\s+ordered)\b/.test(label)) {
-      return "excluded";
-    }
-    return null;
-  }
-
-  async function statusFacet(tabId, runtime) {
-    if (!(await ensureFacetOpen(tabId, FACETS.status, runtime))) return null;
-    const rows = await readFacetRows(tabId, FACETS.status, "status");
-    const classified = rows.map((row) => ({ ...row, kind: classifyStatus(row) }));
     return {
-      inStock: classified.find((row) => row.kind === "inStock") || null,
-      inTransit: classified.find((row) => row.kind === "inTransit") || null,
-      excluded: classified.filter((row) => row.kind === "excluded"),
+      present: rows.length > 0,
+      onLot: /\b(?:on\s+(?:the\s+)?lot|in[- ]?stock|available\s+now|live)\b/.test(label),
+      inTransit: /\b(?:in[- ]?transit|incoming|inbound)\b/.test(label),
     };
   }
+
+  // -------------------------------------------------------------------------
+  // Collection
+  // -------------------------------------------------------------------------
 
   function mergeStatusModels(make, inStock, inTransit, transitKnown) {
     const stock = new Map(inStock.map((row) => [row.name, row.count]));
@@ -686,158 +376,129 @@
       }));
   }
 
-  async function collectMake(tabId, make, runtime, warnings) {
-    const facet = await statusFacet(tabId, runtime);
-    if (!facet?.inStock) {
-      if (facet?.inTransit) {
-        throw new Error(`${make}: Dealer.com exposed transit without an on-lot status`);
-      }
-      if (facet && facet.excluded.length > 0) {
-        warnings.push(
-          `${make}: Dealer.com exposed build/order statuses without a public on-lot split; transit remains unknown.`
-        );
-      }
-      const combined = await readReconciledModels(tabId, make, runtime);
-      return {
-        models: mergeStatusModels(make, combined.models, [], false),
-        subtotal: { make, inStock: combined.total, inTransit: null },
-      };
-    }
-
-    if (!(await setExclusiveFacet(tabId, "status", facet.inStock.value || facet.inStock.name, true, runtime))) {
-      throw new Error(`${make}: could not select Dealer.com on-lot status ${facet.inStock.name}`);
-    }
-    const inStock = await readReconciledModels(tabId, make, runtime);
-    let inTransit = { models: [], total: 0 };
-    let transitKnown = false;
-
-    if (facet.inTransit) {
-      if (!(await setExclusiveFacet(tabId, "status", facet.inTransit.value || facet.inTransit.name, true, runtime))) {
-        throw new Error(`${make}: could not select Dealer.com transit status ${facet.inTransit.name}`);
-      }
-      inTransit = await readReconciledModels(tabId, make, runtime);
-      transitKnown = true;
-    }
-
-    const active = facet.inTransit || facet.inStock;
-    await setExclusiveFacet(
-      tabId,
-      "status",
-      active.value || active.name,
-      false,
-      runtime
-    ).catch(() => false);
-    return {
-      models: mergeStatusModels(make, inStock.models, inTransit.models, transitKnown),
-      subtotal: {
-        make,
-        inStock: inStock.total,
-        inTransit: transitKnown ? inTransit.total : null,
-      },
-    };
-  }
-
-  function assertInternalReconciliation(makeSubtotals, models) {
-    for (const subtotal of makeSubtotals) {
-      const makeModels = models.filter((row) => row.make === subtotal.make);
-      const inStock = makeModels.reduce((sum, row) => sum + (row.inStock || 0), 0);
-      const inTransit = makeModels.reduce((sum, row) => sum + (row.inTransit || 0), 0);
-      if (inStock !== subtotal.inStock) {
-        throw new Error(
-          `${subtotal.make}: model on-lot counts ${inStock} do not reconcile to make subtotal ${subtotal.inStock}`
-        );
-      }
-      if (subtotal.inTransit !== null && inTransit !== subtotal.inTransit) {
-        throw new Error(
-          `${subtotal.make}: model transit counts ${inTransit} do not reconcile to make subtotal ${subtotal.inTransit}`
-        );
-      }
-    }
-  }
-
   async function collect({ item, helpers, runtime }) {
     const warnings = [];
     const { tabId } = await helpers.ensureSiteSession(item);
-    await navigateToInventory(tabId, helpers, runtime, warnings);
-    await runtime.suppressPopups(tabId);
 
-    const state = await inventoryPageState(tabId);
-    if (!state.ready || !state.isDdc) {
-      throw new Error("The configured Dealer.com site did not expose Dealer.com inventory controls");
-    }
+    const landing = await inventoryNavigate.resolveInventoryPage({
+      tabId,
+      item,
+      platform: "ddc",
+      helpers,
+      runtime,
+      warnings,
+      // Readiness asks only "can I filter inventory here?". It deliberately
+      // does not re-prove the platform on every page: the adapter was already
+      // chosen by stored platform or live sniffing, and gating each navigation
+      // on a second DDC check turns one weak signal into a total failure.
+      inspect: async (id) => {
+        const candidate = await inventoryPageState(id);
+        return { ...candidate, ready: candidate.hasControls };
+      },
+    });
 
+    const srpUrl = landing.url;
     const makes = [...new Set((item.makeAllowList || []).filter(Boolean))];
     if (makes.length === 0) {
       throw new Error("Dealer.com collection requires a configured make allow-list");
     }
-    const hasMakeFacet = await ensureFacetOpen(tabId, FACETS.make, runtime);
-    if (!hasMakeFacet && makes.length > 1) {
-      throw new Error("Multi-brand Dealer.com inventory did not expose its Make facet");
-    }
-    const availableMakes = hasMakeFacet
-      ? await readFacetRows(tabId, FACETS.make, "make")
-      : [];
-    if (hasMakeFacet && availableMakes.length === 0) {
-      throw new Error("Dealer.com Make opened without visible choices");
+
+    const availableMakes = await readFacetRows(tabId, "make", runtime);
+    const split = await readStatusSplit(tabId, runtime);
+    const transitKnown = split.present && split.onLot && split.inTransit;
+    if (split.present && !transitKnown) {
+      warnings.push(
+        "Dealer.com exposed a status facet without a public on-lot/in-transit split; transit left unresolved."
+      );
     }
 
     const models = [];
     const makeSubtotals = [];
+
     for (const make of makes) {
       runtime.throwIfCancelled();
-      if (hasMakeFacet) {
-        const option = availableMakes.find(
+
+      if (
+        availableMakes.length > 0 &&
+        !availableMakes.some(
           (row) => row.name.localeCompare(make, undefined, { sensitivity: "accent" }) === 0
+        )
+      ) {
+        warnings.push(
+          `${make}: not offered in the current Dealer.com make facet; recorded as zero.`
         );
-        if (!option) {
-          warnings.push(`${make}: not present in the current Dealer.com Make facet; recorded as zero.`);
-          makeSubtotals.push({ make, inStock: 0, inTransit: null });
-          continue;
-        }
-        const selected = await setExclusiveFacet(
+        makeSubtotals.push({ make, inStock: 0, inTransit: null });
+        continue;
+      }
+
+      // One stateless navigation per make/status combination. Nothing to unwind
+      // afterwards, and a failure on one make never corrupts the next.
+      await inventoryNavigate.goto(
+        tabId,
+        inventoryNavigate.withParams(srpUrl, {
+          make,
+          status: transitKnown ? ON_LOT_STATUS : null,
+        }),
+        helpers,
+        runtime
+      );
+
+      if (!(await verifyMakeApplied(tabId, make))) {
+        warnings.push(
+          `${make}: Dealer.com did not apply the make filter from the URL; skipped rather than reporting unfiltered counts.`
+        );
+        makeSubtotals.push({ make, inStock: 0, inTransit: null });
+        continue;
+      }
+
+      const inStock = await readModelCounts(tabId, make, runtime);
+      const pageTotal = (await inventoryPageState(tabId)).total;
+      if (pageTotal !== null && inStock.total > 0 && Math.abs(pageTotal - inStock.total) > 2) {
+        warnings.push(
+          `${make}: Dealer.com model counts total ${inStock.total} against a reported ${pageTotal}; kept the model breakdown.`
+        );
+      }
+
+      let inTransit = { models: [], total: 0 };
+      if (transitKnown) {
+        await inventoryNavigate.goto(
           tabId,
-          "make",
-          option.value || option.name,
-          true,
+          inventoryNavigate.withParams(srpUrl, { make, status: IN_TRANSIT_STATUS }),
+          helpers,
           runtime
         );
-        if (!selected) {
-          throw new Error(`${make}: could not verify it as the only selected Dealer.com Make`);
-        }
+        inTransit = await readModelCounts(tabId, make, runtime);
       }
 
-      const collected = await collectMake(tabId, make, runtime, warnings);
-      models.push(...collected.models);
-      makeSubtotals.push(collected.subtotal);
-
-      if (hasMakeFacet) {
-        await setExclusiveFacet(tabId, "make", make, false, runtime).catch(() => false);
-      }
+      models.push(...mergeStatusModels(make, inStock.models, inTransit.models, transitKnown));
+      makeSubtotals.push({
+        make,
+        inStock: inStock.total,
+        inTransit: transitKnown ? inTransit.total : null,
+      });
     }
 
     if (models.length === 0) {
-      throw new Error("Dealer.com collection produced no reconciled model rows");
+      throw new Error("Dealer.com collection produced no model rows");
     }
-    assertInternalReconciliation(makeSubtotals, models);
+
     const totalInStock = makeSubtotals.reduce((sum, row) => sum + row.inStock, 0);
-    const transitKnown = makeSubtotals.every((row) => row.inTransit !== null);
-    const totalInTransit = transitKnown
+    const allTransitKnown = makeSubtotals.every((row) => row.inTransit !== null);
+    const totalInTransit = allTransitKnown
       ? makeSubtotals.reduce((sum, row) => sum + row.inTransit, 0)
       : null;
     if (totalInStock <= 0) {
       throw new Error("Dealer.com reconciled on-lot total was zero");
     }
-    const metadata = await execute(tabId, () => ({ sourceUrl: location.href }));
+
     return {
-      sourceUrl: metadata.sourceUrl,
+      sourceUrl: srpUrl,
       detectedPlatform: "ddc",
       totals: {
         inStock: totalInStock,
         inTransit: totalInTransit,
         displayValue:
-          totalInTransit === null
-            ? String(totalInStock)
-            : `${totalInStock}/${totalInTransit}*`,
+          totalInTransit === null ? String(totalInStock) : `${totalInStock}/${totalInTransit}*`,
       },
       makeSubtotals,
       models,
@@ -848,7 +509,7 @@
   globalThis.inventoryPlatformAdapters ||= [];
   globalThis.inventoryPlatformAdapters.push({
     id: "dealer-com",
-    platforms: ["ddc", "dealer.com", "dealercom"],
+    platforms: ["ddc", "dealer.com", "dealercom", "dealerdotcom", "cox", "coxautomotive"],
     collect,
   });
 })();

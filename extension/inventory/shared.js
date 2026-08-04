@@ -81,70 +81,12 @@
     }
   }
 
-  function normalizeOption(value) {
-    return String(value || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
-  }
-
-  async function selectExclusive(options) {
-    const {
-      target,
-      shouldSelect = true,
-      readOptions,
-      toggle,
-      signal,
-      normalize = normalizeOption,
-    } = options;
-    const targetKey = normalize(target);
-    let current = await readOptions();
-    let targetRow = current.find(
-      (row) => normalize(row.name) === targetKey || normalize(row.value) === targetKey
-    );
-    if (!targetRow) return false;
-
-    if (shouldSelect) {
-      for (const selected of current.filter(
-        (row) => row.selected && normalize(row.name) !== normalize(targetRow.name)
-      )) {
-        throwIfCancelled(signal);
-        await toggle(selected, false);
-      }
-    }
-
-    current = await readOptions();
-    targetRow = current.find(
-      (row) => normalize(row.name) === targetKey || normalize(row.value) === targetKey
-    );
-    if (!targetRow) return false;
-    if (Boolean(targetRow.selected) !== Boolean(shouldSelect)) {
-      await toggle(targetRow, shouldSelect);
-    }
-
-    current = await readOptions();
-    const finalTarget = current.find(
-      (row) => normalize(row.name) === targetKey || normalize(row.value) === targetKey
-    );
-    if (!finalTarget || Boolean(finalTarget.selected) !== Boolean(shouldSelect)) {
-      return false;
-    }
-    return (
-      !shouldSelect ||
-      current.every(
-        (row) => !row.selected || normalize(row.name) === normalize(finalTarget.name)
-      )
-    );
-  }
-
   function createRuntime({ helpers, signal }) {
     return {
       signal,
       sleep: (ms) => sleep(ms, signal),
       throwIfCancelled: () => throwIfCancelled(signal),
       waitFor: (check, options) => waitFor(check, { ...options, signal }),
-      selectExclusive: (options) =>
-        selectExclusive({ ...options, signal }),
       suppressPopups: async (tabId) => {
         throwIfCancelled(signal);
         await helpers.suppressPageObstructions(tabId);
@@ -155,7 +97,6 @@
 
   globalThis.inventoryShared = {
     createRuntime,
-    selectExclusive,
     sleep,
     throwIfCancelled,
     waitFor,

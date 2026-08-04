@@ -82,17 +82,40 @@ text contains price, APR, monthly-payment, or due-at-signing terms.
 Inventory uses the same visible Chrome extension transport while preserving the
 existing inventory result and reporting models. Platform behavior is isolated:
 `extension/inventory.js` dispatches only to a registered adapter. The current
-pass registers Dealer.com (`ddc`) and Dealer Inspire (`dealer_inspire`). The
-Dealer.com adapter owns its top-menu navigation, DDC Make/Model/Status facet
-containers, apply-and-settle logic, and page/facet count reader. The Dealer
-Inspire adapter separately owns `/new-vehicles/` navigation, LightningVRP
-Make/Model/Availability dialogs, `View N Matches` apply/settle behavior, and
-dialog count reading. Other platforms fail closed until they get an adapter.
+pass registers Dealer.com (`ddc`) and Dealer Inspire (`dealer_inspire`). Other
+platforms fail closed until they get an adapter, and `extension/inventory.js`
+sniffs the live page when `sites.platform` (free text) matches no adapter.
+
+**Hard rule: models are only ever read with a single make selected.** An
+unfiltered SRP yields a whole-dealership model dump, which is wrong for any
+multi-brand store and silently corrupts reporting. On Dealer.com the site
+enforces this too — the `model` facet group does not exist in the DOM until a
+make is applied. Adapters therefore loop one make at a time, apply it, and only
+then read models. Verified live on a CDJR store: `?make=Chrysler&status=1-1`
+returns Pacifica 3 + Voyager 4 = 7, matching its "7 Vehicles Matching" exactly.
+
+Navigation and filtering are URL-driven, not click-driven.
+`extension/inventory/navigate.js` resolves the SRP in tiers — page already
+loaded, stored `sites.inventory_path`, platform default
+(`/new-inventory/index.htm`, `/new-vehicles/`), then href-ranked link discovery
+— and every failure records what each tier saw. Filters are applied by
+navigating: Dealer.com uses `?make=<Make>&status=1-1` (on the lot) and
+`status=7-7` (in transit); Dealer Inspire uses LightningVRP's `_dFR[...]`
+refinements. These are public URL contracts the dealer's own site links to, so
+they outlast the DOM churn that broke the previous menu/facet click paths. Each
+adapter verifies the filter actually applied and records zero with a warning
+rather than reporting unfiltered counts.
+
+Two DDC DOM traps the reader must keep handling: facet panels render collapsed
+and populate `.panel-collapse` only on expand (so a container holding zero
+controls is normal, not absent), and the inner `.panel-collapse` div carries an
+id containing the facet name — facet containers must be matched by
+`data-facet-group` before falling back to `id`, or the reader latches onto the
+inner div, which has no expand control and always reads empty.
 
 `extension/inventory/shared.js` is intentionally limited to popup suppression,
-exclusive selection, timeouts, cancellation, and guaranteed cleanup. It has no
-navigation, selector, apply, or count-reading knowledge. Both registered
-adapters select one Make at a time before Model on multi-brand sites. Dealer
+timeouts, cancellation, and guaranteed cleanup. It has no
+navigation, selector, apply, or count-reading knowledge. Dealer
 Inspire normalizes both visible status variants (`On Lot` or `In-Stock`, plus
 `In-Transit`) without leaking either implementation into shared code. Each
 make/status model sum must reconcile exactly to its subtotal, and an adapter's
@@ -101,10 +124,10 @@ The Inventory toolbar exposes a shared Cancel Run control for Chrome and API
 batches. Cancellation aborts the page driver, closes the visible collection
 window, and persists queued/running rows as cancelled without replacing the
 dealer's latest completed inventory snapshot.
-The normal Chrome batch gives each configured make 60 seconds. A single-make
-dealer therefore keeps the one-minute ceiling, while multi-brand dealers scale
-to two, three, or four make passes. Anything that cannot finish inside that
-make-scaled ceiling fails fast into a guided exception rerun. Every inventory
+The normal Chrome batch budgets 25 seconds of setup plus 25 seconds per
+configured make, since URL-driven collection costs about two page loads per
+make rather than a chain of click-and-settle waits. Anything that cannot finish
+inside that make-scaled ceiling fails fast into a guided exception rerun. Every inventory
 request closes its dealer window after success or failure, and the extension
 uses the same make-scaled ceiling plus a five-second safety cleanup grace for a
 lost app/bridge response. The active window id is also persisted in extension

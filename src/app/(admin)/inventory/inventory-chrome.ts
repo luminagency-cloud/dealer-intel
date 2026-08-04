@@ -3,7 +3,7 @@
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
 const PROTOCOL_VERSION = 4;
-const MIN_EXTENSION_VERSION = "1.2.0";
+const MIN_EXTENSION_VERSION = "1.3.3";
 
 class ChromeCollectorTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -181,8 +181,11 @@ export async function runChromeInventoryJob(
       );
       await postResult(batchId, { action: "running", siteId: item.siteId });
       try {
+        // URL-driven collection is ~2 page loads per make instead of a click
+        // sequence per facet. Kept comfortably above the extension's own
+        // budget so its error surfaces instead of the app timing out first.
         const makePasses = Math.max(1, item.makeAllowList.length);
-        const collectionTimeoutMs = 60_000 * makePasses;
+        const collectionTimeoutMs = 30_000 + makePasses * 40_000;
         const response = await extensionRequest(
           "COLLECT_INVENTORY",
           item,

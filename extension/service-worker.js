@@ -1,5 +1,6 @@
 importScripts(
   "inventory/shared.js",
+  "inventory/navigate.js",
   "inventory/adapters/dealer-com.js",
   "inventory/adapters/dealer-inspire.js",
   "inventory.js"
@@ -83,12 +84,25 @@ async function ensureSiteSession(item) {
   if (activeSession?.siteId === item.siteId) {
     try {
       const tab = await chrome.tabs.get(activeSession.tabId);
-      await chrome.windows.update(activeSession.windowId, { focused: true });
-      if (tab.url !== item.url) {
-        await chrome.tabs.update(activeSession.tabId, {
-          url: item.url,
-          active: true,
-        });
+      // Deliberately does NOT re-focus the collection window. A dealer batch
+      // calls this once per dealer, and grabbing focus each time made the
+      // browser unusable — the operator could not stay in another tab or
+      // window while a run was going.
+      // Compare origins, not full URLs. Inventory collection deliberately
+      // navigates this tab around the dealer's own site (SRP, per-make filter
+      // URLs), and a site that redirects http->https or adds a trailing slash
+      // would otherwise be yanked back to the homepage on every call.
+      const sameSite = (() => {
+        try {
+          return new URL(tab.url || "").origin === new URL(item.url).origin;
+        } catch {
+          return false;
+        }
+      })();
+      if (!sameSite) {
+        // No `active: true`: this tab is the only tab in its own collection
+        // window, so activating it only serves to steal the operator's focus.
+        await chrome.tabs.update(activeSession.tabId, { url: item.url });
         await waitForTabComplete(activeSession.tabId);
       }
       return activeSession;
@@ -99,11 +113,20 @@ async function ensureSiteSession(item) {
     await closeActiveSession();
   }
 
+  // Focused once, at creation, so the page renders and is not occluded from
+  // the start. Never re-focused afterwards.
+  //
+  // Explicit desktop dimensions rather than "maximized": viewport width picks
+  // which facet layout a dealer platform renders. Dealer Inspire in
+  // particular swaps its desktop `#lvrp-filters-column` for a mobile filter
+  // dialog at narrow widths, and the readers target the desktop layout. A
+  // fixed size keeps that deterministic across machines and screen sizes.
   const created = await chrome.windows.create({
     url: item.url,
     focused: true,
     type: "normal",
-    state: "maximized",
+    width: 1440,
+    height: 960,
   });
   const windowId = created.id;
   const tabId = created.tabs?.[0]?.id;
