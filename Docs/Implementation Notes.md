@@ -1,6 +1,6 @@
 # Implementation Notes
 
-_Last updated: August 2, 2026_
+_Last updated: August 3, 2026_
 
 This is the compact map of how the system works. The open work list lives in
 `Docs/Implementation Roadmap.md`.
@@ -54,7 +54,7 @@ Chrome progress is database-backed: reopening or reloading a running run
 automatically resumes only its unfinished items, while a browser lock prevents
 two Dealer Intel tabs from driving the same run.
 
-Chrome protocol 3 is stateful. The extension prepares the visible page, expands
+Chrome protocol 4 is stateful. The extension prepares the visible page, expands
 mission-selected accordions, captures a true full-page base image through the
 Chrome DevTools protocol, then opens and captures selected tabs, carousel
 slides, and ad disclaimers. Each state carries a stable id, kind, order, label,
@@ -64,7 +64,7 @@ its upload acknowledgement before changing the UI again. Stable capture keys
 make interrupted uploads safe to retry. A partial interaction failure becomes
 `needs_review` when any evidence was already stored.
 
-The app currently requires extension 0.3.4 or newer. Collection windows open
+The app currently requires extension 1.2.0 or newer. Collection windows open
 maximized for deterministic desktop layouts. Primary-carousel discovery polls
 for late widget injection, and traversal retries transient/no-op Next clicks so
 an animation-time disabled control does not silently truncate the manifest.
@@ -79,12 +79,53 @@ only prevents a broken widget from looping forever. Disclaimers are opened
 while their exact slide remains active and are retained only when the opened
 text contains price, APR, monthly-payment, or due-at-signing terms.
 
-Inventory remains on its existing page/batch and local-service path during the
-phase-one proof. Phase two moves its page collection into the same visible
-Chrome extension mechanism while preserving the existing inventory result and
-reporting models. Only after matched results establish parity should the
-`dealer-inventory-api` dependency and `src/lib/local-inventory-process.ts`
-health/autostart path be removed.
+Inventory uses the same visible Chrome extension transport while preserving the
+existing inventory result and reporting models. Platform behavior is isolated:
+`extension/inventory.js` dispatches only to a registered adapter. The current
+pass registers Dealer.com (`ddc`) and Dealer Inspire (`dealer_inspire`). The
+Dealer.com adapter owns its top-menu navigation, DDC Make/Model/Status facet
+containers, apply-and-settle logic, and page/facet count reader. The Dealer
+Inspire adapter separately owns `/new-vehicles/` navigation, LightningVRP
+Make/Model/Availability dialogs, `View N Matches` apply/settle behavior, and
+dialog count reading. Other platforms fail closed until they get an adapter.
+
+`extension/inventory/shared.js` is intentionally limited to popup suppression,
+exclusive selection, timeouts, cancellation, and guaranteed cleanup. It has no
+navigation, selector, apply, or count-reading knowledge. Both registered
+adapters select one Make at a time before Model on multi-brand sites. Dealer
+Inspire normalizes both visible status variants (`On Lot` or `In-Stock`, plus
+`In-Transit`) without leaking either implementation into shared code. Each
+make/status model sum must reconcile exactly to its subtotal, and an adapter's
+visible total may differ from its model sum by at most two vehicles.
+The Inventory toolbar exposes a shared Cancel Run control for Chrome and API
+batches. Cancellation aborts the page driver, closes the visible collection
+window, and persists queued/running rows as cancelled without replacing the
+dealer's latest completed inventory snapshot.
+The normal Chrome batch gives each configured make 60 seconds. A single-make
+dealer therefore keeps the one-minute ceiling, while multi-brand dealers scale
+to two, three, or four make passes. Anything that cannot finish inside that
+make-scaled ceiling fails fast into a guided exception rerun. Every inventory
+request closes its dealer window after success or failure, and the extension
+uses the same make-scaled ceiling plus a five-second safety cleanup grace for a
+lost app/bridge response. The active window id is also persisted in extension
+storage so service-worker restart recovery closes it before another dealer opens.
+After a dealer timeout, the app confirms that the extension session was reset
+before opening the next dealer. A lost or invalidated extension message channel
+stops the driver immediately, cancels unfinished rows, and releases the run
+controls instead of cascading the transport error across the remaining sites.
+Completed dealer results remain intact and unfinished dealers can be rerun
+individually.
+Menu links that open a new tab are adopted into the tracked collection tab and
+the untracked child is closed before collection continues.
+The unchanged `dealer-inventory-api` and `src/lib/local-inventory-process.ts`
+remain available during matched-result verification and should be removed only
+after platform parity is established.
+
+One matched pair is checked with
+`node scripts/compare-inventory-batches.mjs <api-batch> <chrome-batch>`.
+When an API fallback reports transit as unknown, the verifier compares its
+combined model/make/total counts to Chrome's on-lot-plus-transit counts while
+still requiring Chrome's status rows to reconcile internally.
 
 Key files:
 

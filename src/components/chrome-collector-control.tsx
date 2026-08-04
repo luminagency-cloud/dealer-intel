@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
 const EVENT_TYPE = "DEALER_INTEL_EXTENSION_EVENT";
-const PROTOCOL_VERSION = 3;
-const MIN_EXTENSION_VERSION = "0.3.4";
+const PROTOCOL_VERSION = 4;
+const MIN_EXTENSION_VERSION = "0.4.0";
 
 function compareVersions(left: string, right: string): number {
   const a = left.split(".").map((part) => Number(part) || 0);

@@ -1,6 +1,13 @@
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
 
+function postResponse(requestId, response) {
+  window.postMessage(
+    { type: RESPONSE_TYPE, requestId, response },
+    window.location.origin
+  );
+}
+
 window.addEventListener("message", (event) => {
   if (
     event.source !== window ||
@@ -11,22 +18,38 @@ window.addEventListener("message", (event) => {
   }
 
   const { requestId, command, payload } = event.data;
-  chrome.runtime.sendMessage(
-    { command, payload, collectionRequestId: requestId },
-    (response) => {
-    const runtimeError = chrome.runtime.lastError;
-    window.postMessage(
-      {
-        type: RESPONSE_TYPE,
-        requestId,
-        response: runtimeError
-          ? { ok: false, error: runtimeError.message }
-          : response,
-      },
-      window.location.origin
+  try {
+    chrome.runtime.sendMessage(
+      { command, payload, collectionRequestId: requestId },
+      (response) => {
+        try {
+          const runtimeError = chrome.runtime.lastError;
+          postResponse(
+            requestId,
+            runtimeError
+              ? { ok: false, error: runtimeError.message }
+              : response
+          );
+        } catch (error) {
+          postResponse(requestId, {
+            ok: false,
+            error:
+              error instanceof Error
+                ? `${error.message} Reload this Dealer Intel page.`
+                : "Extension context was invalidated. Reload this Dealer Intel page.",
+          });
+        }
+      }
     );
-    }
-  );
+  } catch (error) {
+    postResponse(requestId, {
+      ok: false,
+      error:
+        error instanceof Error
+          ? `${error.message} Reload this Dealer Intel page.`
+          : "Extension context was invalidated. Reload this Dealer Intel page.",
+    });
+  }
 });
 
 chrome.runtime.onMessage.addListener((message) => {

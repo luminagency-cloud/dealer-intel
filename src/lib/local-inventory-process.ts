@@ -22,10 +22,16 @@ const globalState = globalThis as unknown as {
     child: ChildProcess | null;
     status: LocalInventoryStatus;
     ensured: boolean;
+    cleanupRegistered: boolean;
   };
 };
 if (!globalState.__localInventoryProcess) {
-  globalState.__localInventoryProcess = { child: null, status: "stopped", ensured: false };
+  globalState.__localInventoryProcess = {
+    child: null,
+    status: "stopped",
+    ensured: false,
+    cleanupRegistered: false,
+  };
 }
 const state = globalState.__localInventoryProcess;
 
@@ -119,6 +125,9 @@ function killOwnedChild(): void {
   if (state.child) state.child.kill();
 }
 
-process.once("SIGINT", killOwnedChild);
-process.once("SIGTERM", killOwnedChild);
-process.once("exit", killOwnedChild);
+if (!state.cleanupRegistered) {
+  process.once("SIGINT", killOwnedChild);
+  process.once("SIGTERM", killOwnedChild);
+  process.once("exit", killOwnedChild);
+  state.cleanupRegistered = true;
+}

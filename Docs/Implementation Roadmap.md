@@ -1,6 +1,6 @@
 # Dealer Intel Working List
 
-_Last updated: August 2, 2026_
+_Last updated: August 3, 2026_
 
 This is the current human-readable status and backlog. If something is done, it
 should not live here as future work.
@@ -82,8 +82,15 @@ Status: **implemented and locally configured**
 - News and inventory are wired into the current ops flow.
 - Inventory runs through the inventory page/batch flow and appears in report
   views as an Inventory Snapshot section.
-- Local inventory mode can auto-start the sibling `dealer-inventory-api` process
-  when configured.
+- Inventory collection is moving to visible Chrome one platform at a time. The
+  current pass supports Dealer.com (`ddc`) and Dealer Inspire
+  (`dealer_inspire`) and fails closed for other platforms. Each adapter owns its
+  navigation, filter containers, apply/settle behavior, and count reader. The
+  sibling `dealer-inventory-api` remains the matched baseline until every
+  dealer on the active platform passes.
+- The Inventory page exposes separate API-baseline and Chrome run buttons plus
+  a Cancel Run control that stops the queue and closes the Chrome collection
+  window.
 
 ### Reporting
 
@@ -161,8 +168,14 @@ Remaining before making Chrome the default or retiring Current:
   disclaimer state; the current Bristol Toyota page exposes only the base state
   to both collectors.
 - Exercise interrupted-run recovery and the same evidence checks on macOS.
-- Inventory parity is verified before removing the sibling inventory service
-  and its local DLL/process check.
+- Visible-Chrome inventory now has separate Dealer.com and Dealer Inspire
+  adapters. Run every dealer on each platform as its own API-baseline batch and
+  Chrome batch; accept only totals within two vehicles and complete
+  make/status/model reconciliation via `scripts/compare-inventory-batches.mjs`.
+  Dealer.com still needs its full live matrix after the unpacked extension is
+  reloaded. Dealer Inspire needs the same 14-dealer matrix. After both pass,
+  build and verify separate DealerOn, Apollo, and remaining-platform adapters
+  before removing the sibling inventory service.
 
 ### 1. Dealer Alchemist Disclaimer Capture
 

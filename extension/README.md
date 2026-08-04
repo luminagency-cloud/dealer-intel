@@ -21,7 +21,7 @@ Chrome mode processes the selected run scope sequentially. Missions
 for one dealer reuse one visible Chrome window before the extension advances to
 the next dealer.
 
-Protocol 3 / extension 0.3.4 captures a full-page base state and the mission-selected tabs,
+Protocol 4 / extension 1.2.0 captures a full-page base state and the mission-selected tabs,
 carousel slides, accordion-expanded content, and opened ad disclaimers. Every
 state is labeled and includes rendered HTML plus a screenshot; disclaimer states
 also carry extracted modal text. The extension sends and waits for the app to
@@ -39,6 +39,34 @@ arbitrary first five. A disclaimer is opened on its active slide and stored
 only when the resulting text contains real offer terms; award and other
 brag-slide legal copy is skipped.
 
+Visible inventory collection is being rolled out one platform at a time. The
+current pass supports Dealer.com (`ddc`) and Dealer Inspire
+(`dealer_inspire`) and fails closed for every other platform. Each adapter owns
+its navigation, filter containers, apply/settle behavior, and count reading.
+Dealer Inspire follows visible `/new-vehicles/` navigation and LightningVRP
+dialogs, normalizing `On Lot` and `In-Stock` as on-lot inventory. Both adapters
+select Make before Model on multi-brand sites and exclude build/order statuses.
+Every make subtotal must reconcile exactly to its model rows, and the adapter's
+visible total must be within two vehicles of those model counts before the
+result can be stored.
+
+The shared inventory runtime is deliberately limited to popup suppression,
+exclusive option selection, timeouts, cancellation, and guaranteed collection-
+window cleanup. Each configured make receives a 60-second budget, so a four-make
+CDJR dealer receives up to four minutes while a single-make dealer keeps the
+one-minute ceiling. Inventory links that open a child tab are adopted back into
+the tracked tab and the child is closed immediately.
+
+Compare one API baseline batch with its matching Chrome batch using:
+
+```powershell
+node scripts/compare-inventory-batches.mjs <api-batch> <chrome-batch>
+```
+
+The command fails if totals differ by more than two vehicles or make, status,
+and model rows do not fully reconcile. If the API fallback cannot split transit,
+its combined counts are compared with Chrome's on-lot-plus-transit counts.
+
 Disclosure discovery runs in every accessible frame and recognizes semantic
 buttons plus Dealer Inspire/Dealer Alchemist div-based toggles. Expanded inline
 panels are captured the same way as modal dialogs.
@@ -50,4 +78,4 @@ the collection tab if Chrome reports that another debugger is already attached.
 
 After updating, reload both the unpacked extension and the Dealer Intel page.
 The app deliberately rejects older protocol versions and extension builds older
-than 0.3.4 before changing run state.
+than 1.2.0 before changing run state.

@@ -16,10 +16,11 @@ export function runningLocally(): boolean {
   return process.env.NODE_ENV !== "production" && process.env.RUN_INVENTORY_LOCALLY === "true";
 }
 
-export const isInventoryConfigured = (): boolean =>
-  runningLocally()
-    ? Boolean(process.env.INVENTORY_API_URL_LOCAL)
-    : Boolean(process.env.INVENTORY_API_URL && process.env.INVENTORY_API_KEY);
+// Visible-Chrome inventory collection is built into Dealer Intel and does not
+// require the sibling API. The API configuration remains available as a
+// parity/fallback path until the Chrome results have been matched across the
+// supported dealer platforms.
+export const isInventoryConfigured = (): boolean => true;
 
 function apiBase(): string {
   if (runningLocally()) return process.env.INVENTORY_API_URL_LOCAL ?? "";
@@ -39,14 +40,14 @@ function apiHeaders(): HeadersInit {
 
 export type InventoryTotals = {
   inStock: number;
-  inTransit: number;
+  inTransit: number | null;
   displayValue: string;
 };
 
 export type MakeSubtotal = {
   make: string;
   inStock: number;
-  inTransit: number;
+  inTransit: number | null;
 };
 
 export type ModelRow = {
@@ -144,7 +145,7 @@ export type CollectAndStoreResult = {
   error?: { message: string; code: string; statusCode?: number; isRateLimited?: boolean };
 };
 
-async function upsertBatchRow(
+export async function upsertInventoryBatchRow(
   values: Partial<typeof inventoryResults.$inferInsert> &
     Pick<typeof inventoryResults.$inferInsert, "siteId" | "batchId" | "weekKey" | "status">
 ) {
@@ -194,7 +195,7 @@ export async function collectAndStore(
 
   if (!apiResult) {
     const err = { message: "Network error — no response from inventory API", code: "network_error" };
-    const row = await upsertBatchRow({
+    const row = await upsertInventoryBatchRow({
       siteId: site.id,
       batchId,
       weekKey,
@@ -213,7 +214,7 @@ export async function collectAndStore(
   }
 
   if (!apiResult.ok) {
-    const row = await upsertBatchRow({
+    const row = await upsertInventoryBatchRow({
       siteId: site.id,
       batchId,
       weekKey,
@@ -231,7 +232,7 @@ export async function collectAndStore(
     return { id: row.id, status: "failed", error: apiResult.error };
   }
 
-  const row = await upsertBatchRow({
+  const row = await upsertInventoryBatchRow({
       siteId: site.id,
       batchId,
       weekKey,
@@ -247,6 +248,46 @@ export async function collectAndStore(
       error: null,
     });
   return { id: row.id, status: "ok", totals: apiResult.totals, makeSubtotals: apiResult.makeSubtotals, models: apiResult.models };
+}
+
+export type ChromeInventoryResult = {
+  sourceUrl: string;
+  detectedPlatform: string;
+  totals: InventoryTotals;
+  makeSubtotals: MakeSubtotal[];
+  models: ModelRow[];
+  warnings?: string[];
+};
+
+/** Stores a visible-Chrome inventory result in the same row shape used by the
+ * sibling API, keeping reporting and freshness behavior collector-agnostic. */
+export async function storeChromeInventoryResult(
+  siteId: string,
+  batchId: string,
+  result: ChromeInventoryResult
+): Promise<CollectAndStoreResult> {
+  const row = await upsertInventoryBatchRow({
+    siteId,
+    batchId,
+    weekKey: getISOWeekLabel(),
+    status: "ok",
+    detectedPlatform: result.detectedPlatform,
+    accessRoute: "browser",
+    attempts: 1,
+    sourceUrl: result.sourceUrl,
+    totals: result.totals,
+    makeSubtotals: result.makeSubtotals,
+    models: result.models,
+    warnings: result.warnings ?? [],
+    error: null,
+  });
+  return {
+    id: row.id,
+    status: "ok",
+    totals: result.totals,
+    makeSubtotals: result.makeSubtotals,
+    models: result.models,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +362,7 @@ export async function getInventoryFreshnessStatus(): Promise<InventoryFreshnessS
   // Rows are latest-first; keep only the first (latest) row seen per site.
   const latestBySite = new Map<string, { status: string; collectedAt: Date }>();
   for (const r of rows) {
+    if (r.status !== "ok" && r.status !== "failed") continue;
     if (!latestBySite.has(r.siteId)) latestBySite.set(r.siteId, { status: r.status, collectedAt: r.collectedAt });
   }
 

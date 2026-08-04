@@ -1,11 +1,23 @@
-const PROTOCOL_VERSION = 3;
+importScripts(
+  "inventory/shared.js",
+  "inventory/adapters/dealer-com.js",
+  "inventory/adapters/dealer-inspire.js",
+  "inventory.js"
+);
+
+const PROTOCOL_VERSION = 4;
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const CAPTURE_ACK_TIMEOUT_MS = 120_000;
 const CAROUSEL_SAFETY_LIMIT = 30;
 const CAROUSEL_DETECTION_TIMEOUT_MS = 8_000;
 const MAX_TABS = 8;
 const DISCLAIMER_SAFETY_LIMIT = 30;
+const INVENTORY_TIMEOUT_PER_MAKE_MS = 60_000;
+const INVENTORY_CLEANUP_GRACE_MS = 5_000;
+const ACTIVE_INVENTORY_SESSION_KEY = "dealerIntelActiveInventorySession";
 let activeSession = null;
+let activeSessionTimeout = null;
+let activeInventoryController = null;
 const pendingCaptureAcks = new Map();
 
 function sleep(ms) {
@@ -13,24 +25,23 @@ function sleep(ms) {
 }
 
 async function waitForTabComplete(tabId) {
-  const existing = await chrome.tabs.get(tabId);
-  if (existing.status === "complete") return;
-
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error("Timed out waiting for the dealer page to load"));
-    }, NAVIGATION_TIMEOUT_MS);
-
-    function onUpdated(updatedTabId, changeInfo) {
-      if (updatedTabId !== tabId || changeInfo.status !== "complete") return;
-      clearTimeout(timeout);
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      resolve();
+  const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (/^https?:/i.test(tab.url || "")) {
+        const [{ result: readyState }] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => document.readyState,
+        });
+        if (readyState === "interactive" || readyState === "complete") return;
+      }
+    } catch {
+      // A redirect can temporarily replace the top frame; retry its visible page.
     }
-
-    chrome.tabs.onUpdated.addListener(onUpdated);
-  });
+    await sleep(250);
+  }
+  throw new Error("Timed out waiting for the dealer page to become interactive");
 }
 
 async function waitAfterInteraction(tabId, delayMs) {
@@ -41,14 +52,30 @@ async function waitAfterInteraction(tabId, delayMs) {
 }
 
 async function closeActiveSession() {
-  const session = activeSession;
+  if (activeSessionTimeout !== null) {
+    clearTimeout(activeSessionTimeout);
+    activeSessionTimeout = null;
+  }
+  const stored = await chrome.storage.local.get(ACTIVE_INVENTORY_SESSION_KEY);
+  const session = activeSession || stored[ACTIVE_INVENTORY_SESSION_KEY] || null;
   activeSession = null;
   if (session?.windowId !== undefined) {
-    await chrome.windows.remove(session.windowId).catch(() => {});
+    try {
+      await chrome.windows.remove(session.windowId);
+    } catch (error) {
+      if (!/no window with id/i.test(error instanceof Error ? error.message : String(error))) {
+        activeSession = session;
+        throw error;
+      }
+    }
   }
+  await chrome.storage.local.remove(ACTIVE_INVENTORY_SESSION_KEY);
 }
 
+const activeInventorySessionRecovery = closeActiveSession();
+
 async function ensureSiteSession(item) {
+  await activeInventorySessionRecovery;
   if (!item?.url || !item?.siteId) {
     throw new Error("Collection job did not include a dealer and URL");
   }
@@ -85,6 +112,13 @@ async function ensureSiteSession(item) {
   }
 
   activeSession = { siteId: item.siteId, windowId, tabId };
+  await chrome.storage.local.set({
+    [ACTIVE_INVENTORY_SESSION_KEY]: activeSession,
+  });
+  const makePasses = Math.max(1, item.makeAllowList?.length || 1);
+  activeSessionTimeout = setTimeout(() => {
+    closeActiveSession().catch(() => {});
+  }, INVENTORY_TIMEOUT_PER_MAKE_MS * makePasses + INVENTORY_CLEANUP_GRACE_MS);
   await waitForTabComplete(tabId);
   return activeSession;
 }
@@ -181,7 +215,8 @@ async function suppressPageObstructions(tabId) {
   await chrome.scripting
     .executeScript({
       target: { tabId, allFrames: true },
-      func: () => {
+      func: async () => {
+        const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const isVisible = (element) => {
           const rect = element.getBoundingClientRect();
           const style = getComputedStyle(element);
@@ -199,15 +234,110 @@ async function suppressPageObstructions(tabId) {
           'div[class*="modal" i] button[aria-label*="close" i]',
           'div[class*="popup" i] button[aria-label*="close" i]',
         ];
-        for (const selector of closeSelectors) {
-          const button = Array.from(document.querySelectorAll(selector)).find(
-            isVisible
+        const popupSelectors = [
+          '[role="dialog"]',
+          'dialog[open]',
+          '[aria-modal="true"]',
+          '[class*="modal" i]',
+          '[id*="modal" i]',
+          '[class*="popup" i]',
+          '[id*="popup" i]',
+          '[class*="lightbox" i]',
+          '[class*="interstitial" i]',
+        ];
+        const inventoryControlLayer = (element) => {
+          const text = (element.innerText || "").replace(/\s+/g, " ").trim();
+          const hasChoices = Boolean(
+            element.querySelector(
+              'input[type="checkbox"], [role="checkbox"], select'
+            )
           );
-          if (button) {
-            button.click();
-            break;
+          return (
+            hasChoices &&
+            /\b(?:more filters|select (?:make|models?)|vehicle status|inventory status|in[- ]transit|in[- ]stock|on (?:the )?lot)\b/i.test(
+              text
+            )
+          );
+        };
+        const blockingPopup = (element) => {
+          if (
+            !isVisible(element) ||
+            element.closest("header, nav") ||
+            inventoryControlLayer(element)
+          ) {
+            return false;
           }
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+          const coversEnough = (rect.width * rect.height) / viewportArea > 0.08;
+          const elevated =
+            style.position === "fixed" ||
+            style.position === "sticky" ||
+            Number.parseInt(style.zIndex || "0", 10) >= 100;
+          return (
+            element.matches('[role="dialog"], dialog[open], [aria-modal="true"]') ||
+            (coversEnough && elevated)
+          );
+        };
+        const hideBlockingLayer = (element) => {
+          element.style.setProperty("display", "none", "important");
+          element.setAttribute("aria-hidden", "true");
+          document.documentElement.style.removeProperty("overflow");
+          document.body?.style.removeProperty("overflow");
+          document.body?.style.removeProperty("position");
+        };
+        const dismissBlockingPopups = () => {
+          const popups = Array.from(
+            document.querySelectorAll(popupSelectors.join(","))
+          ).filter(blockingPopup);
+          for (const popup of popups) {
+            const closeButton = closeSelectors
+              .flatMap((selector) =>
+                Array.from(popup.querySelectorAll(selector))
+              )
+              .find(isVisible);
+            if (closeButton instanceof HTMLElement) {
+              closeButton.click();
+            } else {
+              hideBlockingLayer(popup);
+            }
+          }
+
+          for (const frame of document.querySelectorAll("iframe")) {
+            if (!isVisible(frame)) continue;
+            const rect = frame.getBoundingClientRect();
+            const style = getComputedStyle(frame);
+            const areaRatio =
+              (rect.width * rect.height) /
+              Math.max(1, window.innerWidth * window.innerHeight);
+            const elevated =
+              style.position === "fixed" ||
+              Number.parseInt(style.zIndex || "0", 10) >= 100;
+            if (areaRatio > 0.08 && elevated) hideBlockingLayer(frame);
+          }
+          return popups.length > 0;
+        };
+
+        dismissBlockingPopups();
+        if (!globalThis.__dealerIntelPopupObserver) {
+          let scheduled = false;
+          globalThis.__dealerIntelPopupObserver = new MutationObserver(() => {
+            if (scheduled) return;
+            scheduled = true;
+            setTimeout(() => {
+              scheduled = false;
+              dismissBlockingPopups();
+            }, 100);
+          });
+          globalThis.__dealerIntelPopupObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["class", "style", "open", "aria-hidden"],
+          });
         }
+        await pause(250);
         const chatSelectors = [
           'iframe[id*="chat" i]',
           'iframe[src*="chat" i]',
@@ -1229,7 +1359,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.command === "COLLECT_INVENTORY") {
+    (async () => {
+      let response;
+      activeInventoryController?.abort(
+        new DOMException("Inventory collection replaced", "AbortError")
+      );
+      const controller = new AbortController();
+      activeInventoryController = controller;
+      try {
+        const result = await inventoryShared.withGuaranteedCleanup(
+          () =>
+            inventoryCollector.collectInventory(message.payload, {
+              ensureSiteSession,
+              suppressPageObstructions,
+              waitAfterInteraction,
+              waitForTabComplete,
+              signal: controller.signal,
+            }),
+          closeActiveSession
+        );
+        response = { ok: true, result };
+      } catch (error) {
+        response = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        if (activeInventoryController === controller) {
+          activeInventoryController = null;
+        }
+      }
+      sendResponse(response);
+    })();
+    return true;
+  }
+
   if (message?.command === "CLOSE_SESSION") {
+    activeInventoryController?.abort(
+      new DOMException("Inventory collection cancelled", "AbortError")
+    );
     closeActiveSession()
       .then(() => sendResponse({ ok: true }))
       .catch((error) =>

@@ -1,11 +1,20 @@
 ﻿"use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
-import { runInventoryBatch } from "./actions";
+import { useState, useEffect, useRef } from "react";
+import {
+  cancelInventoryBatchAction,
+  runInventoryApiBatch,
+  runInventoryBatch,
+} from "./actions";
 import { fmtDateTime } from "@/lib/fmt-date";
+import {
+  cancelChromeInventoryCollection,
+  requireInventoryExtension,
+  runChromeInventoryJob,
+} from "./inventory-chrome";
 
-export type MakeSubtotal = { make: string; inStock: number; inTransit: number };
+export type MakeSubtotal = { make: string; inStock: number; inTransit: number | null };
 export type ModelRow = { make: string; model: string; inStock: number | null; inTransit: number | null; status: string };
 
 export type InventorySiteRow = {
@@ -19,7 +28,7 @@ export type InventorySiteRow = {
   lastResult: {
     status: string;
     collectedAt: Date;
-    totals: { inStock: number; inTransit: number; displayValue: string } | null;
+    totals: { inStock: number; inTransit: number | null; displayValue: string } | null;
     makeSubtotals: MakeSubtotal[] | null;
     models: ModelRow[] | null;
     error: { message: string; code: string; statusCode?: number; isRateLimited?: boolean } | null;
@@ -30,7 +39,8 @@ type RowPhase =
   | { kind: "idle" }
   | { kind: "queued" }
   | { kind: "running" }
-  | { kind: "ok"; totals?: { inStock: number; inTransit: number; displayValue: string }; makeSubtotals?: MakeSubtotal[]; models?: ModelRow[] }
+  | { kind: "cancelled" }
+  | { kind: "ok"; totals?: { inStock: number; inTransit: number | null; displayValue: string }; makeSubtotals?: MakeSubtotal[]; models?: ModelRow[] }
   | { kind: "failed"; error: { message: string; code: string; statusCode?: number } };
 
 type BatchStatusPayload = {
@@ -40,16 +50,22 @@ type BatchStatusPayload = {
   startedAt: string | null;
   results: Record<
     string,
-    | { status: "queued" | "running" }
+    | { status: "queued" | "running" | "cancelled" }
     | {
         status: "ok" | "failed";
-        totals?: { inStock: number; inTransit: number; displayValue: string };
+        totals?: { inStock: number; inTransit: number | null; displayValue: string };
         makeSubtotals?: MakeSubtotal[];
         models?: ModelRow[];
         error?: { message: string; code: string; statusCode?: number };
       }
   >;
 };
+
+const chromeInventoryPlatforms = new Set(["ddc", "dealer_inspire"]);
+
+function supportsChromeInventory(platform: string | null): boolean {
+  return chromeInventoryPlatforms.has(platform?.trim().toLowerCase() ?? "");
+}
 
 export function InventoryTable({
   sites,
@@ -60,7 +76,12 @@ export function InventoryTable({
   sites: InventorySiteRow[];
   groups: { id: string; name: string; siteIds: string[] }[];
   configured: boolean;
-  initialActiveBatch: { batchId: string; siteIds: string[]; startedAt: Date } | null;
+  initialActiveBatch: {
+    batchId: string;
+    siteIds: string[];
+    startedAt: Date;
+    collectorMode: "inventory_api" | "chrome_extension";
+  } | null;
 }) {
   const router = useRouter();
   const [phases, setPhases] = useState<Record<string, RowPhase>>({});
@@ -69,6 +90,18 @@ export function InventoryTable({
   const [batchTotal, setBatchTotal] = useState<number | null>(initialActiveBatch?.siteIds.length ?? null);
   const [batchStartedAt, setBatchStartedAt] = useState<Date | null>(initialActiveBatch?.startedAt ?? null);
   const [batchEndedAt, setBatchEndedAt] = useState<Date | null>(null);
+  const [chromeBusy, setChromeBusy] = useState(false);
+  const [chromeMessage, setChromeMessage] = useState<string | null>(null);
+  const [chromeFailed, setChromeFailed] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const chromeAbortRef = useRef<AbortController | null>(null);
+  const cancelRequestedRef = useRef(false);
+  const autoResumeAttempted = useRef(false);
+  const recoveryBatchId = useRef(
+    initialActiveBatch?.collectorMode === "chrome_extension"
+      ? initialActiveBatch.batchId
+      : null
+  );
 
   // Scope picker state
   const [scope, setScope] = useState<"all" | "groups" | "custom">("all");
@@ -107,6 +140,8 @@ export function InventoryTable({
               next[id] = { kind: "queued" };
             } else if (result.status === "running") {
               next[id] = { kind: "running" };
+            } else if (result.status === "cancelled") {
+              next[id] = { kind: "cancelled" };
             } else if (result.status === "ok") {
               next[id] = {
                 kind: "ok",
@@ -147,8 +182,129 @@ export function InventoryTable({
     };
   }, [activeBatchId, router]);
 
+  async function driveChromeBatch(batchId: string) {
+    const controller = new AbortController();
+    chromeAbortRef.current = controller;
+    if (cancelRequestedRef.current) controller.abort();
+    setChromeBusy(true);
+    setChromeFailed(false);
+    try {
+      const version = await requireInventoryExtension();
+      setChromeMessage(`Chrome Collector ${version} detected. Preparing visible inventory collection…`);
+      const summary = await runChromeInventoryJob(
+        batchId,
+        setChromeMessage,
+        controller.signal
+      );
+      if (controller.signal.aborted) {
+        setChromeMessage("Inventory run cancelled.");
+        return;
+      }
+      setChromeFailed(summary.failed > 0);
+      setChromeMessage(
+        `Inventory finished: ${summary.succeeded} succeeded, ${summary.failed} failed.`
+      );
+      router.refresh();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setChromeFailed(false);
+        setChromeMessage("Inventory run cancelled.");
+        return;
+      }
+      await cancelInventoryBatchAction(batchId).catch(() => undefined);
+      setPhases((prev) => {
+        const next = { ...prev };
+        for (const id of Object.keys(next)) {
+          if (next[id]?.kind === "queued" || next[id]?.kind === "running") {
+            next[id] = { kind: "cancelled" };
+          }
+        }
+        return next;
+      });
+      setActiveBatchId(null);
+      setBatchEndedAt(new Date());
+      setChromeFailed(true);
+      const detail =
+        error instanceof Error ? error.message : "Visible Chrome inventory collection failed";
+      setChromeMessage(
+        `${detail} Unfinished dealers were cancelled; individual Run buttons are available.`
+      );
+      router.refresh();
+    } finally {
+      if (chromeAbortRef.current === controller) chromeAbortRef.current = null;
+      setChromeBusy(false);
+    }
+  }
+
+  async function cancelRun() {
+    if (cancelling) return;
+    setCancelling(true);
+    cancelRequestedRef.current = true;
+    setChromeFailed(false);
+    setChromeMessage("Cancelling inventory run and closing its Chrome window…");
+    chromeAbortRef.current?.abort();
+
+    try {
+      await Promise.all([
+        cancelChromeInventoryCollection().catch(() => undefined),
+        activeBatchId
+          ? cancelInventoryBatchAction(activeBatchId)
+          : Promise.resolve(),
+      ]);
+      setPhases((prev) => {
+        const next = { ...prev };
+        for (const id of batchSiteIds) {
+          if (next[id]?.kind === "queued" || next[id]?.kind === "running") {
+            next[id] = { kind: "cancelled" };
+          }
+        }
+        return next;
+      });
+      setActiveBatchId(null);
+      setBatchEndedAt(new Date());
+      setChromeBusy(false);
+      setChromeMessage("Inventory run cancelled. No more dealers will be opened.");
+      router.refresh();
+    } catch (error) {
+      setChromeFailed(true);
+      setChromeMessage(
+        error instanceof Error ? error.message : "Could not cancel the inventory run"
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function claimChromeBatch(batchId: string) {
+    await navigator.locks.request(
+      `dealer-intel-inventory-${batchId}`,
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock) {
+          setChromeMessage("Inventory collection is active in another Dealer Intel tab.");
+          return;
+        }
+        await driveChromeBatch(batchId);
+      }
+    );
+  }
+
   async function runBatchFor(ids: string[]) {
     if (ids.length === 0) return;
+    cancelRequestedRef.current = false;
+    setChromeBusy(true);
+    setChromeFailed(false);
+    setChromeMessage("Checking Chrome Collector…");
+    try {
+      await requireInventoryExtension();
+    } catch (error) {
+      setChromeFailed(true);
+      setChromeMessage(
+        error instanceof Error ? error.message : "Chrome Collector is unavailable"
+      );
+      setChromeBusy(false);
+      return;
+    }
     setBatchSiteIds((prev) => {
       const next = [...new Set([...prev, ...ids])];
       setBatchTotal(next.length);
@@ -165,9 +321,89 @@ export function InventoryTable({
       setBatchStartedAt(new Date());
       setBatchEndedAt(null);
     }
-    const { batchId } = await runInventoryBatch(ids);
-    setActiveBatchId(batchId);
+    try {
+      const { batchId } = await runInventoryBatch(ids);
+      if (cancelRequestedRef.current) {
+        await cancelInventoryBatchAction(batchId);
+        return;
+      }
+      setActiveBatchId(batchId);
+      setChromeBusy(false);
+      await claimChromeBatch(batchId);
+    } catch (error) {
+      setPhases((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          if (next[id]?.kind === "queued" || next[id]?.kind === "running") {
+            next[id] = { kind: "idle" };
+          }
+        }
+        return next;
+      });
+      setBatchEndedAt(new Date());
+      setChromeFailed(true);
+      setChromeMessage(
+        error instanceof Error ? error.message : "Could not start the inventory batch"
+      );
+      setChromeBusy(false);
+    }
   }
+
+  async function runApiBaselineFor(ids: string[]) {
+    if (ids.length === 0) return;
+    cancelRequestedRef.current = false;
+    setChromeFailed(false);
+    setChromeMessage("Starting inventory API baseline…");
+    setBatchSiteIds((prev) => {
+      const next = [...new Set([...prev, ...ids])];
+      setBatchTotal(next.length);
+      return next;
+    });
+    setPhases((prev) => {
+      const next = { ...prev };
+      for (const id of ids) {
+        if (prev[id]?.kind !== "running") next[id] = { kind: "queued" };
+      }
+      return next;
+    });
+    if (!activeBatchId) {
+      setBatchStartedAt(new Date());
+      setBatchEndedAt(null);
+    }
+    try {
+      const { batchId } = await runInventoryApiBatch(ids);
+      if (cancelRequestedRef.current) {
+        await cancelInventoryBatchAction(batchId);
+        return;
+      }
+      setActiveBatchId(batchId);
+      setChromeMessage("Inventory API baseline is running…");
+    } catch (error) {
+      setPhases((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          if (next[id]?.kind === "queued" || next[id]?.kind === "running") {
+            next[id] = { kind: "idle" };
+          }
+        }
+        return next;
+      });
+      setBatchEndedAt(new Date());
+      setChromeFailed(true);
+      setChromeMessage(
+        error instanceof Error ? error.message : "Could not start the API baseline"
+      );
+    }
+  }
+
+  useEffect(() => {
+    const batchId = recoveryBatchId.current;
+    if (!batchId || autoResumeAttempted.current) return;
+    autoResumeAttempted.current = true;
+    void claimChromeBatch(batchId);
+    // Mount-time recovery holds a browser lock until the resumed batch settles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function scopeSiteIds(): string[] {
     if (scope === "all") return sites.map((s) => s.id);
@@ -181,13 +417,28 @@ export function InventoryTable({
     return [...checkedSites];
   }
 
-  const anyActive = Object.values(phases).some((p) => p.kind === "running" || p.kind === "queued");
+  const anyActive =
+    cancelling ||
+    chromeBusy ||
+    Boolean(activeBatchId) ||
+    Object.values(phases).some((p) => p.kind === "running" || p.kind === "queued");
 
   // Batch progress derived from phases
   const batchPhaseValues = batchTotal !== null ? batchSiteIds.map((id) => phases[id] ?? { kind: "queued" as const }) : [];
-  const batchDone = batchPhaseValues.filter((p) => p.kind === "ok" || p.kind === "failed").length;
+  const batchDone = batchPhaseValues.filter(
+    (p) => p.kind === "ok" || p.kind === "failed" || p.kind === "cancelled"
+  ).length;
   const batchFailed = batchPhaseValues.filter((p) => p.kind === "failed").length;
-  const runLabel = scope === "all" ? "Run All" : scope === "groups" ? "Run Groups" : "Run Selected";
+  const batchCancelled = batchPhaseValues.filter((p) => p.kind === "cancelled").length;
+  const runLabel = scope === "all" ? "All" : scope === "groups" ? "Groups" : "Selected";
+  const chromeScopeIds = scopeSiteIds();
+  const chromeScopeHasUnsupported = chromeScopeIds.some((id) => {
+    const site = sites.find((candidate) => candidate.id === id);
+    return !supportsChromeInventory(site?.platform ?? null);
+  });
+  const scopeDisabled =
+    (scope === "groups" && checkedGroups.size === 0) ||
+    (scope === "custom" && checkedSites.size === 0);
 
   const toggleGroup = (id: string) =>
     setCheckedGroups((prev) => {
@@ -286,17 +537,65 @@ export function InventoryTable({
         </div>
 
         {configured && (
-          <button
-            onClick={() => runBatchFor(scopeSiteIds())}
-            disabled={anyActive || (scope === "groups" && checkedGroups.size === 0) || (scope === "custom" && checkedSites.size === 0)}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
-            {batchTotal !== null
-              ? `Running — ${batchDone} / ${batchTotal}${batchTotal - batchDone > 0 ? ` (${batchTotal - batchDone} left)` : ""}`
-              : runLabel}
-          </button>
+          <div className="flex items-center gap-2">
+            {anyActive ? (
+              <>
+                <button
+                  disabled
+                  className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                >
+                  Running — {batchDone} / {batchTotal ?? batchSiteIds.length}
+                  {(batchTotal ?? 0) - batchDone > 0
+                    ? ` (${(batchTotal ?? 0) - batchDone} left)`
+                    : ""}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelRun}
+                  disabled={cancelling}
+                  className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:bg-zinc-900 dark:text-red-300 dark:hover:bg-red-950"
+                >
+                  {cancelling ? "Cancelling…" : "Cancel Run"}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => runApiBaselineFor(scopeSiteIds())}
+                  disabled={scopeDisabled}
+                  className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                >
+                  Run API Baseline — {runLabel}
+                </button>
+                <button
+                  onClick={() => runBatchFor(chromeScopeIds)}
+                  disabled={scopeDisabled || chromeScopeHasUnsupported}
+                  title={
+                    chromeScopeHasUnsupported
+                      ? "This pass supports Dealer.com and Dealer Inspire dealers only. Choose supported rows individually or select only supported dealers."
+                      : undefined
+                  }
+                  className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                >
+                  Run Chrome Supported — {runLabel}
+                </button>
+              </>
+            )}
+          </div>
         )}
       </div>
+
+      {chromeMessage && (
+        <div
+          className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+            chromeFailed
+              ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+              : "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200"
+          }`}
+        >
+          {chromeMessage}
+        </div>
+      )}
 
       {/* ── Run status bar ────────────────────────────────────────────── */}
       {batchTotal !== null && (
@@ -305,9 +604,14 @@ export function InventoryTable({
             <span className="font-medium text-zinc-700 dark:text-zinc-300">
               {anyActive
                 ? `Running — ${batchDone} of ${batchTotal} complete`
-                : `Done — ${batchDone} of ${batchTotal} complete`}
+                : batchCancelled > 0
+                  ? `Cancelled — ${batchDone} of ${batchTotal} settled`
+                  : `Done — ${batchDone} of ${batchTotal} complete`}
               {batchFailed > 0 && (
                 <span className="ml-2 text-red-600">({batchFailed} failed)</span>
+              )}
+              {batchCancelled > 0 && (
+                <span className="ml-2 text-zinc-600">({batchCancelled} cancelled)</span>
               )}
             </span>
             <span className="text-xs text-zinc-700 tabular-nums dark:text-zinc-200">
@@ -362,7 +666,9 @@ export function InventoryTable({
                   key={site.id}
                   site={site}
                   phase={phase}
-                  configured={configured}
+                  configured={
+                    configured && supportsChromeInventory(site.platform)
+                  }
                   onRun={() => runBatchFor([site.id])}
                 />
               );
@@ -380,6 +686,8 @@ function rowAgeTier(site: InventorySiteRow, phase: RowPhase): AgeTier {
   if (phase.kind === "running") return "blue";
   if (phase.kind === "queued") {
     // keep age-based color while queued — fall through to idle logic below
+  } else if (phase.kind === "cancelled") {
+    // Cancellation is neutral; retain the last completed result's age color.
   } else if (phase.kind === "failed") return "red";
   else if (phase.kind === "ok") return "green";
   // Idle — use persisted last result
@@ -505,6 +813,12 @@ function SiteRow({
           Queued
         </span>
       );
+    if (phase.kind === "cancelled")
+      return (
+        <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
+          Cancelled
+        </span>
+      );
     if (site.lastResult.status === "running")
       return (
         <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">
@@ -608,7 +922,7 @@ function SiteRow({
                       <tr key={s.make}>
                         <td className={`py-1 pr-6 font-medium ${rowText}`}>{s.make}</td>
                         <td className={`py-1 pr-6 text-right font-mono ${rowText}`}>{s.inStock}</td>
-                        <td className={`py-1 text-right font-mono ${rowSub}`}>{s.inTransit}</td>
+                        <td className={`py-1 text-right font-mono ${rowSub}`}>{s.inTransit ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
