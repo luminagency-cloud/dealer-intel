@@ -748,7 +748,13 @@ const MAX_DOM_OFFERS_FOR_IMAGE_PASS = 2;
  *  the alt cross-check alone still yields an (alt_only) offer. */
 async function serviceCouponOffers(
   html: string,
-  brand: string | null
+  brand: string | null,
+  /** Coupon graphics the collector stored, by original URL. Coupons are ad
+   *  graphics like any other, so capture already stores them; reading from here
+   *  keeps this pass off the dealer's site, same as the offer-card pass. Empty
+   *  for runs captured before ad-image capture shipped, which then fall back to
+   *  a live fetch. */
+  storedByUrl: Map<string, Evidence>
 ): Promise<ExtractedOffer[]> {
   const coupons = findServiceCouponImages(html);
   if (coupons.length === 0) return [];
@@ -762,22 +768,50 @@ async function serviceCouponOffers(
     let ocrText: string | null = null;
     if (mistralOn) {
       try {
-        const resp = await fetch(coupon.imageUrl, { signal: AbortSignal.timeout(10_000) });
-        if (resp.ok) {
-          const buf = Buffer.from(await resp.arrayBuffer());
-          if (await isAdSizedImage(buf)) {
-            const artifact = await runMistralOcr(buf);
-            ocrText = artifact?.imageText ?? null;
-          }
+        const stored = storedByUrl.get(imageKey(coupon.imageUrl));
+        const buf = stored
+          ? await getEvidenceBody(stored)
+          : await fetchImageBuffer(coupon.imageUrl);
+        if (buf && (await isAdSizedImage(buf))) {
+          const artifact = await runMistralOcr(buf);
+          ocrText = artifact?.imageText ?? null;
         }
       } catch {
-        // Image fetch/OCR failed — fall back to the alt cross-check alone.
+        // Image read/OCR failed — fall back to the alt cross-check alone.
       }
     }
     const offer = reconcileServiceCoupon(ocrText, coupon.alt, hints);
     if (offer) out.push(offer);
   }
   return out;
+}
+
+/** Identity of an image across the different URLs a page uses for it: origin
+ *  plus path, no query. The coupon scanner reads `data-image-url` (the
+ *  unresized original) while ad-image capture reads `src` (the CDN's resized
+ *  variant, `?impolicy=downsize_bkpt&w=1600`). Same picture, two URLs — matching
+ *  on the full string silently missed every stored coupon and fell back to
+ *  fetching the dealer's site. */
+function imageKey(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+/** Stored ad graphics for one site+mission, keyed by image identity. */
+function adImagesByUrl(
+  index: Map<string, Evidence[]>,
+  siteId: string,
+  missionType: MissionType
+): Map<string, Evidence> {
+  const byUrl = new Map<string, Evidence>();
+  for (const row of index.get(`${siteId}:${missionType}`) ?? []) {
+    if (row.sourceUrl) byUrl.set(imageKey(row.sourceUrl), row);
+  }
+  return byUrl;
 }
 
 async function processAnalysis(
@@ -842,6 +876,10 @@ async function processAnalysis(
     const aiThreshold = aiConfidenceThreshold();
     const capturedDisclaimers = await loadCapturedDisclaimers(runId);
     const screenshotIndex = await loadScreenshotIndex(runId);
+    // Loaded up front: the service-coupon pass in the main loop below needs it
+    // too, not just the image pass at the end.
+    const adImageIndex = await loadAdImageIndex(runId);
+    const runHasStoredAdImages = adImageIndex.size > 0;
     const disclaimerEvidence = await loadDisclaimerEvidence(runId);
     analysisProgress.set(runId, { processed: 0, total: rows.length + disclaimerEvidence.length });
     // Cache Mistral OCR reads per screenshot evidence id (see getOcrArtifact).
@@ -881,7 +919,11 @@ async function processAnalysis(
       // Image-coupon service pages have no DOM text — OCR each coupon graphic
       // and reconcile against its alt (see serviceCouponOffers).
       if (row.missionType === "service_specials" && extracted.length === 0) {
-        extracted = await serviceCouponOffers(html, site.brand);
+        extracted = await serviceCouponOffers(
+          html,
+          site.brand,
+          adImagesByUrl(adImageIndex, row.siteId, row.missionType)
+        );
         console.log(`[analysis] service coupon OCR pass for site="${site.name}" -> ${extracted.length} offer(s)`);
       }
       console.log(`[analysis] extracted ${extracted.length} offers for site="${site.name}"`);
@@ -1198,8 +1240,6 @@ async function processAnalysis(
     // with 52 ad images across two missions billed 104 OCR calls for 52
     // pictures). Text only — buffers stay per-operation, deliberately.
     const adOcrByUrl = new Map<string, OcrArtifact | null>();
-    const adImageIndex = await loadAdImageIndex(runId);
-    const runHasStoredAdImages = adImageIndex.size > 0;
     if (!runHasStoredAdImages) {
       console.warn(
         `[analysis] run ${runId} stored no ad images — using the legacy live-fetch ` +
@@ -1596,6 +1636,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       const aiThreshold = aiConfidenceThreshold();
       const capturedDisclaimers = await loadCapturedDisclaimers(runId);
       const screenshotIndex = await loadScreenshotIndex(runId);
+      // Up front — the service-coupon pass below needs it too (see
+      // processAnalysis).
+      const adImageIndex = await loadAdImageIndex(runId);
+      const runHasStoredAdImages = adImageIndex.size > 0;
       const ocrCache = new Map<string, Promise<OcrArtifact | null>>();
       const seen = new Set<string>();
       // Per-page text yield, to gate the image pass per page (see processAnalysis).
@@ -1607,7 +1651,11 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         if (!html) continue;
         let extracted = extractOffers(html, { missionType: row.missionType, brand: site.brand });
         if (row.missionType === "service_specials" && extracted.length === 0) {
-          extracted = await serviceCouponOffers(html, site.brand);
+          extracted = await serviceCouponOffers(
+            html,
+            site.brand,
+            adImagesByUrl(adImageIndex, row.siteId, row.missionType)
+          );
         }
         const pageText = htmlToText(html);
         const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
@@ -1701,8 +1749,6 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       // graphics (the same hero image in every captured tab state) are OCR'd
       // once — see the cache in processAnalysis.
       const adOcrByUrl = new Map<string, OcrArtifact | null>();
-      const adImageIndex = await loadAdImageIndex(runId);
-      const runHasStoredAdImages = adImageIndex.size > 0;
       for (const { evidence: htmlRow, site } of htmlRows) {
         if (htmlRow.missionType === "service_specials") continue;
         const coveredCount =

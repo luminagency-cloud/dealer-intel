@@ -344,7 +344,13 @@ Previously the analysis runner downloaded ad images from the dealer's CDN at
 analysis time, which broke its own contract ("no site visits") and made
 re-analysis non-reproducible: re-running a three-week-old run pulled whatever
 creative the dealer was serving that day, so the offers stopped describing the
-captured date. A run captured before this shipped has no `ad_image` rows and
+captured date. Service-coupon graphics go through the same path. The coupon scanner reads
+`data-image-url` (the unresized original) while capture reads `src` (the CDN's
+resized variant), so stored graphics are matched on origin+path rather than the
+full URL — matching the whole string missed every one and silently fell back to
+fetching the dealer.
+
+A run captured before this shipped has no `ad_image` rows and
 falls back to the old live-fetch path, logged as `(legacy live fetch)`; the
 switch is per run, not per mission, because an image is stored once per run and
 a mission with none simply had its ads captured under a sibling mission.
