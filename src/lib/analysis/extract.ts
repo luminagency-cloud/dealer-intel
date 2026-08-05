@@ -1202,21 +1202,40 @@ function extractVehicleOffersFromCard(
   const payment = extractMonthlyPayment(text);
   const apr = extractApr(text);
 
-  for (const result of results) {
-    const anchoredTerm =
-      result.monthlyPayment !== null && payment
-        ? extractTermAfterAnchor(text, payment.match)
-        : result.apr !== null && apr
-          ? extractTermAfterAnchor(text, apr.match)
-          : null;
-    if (anchoredTerm) {
-      result.termMonths = anchoredTerm.value;
-      result.matches.termMonths = anchoredTerm.match;
+  // Resolve every alternative's own term first, so each can then tell whether
+  // the term it inherited from the shared chunk was actually claimed by its
+  // neighbour.
+  const anchored = results.map((result) =>
+    result.monthlyPayment !== null && payment
+      ? extractTermAfterAnchor(text, payment.match)
+      : result.apr !== null && apr
+        ? extractTermAfterAnchor(text, apr.match)
+        : null
+  );
+
+  results.forEach((result, i) => {
+    const own = anchored[i];
+    if (own) {
+      result.termMonths = own.value;
+      result.matches.termMonths = own.match;
+    } else if (
+      // Both halves of a split inherit the chunk's single term, but a combo ad
+      // often states only one: "LEASE FOR $389/MO $2,999 due at signing -or- 0%
+      // FINANCING for 60 months" has a finance term and no lease term, and the
+      // lease row was reporting "60 mo" as if the ad had said so. Drop the
+      // inherited term only when the other alternative anchored that exact
+      // value to its own price — an unanchored term nobody else claimed (e.g.
+      // "2.9% APR Financing for Up to 48 Months", which the anchor pattern
+      // can't match) is still this offer's own and must survive.
+      anchored.some((other, j) => j !== i && other?.value === result.termMonths)
+    ) {
+      result.termMonths = null;
+      delete result.matches.termMonths;
     }
     if (result.apr !== null && apr) {
       result.rawText = contextAround(text, apr.match);
     }
-  }
+  });
 
   return results;
 }

@@ -19,7 +19,11 @@ import {
   retryMissionResult,
   startRunExecution,
 } from "@/lib/run-executor";
-import { startAnalysis, startAnalysisForSiteMission } from "@/lib/analysis";
+import {
+  startAnalysis,
+  startAnalysisForSiteMission,
+  stopAnalysis as signalAnalysisStop,
+} from "@/lib/analysis";
 import { createSnapshotFromRun, reportMinConfidence } from "@/lib/snapshot";
 import { deleteRunDeep } from "@/lib/deep-delete";
 import {
@@ -385,6 +389,15 @@ export async function resumeAnalysis(runId: string) {
         ? `/runs/${runId}?error=${encodeURIComponent("No evidence to analyze yet — run collection first")}`
         : `/runs/${runId}`
   );
+}
+
+/** Stop a running analysis after the page it's on. Extracted offers stay put;
+ *  the run is left resumable rather than deleted. */
+export async function stopAnalysis(runId: string) {
+  await requireSession();
+  signalAnalysisStop(runId);
+  revalidatePath(`/runs/${runId}`);
+  redirect(`/runs/${runId}#analysis`);
 }
 
 export async function runAnalysisForSiteMission(

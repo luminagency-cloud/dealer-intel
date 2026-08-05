@@ -62,6 +62,12 @@ Status: **implemented and configured**
   saved offers from earlier runs covering the same dealers.
 - If Mistral returns 401 Unauthorized, OCR is disabled for that server process
   until the key is fixed and the app is restarted.
+- A running analysis can be stopped from the run page. The stop is cooperative:
+  the loop exits after the page it is on, so a stop can take as long as one
+  page's AI and OCR calls. Extracted offers are kept and `analysisCompletedAt`
+  is left unset, so the run stays resumable — Resume Analysis continues at the
+  first site with no offers, Re-run Analysis starts clean. Stopping is no
+  longer a reason to delete a run.
 
 ### Compliance
 
@@ -115,7 +121,14 @@ production fallback**. See `Docs/Chrome Extension Collector Plan.md`.
 - The one-item and suite-transport proofs passed. The extension processes a selected suite
   sequentially, reusing one visible Chrome window for each dealer's missions
   and storing evidence through the existing model.
-- Reloading or reopening a running Chrome run automatically resumes only the
+- Chrome runs heartbeat to the server on every result POST
+  (`collection_runs.chrome_heartbeat_at`). A fresh heartbeat is what makes a
+  Chrome run read as executing, which is what starts the run page's status
+  polling — without it the mission list sat frozen until the run ended while
+  only the collector's own status text moved. A heartbeat older than
+  `CHROME_HEARTBEAT_STALE_MS` (3 minutes) means the driving tab is gone.
+- Reopening an interrupted Chrome run no longer auto-resumes on mount. It shows
+  an interrupted notice plus a Resume in Chrome button, which re-queues only the
   unfinished items. A browser lock prevents duplicate collection when the same
   run is open in two Dealer Intel tabs.
 - The first matched baseline is Current run `f931930e`: Anchor Nissan Suite,

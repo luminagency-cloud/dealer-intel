@@ -17,6 +17,7 @@ import {
   resolveRunGroups,
 } from "@/lib/db/repository";
 import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
+import { isChromeRunLive } from "@/lib/chrome-collector";
 import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { reportMinConfidence } from "@/lib/snapshot";
@@ -40,6 +41,7 @@ import {
   switchToCurrentCollector,
   runAnalysis,
   resumeAnalysis,
+  stopAnalysis,
   runAnalysisForSiteMission,
   updateRunStatus,
   verifyBorderlineOffers,
@@ -103,7 +105,9 @@ export default async function RunDetailPage({
 
   const canCollect = run.status === "pending" || run.status === "running" || run.status === "paused";
   const executing =
-    run.collectorMode === "current" ? isRunExecuting(run.id) : false;
+    run.collectorMode === "current"
+      ? isRunExecuting(run.id)
+      : isChromeRunLive(run);
   const paused = isPausedRun(run.id);
   const evidencePageCount = runResults.reduce(
     (sum, r) => sum + (r.pagesCaptured ?? 0),
@@ -113,9 +117,12 @@ export default async function RunDetailPage({
     run.collectorMode === "current" &&
     !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
+  // Chrome run left mid-flight with no live tab behind it — the heartbeat is
+  // what distinguishes this from a run that is collecting right now.
   const needsChromeRecovery =
     run.collectorMode === "chrome_extension" &&
     run.status === "running" &&
+    !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
   const analyzing = isAnalysisRunning(run.id);
   const analysisProgressData = getAnalysisProgress(run.id);
@@ -201,6 +208,7 @@ export default async function RunDetailPage({
         resumeAction={resumeRun.bind(null, run.id)}
         runAnalysisAction={runAnalysis.bind(null, run.id)}
         resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
+        stopAnalysisAction={stopAnalysis.bind(null, run.id)}
         passOfferAction={passOffer.bind(null, run.id)}
         deleteOfferAction={deleteOffer.bind(null, run.id)}
         verifyBorderlineAction={verifyBorderlineOffers.bind(null, run.id)}

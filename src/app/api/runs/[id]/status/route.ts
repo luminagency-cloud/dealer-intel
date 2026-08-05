@@ -4,8 +4,10 @@ import { eq } from "drizzle-orm";
 import { getDb, missionResults, collectionRuns } from "@/lib/db";
 import { listOffersForRun, listComplianceGradesForRun } from "@/lib/db/repository";
 import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
+import { isChromeRunLive } from "@/lib/chrome-collector";
 import {
   isAnalysisRunning,
+  isAnalysisStopping,
   getAnalysisProgress,
   getPartialAnalysisKeys,
 } from "@/lib/analysis";
@@ -20,7 +22,7 @@ export async function GET(
   const { id } = await params;
 
   const db = getDb();
-  const [results, executing, analyzing, progress, partialKeys, runRecord, offers, grades] = await Promise.all([
+  const [results, currentExecuting, analyzing, progress, partialKeys, runRecord, offers, grades] = await Promise.all([
     db
       .select({
         id: missionResults.id,
@@ -39,6 +41,9 @@ export async function GET(
     Promise.resolve(getPartialAnalysisKeys(id)),
     db
       .select({
+        collectorMode: collectionRuns.collectorMode,
+        status: collectionRuns.status,
+        chromeHeartbeatAt: collectionRuns.chromeHeartbeatAt,
         startedAt: collectionRuns.startedAt,
         completedAt: collectionRuns.completedAt,
         analysisStartedAt: collectionRuns.analysisStartedAt,
@@ -52,8 +57,18 @@ export async function GET(
     listComplianceGradesForRun(id),
   ]);
 
+  const run = runRecord[0];
+  const chromeRun = run?.collectorMode === "chrome_extension";
+  const executing = chromeRun
+    ? !!run && isChromeRunLive(run)
+    : currentExecuting;
+
   const paused = isPausedRun(id);
+  // Chrome's interrupted state is surfaced by its own recovery button, not the
+  // Current collector's Resume banner — an unfinished Chrome run is never
+  // "stalled" in the sense this flag means.
   const stalled =
+    !chromeRun &&
     !executing &&
     !paused &&
     results.some((r) => r.status === "pending" || r.status === "running");
@@ -61,6 +76,7 @@ export async function GET(
   return NextResponse.json({
     executing,
     analyzing,
+    analysisStopping: isAnalysisStopping(id),
     paused,
     stalled,
     progress,

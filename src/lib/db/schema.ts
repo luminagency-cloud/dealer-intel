@@ -225,6 +225,10 @@ export const collectionRuns = pgTable("collection_runs", {
     .notNull()
     .default("current"),
   status: runStatusEnum("status").notNull().default("pending"),
+  /** Last contact from the Chrome extension's driving tab. Chrome collection
+   *  runs in the browser, so the server can't observe it directly — this is
+   *  the only signal separating a live Chrome run from one whose tab died. */
+  chromeHeartbeatAt: timestamp("chrome_heartbeat_at", { withTimezone: true }),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   analysisStartedAt: timestamp("analysis_started_at", { withTimezone: true }),
@@ -351,6 +355,11 @@ export const evidenceTypeEnum = pgEnum("evidence_type", [
   "state_html_snapshot",
   "failure_screenshot",
   "disclaimer_screenshot",
+  /** One offer-card graphic downloaded from the page during collection.
+   *  Image-rendered platforms (DDC/Dealer.com) put the whole offer inside a
+   *  JPEG, so the ad itself is primary evidence — not something analysis should
+   *  be re-fetching from the dealer's CDN weeks later. */
+  "ad_image",
 ]);
 
 export type EvidenceType = (typeof evidenceTypeEnum.enumValues)[number];
@@ -361,6 +370,7 @@ export const EVIDENCE_TYPE_LABELS: Record<EvidenceType, string> = {
   state_html_snapshot: "State HTML Snapshot",
   failure_screenshot: "Failure Screenshot",
   disclaimer_screenshot: "Disclaimer Screenshot",
+  ad_image: "Ad Graphic",
 };
 
 /** Screenshots, disclaimers, and HTML captures (AD-005, AD-010). URLs point

@@ -1,9 +1,11 @@
 <!-- BEGIN:nextjs-agent-rules -->
+
 # This is NOT the Next.js you know
 
 This version has breaking changes. APIs, conventions, and file structure may
 differ from training data. Before changing Next.js code, read the relevant
 guide in `node_modules/next/dist/docs/` and heed deprecation notices.
+
 <!-- END:nextjs-agent-rules -->
 
 # Agent Instructions
@@ -50,6 +52,7 @@ Never print secret values.
   explicitly asked.
 - **Version bump:** after code changes, bump at least the patch version in
   `package.json`. Docs-only changes do not need a version bump.
+  **Chrome Collector** any changes in the cheome extension must include a version bump (patch at least) and remoind user to update the plugin.
 - **Database:** schema changes go through Drizzle. Edit
   `src/lib/db/schema.ts`, then run `npm run db:generate` and
   `npm run db:migrate`. Never hand-write migrations.
@@ -73,6 +76,3 @@ Before calling code work done:
 - Run `npm run build`.
 - Verify user-facing features in the running app against localhost.
 - For collector changes, also verify against a real dealer site.
-
-If a command needs remote services, network access, credentials, database
-access, or Git index/ref writes, request escalation first.

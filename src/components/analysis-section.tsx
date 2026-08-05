@@ -78,12 +78,14 @@ export function AnalysisSection({
   siteNames,
   siteOptions,
   analyzing,
+  analysisStopping,
   analysisStartedAt,
   analysisCompletedAt,
   evidencePageCount,
   pagesProcessed,
   runAnalysisAction,
   resumeAnalysisAction,
+  stopAnalysisAction,
   passOfferAction,
   deleteOfferAction,
   verifyBorderlineAction,
@@ -95,6 +97,8 @@ export function AnalysisSection({
   siteNames: Record<string, string>;
   siteOptions: Pick<Site, "id" | "name">[];
   analyzing: boolean;
+  /** Stop requested but the current page hasn't finished yet. */
+  analysisStopping?: boolean;
   analysisStartedAt?: Date | null;
   analysisCompletedAt?: Date | null;
   /** Total HTML snapshot pages this run captured — used for progress display. */
@@ -103,6 +107,7 @@ export function AnalysisSection({
   pagesProcessed: number | null;
   runAnalysisAction: () => Promise<void>;
   resumeAnalysisAction?: () => Promise<void>;
+  stopAnalysisAction?: () => Promise<void>;
   passOfferAction: (offerId: string) => Promise<void>;
   deleteOfferAction: (offerId: string) => Promise<void>;
   verifyBorderlineAction?: () => Promise<void>;
@@ -250,6 +255,18 @@ export function AnalysisSection({
                   title="Ask AI to confirm-or-drop borderline offers (confidence near the publish cutoff)"
                 >
                   Verify borderline
+                </button>
+              </form>
+            )}
+            {stopAnalysisAction && analyzing && (
+              <form action={stopAnalysisAction}>
+                <button
+                  type="submit"
+                  disabled={analysisStopping}
+                  className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:bg-zinc-800 dark:text-red-300 dark:hover:bg-zinc-700"
+                  title="Stop after the page being analyzed right now. Offers already extracted are kept, and Resume Analysis picks up from there."
+                >
+                  {analysisStopping ? "Stopping…" : "Stop Analysis"}
                 </button>
               </form>
             )}

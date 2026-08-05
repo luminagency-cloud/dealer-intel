@@ -1,5 +1,4 @@
 import { and, eq, inArray } from "drizzle-orm";
-import sharp from "sharp";
 import {
   getDb,
   collectionRuns,
@@ -13,7 +12,15 @@ import {
   type MissionType,
 } from "@/lib/db";
 import { isMistralConfigured } from "@/lib/env";
-import { getEvidenceBody, getEvidenceText } from "@/lib/evidence";
+// Ad-graphic identification and capture belong to the collection phase; this
+// layer only reads what collection stored (see the legacy fallback below).
+import {
+  MAX_AD_IMAGES,
+  extractAdImageUrls,
+  isAdSizedImage,
+  redactUrl,
+} from "@/lib/collector/ad-images";
+import { getEvidenceBody, getEvidenceText, uploadEvidence } from "@/lib/evidence";
 import {
   extractOffers,
   extractOffersFromDisclosure,
@@ -52,16 +59,6 @@ function pageUrlFromLabel(label: string | null | undefined): string | undefined 
   try { new URL(url); return url; } catch { return undefined; }
 }
 
-function decodeHtmlAttribute(value: string): string {
-  return value
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&#36;|&dollar;/gi, "$")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
-}
-
 /** New product rule (July 2026): a priced vehicle offer (finance, lease, OR cash)
  *  we couldn't tie to a specific vehicle model is not a real, reportable offer. A
  *  make-only "Kia finance" row is noise — the model is what makes the offer
@@ -78,91 +75,6 @@ function isUnmodeledPricedOffer(
   vehicleModel: string | null | undefined
 ): boolean {
   return MODEL_REQUIRED_TYPES.includes(offerType) && !vehicleModel;
-}
-
-/** Below this, an image can't plausibly hold legible offer text — franchise
- *  badges (e.g. "franchise-logos/.../117x80.png") and nav/UI icons are well
- *  under this, real ad cards and coupon graphics are well over it. Shared by
- *  the URL-hint fast path (extractAdImageUrls) and the post-fetch real-pixel
- *  check (isAdSizedImage) so both agree on what counts as "too small". */
-const MIN_AD_IMAGE_WIDTH = 150;
-const MIN_AD_IMAGE_HEIGHT = 100;
-/** Below this many bytes an image is a tracking pixel, spacer, or trivial
- *  icon — not worth decoding just to measure it. */
-const MIN_AD_IMAGE_BYTES = 1024;
-
-/** True if the URL itself (filename dimensions like "117x80.png", or a
- *  resize query param like "w=100"/"h=64") tells us the image is too small
- *  to be an ad, without having to fetch it. */
-function isTooSmallByUrlHints(url: string): boolean {
-  const dims = /(\d{2,4})x(\d{2,4})(?=\.\w+(?:\?|#|$))/i.exec(url);
-  if (dims) {
-    const w = Number(dims[1]);
-    const h = Number(dims[2]);
-    if (w < MIN_AD_IMAGE_WIDTH || h < MIN_AD_IMAGE_HEIGHT) return true;
-  }
-  try {
-    const params = new URL(url).searchParams;
-    const w = Number(params.get("w") ?? params.get("width") ?? "");
-    const h = Number(params.get("h") ?? params.get("height") ?? "");
-    if (Number.isFinite(w) && w > 0 && w < MIN_AD_IMAGE_WIDTH) return true;
-    if (Number.isFinite(h) && h > 0 && h < MIN_AD_IMAGE_HEIGHT) return true;
-  } catch {
-    // not a resolvable absolute URL — nothing to check here
-  }
-  return false;
-}
-
-/** Strips structural chrome (header/footer/nav) from HTML, then extracts
- *  candidate offer-card image URLs. Checks src and common lazy-load attributes
- *  (data-src, data-lazy-src, data-original). Skips data URIs, SVGs, obvious
- *  icon/logo/badge URLs, and images too small (by filename or query-param
- *  dimensions) to hold legible offer text. Returns absolute URLs only. */
-function extractAdImageUrls(html: string, pageUrl?: string): string[] {
-  const stripped = html
-    .replace(/<header\b[\s\S]*?<\/header>/gi, "")
-    .replace(/<footer\b[\s\S]*?<\/footer>/gi, "")
-    .replace(/<nav\b[\s\S]*?<\/nav>/gi, "");
-
-  const imgRe = /<img\b[^>]*>/gi;
-  // src first, then common lazy-load attributes in priority order
-  const srcPatterns = [
-    /\bsrc=["']([^"']+)["']/i,
-    /\bdata-src=["']([^"']+)["']/i,
-    /\bdata-lazy-src=["']([^"']+)["']/i,
-    /\bdata-original=["']([^"']+)["']/i,
-    /\bdata-lazy=["']([^"']+)["']/i,
-  ];
-  const seen = new Set<string>();
-  const urls: string[] = [];
-  let m: RegExpExecArray | null;
-
-  while ((m = imgRe.exec(stripped)) !== null) {
-    const tag = m[0];
-    let src: string | undefined;
-    for (const re of srcPatterns) {
-      const match = re.exec(tag);
-      if (match) { src = match[1].trim(); break; }
-    }
-    if (!src || src.startsWith("data:")) continue;
-    if (/\.(svg|ico|gif)(\?|#|$)/i.test(src)) continue;
-    // Matches a keyword as a whole path/filename segment (delimited by /, _,
-    // -, or .) rather than requiring it to start right after a "/" — the old
-    // pattern missed "franchise-logos/.../117x80.png" because "logos" isn't
-    // preceded by a slash.
-    if (/(?:^|[/_-])(icons?|logos?|sprites?|badges?|avatars?|favicons?|placeholders?|spacers?|swatch(?:es)?|arrow|btn|button|nav|menu|header|footer|social|share|fb|twitter|instagram|linkedin|youtube|track|pixel|beacon)(?:[/_.-]|$)/i.test(src)) continue;
-
-    src = decodeHtmlAttribute(src);
-
-    let resolved = src;
-    if (!src.startsWith("http")) {
-      if (!pageUrl) continue;
-      try { resolved = new URL(src, pageUrl).toString(); } catch { continue; }
-    }
-    if (isTooSmallByUrlHints(resolved)) continue;
-    if (!seen.has(resolved)) { seen.add(resolved); urls.push(resolved); }
-  }
-  return urls;
 }
 
 function cleanParam(value: string | null): string | null {
@@ -301,6 +213,7 @@ function extractDealerInspireScene7Offers(
 
 const globalState = globalThis as unknown as {
   __activeAnalysisRuns?: Set<string>;
+  __stoppingAnalyses?: Set<string>;
   __analysisProgress?: Map<string, { processed: number; total: number }>;
   __analysisQueueState?: {
     queue: AnalysisQueueTask[];
@@ -308,6 +221,7 @@ const globalState = globalThis as unknown as {
   };
 };
 const activeAnalyses = (globalState.__activeAnalysisRuns ??= new Set<string>());
+const stoppingAnalyses = (globalState.__stoppingAnalyses ??= new Set<string>());
 const analysisProgress = (globalState.__analysisProgress ??= new Map<
   string,
   { processed: number; total: number }
@@ -319,6 +233,22 @@ const ANALYSIS_CONCURRENCY = Math.max(
 
 export function isAnalysisRunning(runId: string): boolean {
   return activeAnalyses.has(runId);
+}
+
+/** Signal a running analysis to stop after the item it's on. Extraction of a
+ *  single page can involve AI and OCR calls, so this is cooperative rather
+ *  than immediate — the loop checks between evidence rows.
+ *
+ *  Whatever has been extracted stays in place, and `analysisCompletedAt` is
+ *  deliberately left unset, which is exactly the state "Resume Analysis"
+ *  already keys off. Stop then Resume picks up at the first unanalyzed site;
+ *  stop then Re-run Analysis starts clean. */
+export function stopAnalysis(runId: string): void {
+  if (activeAnalyses.has(runId)) stoppingAnalyses.add(runId);
+}
+
+export function isAnalysisStopping(runId: string): boolean {
+  return stoppingAnalyses.has(runId);
 }
 
 /** Returns the set of "siteId:missionType" pairs currently being partially
@@ -510,6 +440,34 @@ async function loadScreenshotIndex(
   return index;
 }
 
+/** Ad graphics the collector stored for this run, grouped by site+mission.
+ *
+ *  These are the primary input to the image pass. A given image URL is stored
+ *  once per run (the capture key is run+URL), so a hero graphic that appears on
+ *  the homepage, the specials page, and every carousel state of both yields one
+ *  row — and therefore one OCR call — instead of one per page state. */
+async function loadAdImageIndex(
+  runId: string
+): Promise<Map<string, Evidence[]>> {
+  const rows = await getDb()
+    .select({ evidence })
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.collectionRunId, runId),
+        eq(evidence.evidenceType, "ad_image")
+      )
+    );
+  const index = new Map<string, Evidence[]>();
+  for (const { evidence: row } of rows) {
+    const key = `${row.siteId}:${row.missionType}`;
+    const list = index.get(key);
+    if (list) list.push(row);
+    else index.set(key, [row]);
+  }
+  return index;
+}
+
 /** Disclaimer-modal text captured during collection. */
 function disclaimerPortion(modalText: string): string {
   const colon = modalText.search(/disclaimer\s*:/i);
@@ -596,6 +554,70 @@ async function getOcrArtifact(
   return pending;
 }
 
+/** Stores an ad graphic the image pass read as its own evidence row, so the
+ *  offers extracted from it link to THAT ad and not to the whole-page HTML
+ *  snapshot. Without this every image-extracted offer on a page shared one
+ *  sourceEvidenceId: "View ad" opened the same stored page for all of them, and
+ *  — because compliance grades are unique per evidence — the last offer graded
+ *  overwrote the grades of every other offer on the page (a lease grade shown
+ *  on finance rows). Stored as `screenshot`: it is an image, served like one,
+ *  so no schema change is needed. captureKey makes re-analysis reuse the row
+ *  instead of duplicating the upload. Returns null if the upload fails, and
+ *  callers fall back to the page evidence. */
+async function storeAdImageEvidence(input: {
+  runId: string;
+  siteId: string;
+  missionType: MissionType;
+  imageUrl: string;
+  body: Buffer;
+}): Promise<string | null> {
+  try {
+    const row = await uploadEvidence({
+      collectionRunId: input.runId,
+      siteId: input.siteId,
+      missionType: input.missionType,
+      evidenceType: "screenshot",
+      fileName: new URL(input.imageUrl).pathname.split("/").pop() || "ad.jpg",
+      body: input.body,
+      label: `Ad graphic — ${redactUrl(input.imageUrl)}`,
+      captureKey: `${input.runId}:ad-image:${input.imageUrl}`,
+      sourceUrl: redactUrl(input.imageUrl),
+    });
+    return row.id;
+  } catch (err) {
+    console.error(`[analysis] ad image evidence upload failed url=${redactUrl(input.imageUrl)}:`, err);
+    return null;
+  }
+}
+
+/** One offer-card graphic the image pass can read, however it was obtained.
+ *  Normally an evidence row the collector stored; for pre-capture runs, a live
+ *  URL. Keeping both behind one shape means the pass itself has no idea which
+ *  it's working with. */
+interface AdSource {
+  /** Original image URL. The Scene7 parser reads offer terms out of its query
+   *  parameters, so the pass needs it even when the bytes come from R2. */
+  url: string;
+  /** Evidence row for the graphic, when collection stored it. */
+  evidenceId: string | null;
+  load: () => Promise<Buffer | null>;
+}
+
+/** Pre-capture runs only: ad graphics resolved by live-fetching the dealer's
+ *  CDN during analysis. Kept so historical runs stay re-analysable. Anything
+ *  captured after ad-image capture shipped reads stored evidence instead — see
+ *  src/lib/collector/ad-images.ts for why that matters. */
+function legacyAdSources(urls: string[]): AdSource[] {
+  return urls.slice(0, MAX_AD_IMAGES).map((url) => ({
+    url,
+    evidenceId: null,
+    load: async () => {
+      const buf = await fetchImageBuffer(url);
+      return (await isAdSizedImage(buf)) ? buf : null;
+    },
+  }));
+}
+
 async function fetchImageBuffer(url: string): Promise<Buffer | null> {
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -606,21 +628,6 @@ async function fetchImageBuffer(url: string): Promise<Buffer | null> {
   }
 }
 
-/** Real-pixel-dimension gate applied to a fetched image buffer, right before
- *  it would be sent to Mistral OCR. Catches everything the URL-hint fast path
- *  (isTooSmallByUrlHints) can't see — icons with no size in the URL, tracking
- *  pixels, and (as a side effect) empty/corrupt fetch bodies, which otherwise
- *  reach sharp's resize inside runMistralOcr and throw "Input Buffer is
- *  empty". */
-async function isAdSizedImage(buf: Buffer | null): Promise<boolean> {
-  if (!buf || buf.length < MIN_AD_IMAGE_BYTES) return false;
-  try {
-    const { width, height } = await sharp(buf).metadata();
-    return Boolean(width && height && width >= MIN_AD_IMAGE_WIDTH && height >= MIN_AD_IMAGE_HEIGHT);
-  } catch {
-    return false;
-  }
-}
 
 function offerSignature(siteId: string, offer: ExtractedOffer): string {
   return [
@@ -723,9 +730,6 @@ async function insertImageExtractedOffer(input: {
 
 const MAX_COUPON_IMAGES = 12;
 
-/** Cap on ad-card images OCR'd per page in the image pass. */
-const MAX_AD_IMAGES = 15;
-
 /** A page whose DOM + disclaimer text yielded more offers than this is treated
  *  as adequately covered by text and skips the (expensive) per-image OCR pass.
  *  Keeps the pass targeted at image-rendered platforms (DDC/Dealer.com) rather
@@ -784,6 +788,14 @@ async function processAnalysis(
   console.log(`[analysis] run=${runId} html_snapshot rows=${rows.length} resume=${resume}`);
   const db = getDb();
   try {
+    // Stopped while still queued (ANALYSIS_CONCURRENCY holds tasks in line).
+    // Bail before the clearing step below — otherwise stopping a queued re-run
+    // would delete the run's existing offers and then extract nothing.
+    if (stoppingAnalyses.has(runId)) {
+      console.log(`[analysis] run=${runId} stopped before it began`);
+      return;
+    }
+
     if (resume) {
       // Find sites that already have offers — skip them.
       const doneRows = await db
@@ -847,6 +859,7 @@ async function processAnalysis(
     const disclaimerOffersByMission = new Map<string, number>();
 
     for (const { evidence: row, site } of rows) {
+      if (stoppingAnalyses.has(runId)) break;
       console.log(`[analysis] processing evidence id=${row.id} site="${site.name}" missionType=${row.missionType} htmlUrl=${row.htmlUrl}`);
       let html: string | null;
       try {
@@ -1020,6 +1033,7 @@ async function processAnalysis(
     // the full offer details. We run the same extraction + dedup pipeline here;
     // the shared `seen` Set prevents duplicates with HTML-extracted offers.
     for (const { evidence: row, site } of disclaimerEvidence) {
+      if (stoppingAnalyses.has(runId)) break;
       if (row.missionType === "service_specials") continue;
       const text = row.textContent!;
       const extracted = extractOffersFromDisclosure(text, {
@@ -1177,8 +1191,24 @@ async function processAnalysis(
     // of the site (the old all-or-nothing site gate did exactly that).
     const mistralOn = isMistralConfigured();
     const imageOnlyBlocked: string[] = [];
+    // The image pass runs per html evidence row, and a site's ad graphics
+    // repeat across rows: the same hero images appear on the homepage and the
+    // specials page, and again in every captured tab/carousel state of each.
+    // Without this, one graphic was fetched and PAID for once per row (a site
+    // with 52 ad images across two missions billed 104 OCR calls for 52
+    // pictures). Text only — buffers stay per-operation, deliberately.
+    const adOcrByUrl = new Map<string, OcrArtifact | null>();
+    const adImageIndex = await loadAdImageIndex(runId);
+    const runHasStoredAdImages = adImageIndex.size > 0;
+    if (!runHasStoredAdImages) {
+      console.warn(
+        `[analysis] run ${runId} stored no ad images — using the legacy live-fetch ` +
+          `path. Expected only for runs captured before ad-image capture shipped.`
+      );
+    }
 
     for (const { evidence: htmlRow, site } of rows) {
+      if (stoppingAnalyses.has(runId)) break;
       // Service specials have their own OCR-coupon pass (serviceCouponOffers).
       if (htmlRow.missionType === "service_specials") continue;
 
@@ -1190,39 +1220,62 @@ async function processAnalysis(
 
       const html = await getEvidenceText(htmlRow);
       if (!html) continue;
-      const pageUrl = pageUrlFromLabel(htmlRow.label);
-      const adImageUrls = extractAdImageUrls(html, pageUrl);
+
+      // Ad graphics come from what collection stored — this layer reads R2, it
+      // does not visit dealer sites. The legacy branch below exists only for
+      // runs captured before ad-image capture shipped; those stay re-analysable
+      // at the cost of a live fetch whose creative may no longer match the
+      // capture date. The switch is per RUN, not per mission: an image is
+      // stored once per run, so a mission legitimately having none means its
+      // ads were captured (and are processed) under a sibling mission.
+      const adSources: AdSource[] = runHasStoredAdImages
+        ? (adImageIndex.get(`${htmlRow.siteId}:${htmlRow.missionType}`) ?? []).map(
+            (row) => ({
+              url: row.sourceUrl ?? "",
+              evidenceId: row.id,
+              load: () => getEvidenceBody(row),
+            })
+          )
+        : legacyAdSources(extractAdImageUrls(html, pageUrlFromLabel(htmlRow.label)));
 
       // Run the pass when the page has more ad-card images than offers we found
       // (image-rendered offers we missed), or produced nothing at all.
-      const wantImagePass = coveredCount === 0 || adImageUrls.length > coveredCount;
+      const wantImagePass = coveredCount === 0 || adSources.length > coveredCount;
       if (!wantImagePass) continue;
 
       const marketStates = [site.state, ...(site.otherStates ?? [])].filter(
         (s): s is string => Boolean(s)
       );
       console.log(
-        `[analysis] image pass site="${site.name}" mission=${htmlRow.missionType}: text offers=${coveredCount}, ad images=${adImageUrls.length}`
+        `[analysis] image pass site="${site.name}" mission=${htmlRow.missionType}: text offers=${coveredCount}, ad images=${adSources.length}${runHasStoredAdImages ? " (stored)" : " (legacy live fetch)"}`
       );
 
       let pageFoundOffer = false;
 
-      let directTried = 0;
-      for (const url of adImageUrls) {
-        if (directTried >= MAX_AD_IMAGES) break;
-        directTried++;
-        const directOffers = extractDealerInspireScene7Offers(url, {
+      for (const ad of adSources) {
+        const directOffers = extractDealerInspireScene7Offers(ad.url, {
           missionType: htmlRow.missionType,
           brand: site.brand,
         });
         if (directOffers.length === 0) continue;
-        const imageBuf = await fetchImageBuffer(url);
+        const imageBuf = await ad.load();
+        const adEvidenceId =
+          ad.evidenceId ??
+          (imageBuf
+            ? await storeAdImageEvidence({
+                runId,
+                siteId: htmlRow.siteId,
+                missionType: htmlRow.missionType,
+                imageUrl: ad.url,
+                body: imageBuf,
+              })
+            : null);
         for (const offer of directOffers) {
           pageFoundOffer = (await insertImageExtractedOffer({
             db,
             runId,
             siteId: htmlRow.siteId,
-            sourceEvidenceId: htmlRow.id,
+            sourceEvidenceId: adEvidenceId ?? htmlRow.id,
             offer,
             seen,
             grader,
@@ -1247,72 +1300,49 @@ async function processAnalysis(
       // Sub-pass B: OCR each ad-card image in isolation (no cross-ad disclaimer
       // bleed). Collect ALL distinct offers on the page — never stop at the
       // first, or a 5-card page would yield a single offer.
-      let tried = 0;
-      for (const url of adImageUrls) {
-        if (tried >= MAX_AD_IMAGES) break;
-        tried++;
-        if (extractDealerInspireScene7Offers(url, {
+      for (const ad of adSources) {
+        if (extractDealerInspireScene7Offers(ad.url, {
           missionType: htmlRow.missionType,
           brand: site.brand,
         }).length > 0) {
           continue;
         }
-        let imageBuf: Buffer | null = null;
-        try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-          if (!resp.ok) continue;
-          imageBuf = Buffer.from(await resp.arrayBuffer());
-        } catch { continue; }
-        if (!(await isAdSizedImage(imageBuf))) continue;
-        const artifact = await runMistralOcr(imageBuf);
+        const imageBuf = await ad.load();
+        if (!imageBuf) continue;
+        let artifact = adOcrByUrl.get(ad.url);
+        if (artifact === undefined) {
+          artifact = await runMistralOcr(imageBuf);
+          adOcrByUrl.set(ad.url, artifact);
+        }
         if (!artifact || !artifact.imageText.trim()) continue;
         const extracted = extractOffersFromOcrImage(artifact.imageText, {
           missionType: htmlRow.missionType,
           brand: site.brand,
         });
-        console.log(`[analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
-        for (const offer of extracted) {
-          if (offer.confidence < 0.3) continue;
-          const sig = [htmlRow.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
-          if (seen.has(sig)) continue;
-          seen.add(sig);
-          if (isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel)) continue;
-          pageFoundOffer = true;
-          await db.insert(offers).values({
-            collectionRunId: runId,
+        console.log(`[analysis] img-src OCR site=${site.name} url=...${redactUrl(ad.url).slice(-60)} extracted ${extracted.length} offer(s)`);
+        const adEvidenceId =
+          ad.evidenceId ??
+          (await storeAdImageEvidence({
+            runId,
             siteId: htmlRow.siteId,
-            sourceEvidenceId: htmlRow.id,
-            offerType: offer.offerType,
-            vehicleMake: offer.vehicleMake,
-            vehicleModel: offer.vehicleModel,
-            vehicleTrim: offer.vehicleTrim,
-            monthlyPayment: offer.monthlyPayment,
-            apr: offer.apr,
-            cashIncentive: offer.cashIncentive,
-            salePrice: offer.salePrice,
-            termMonths: offer.termMonths,
-            dueAtSigning: offer.dueAtSigning,
-            mileageAllowance: offer.offerType === "lease" ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText) : null,
-            rawText: offer.rawText,
-            normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
-            disclaimerText: offer.disclaimerText,
-            confidence: offer.confidence,
-          });
-          const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
-          const result = COMPLIANCE_TYPES.includes(offer.offerType)
-            ? await grader.grade({
-                evidenceId: htmlRow.id,
-                offerType: offer.offerType,
-                disclaimerText: offer.disclaimerText,
-                adText: offer.rawText,
-                dealerName: site.name,
-                marketStates,
-                screenshotBuffer: imageBuf,
-              })
-            : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
-          await db.insert(complianceGrades)
-            .values({ evidenceId: htmlRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
-            .onConflictDoUpdate({ target: complianceGrades.evidenceId, set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() } });
+            missionType: htmlRow.missionType,
+            imageUrl: ad.url,
+            body: imageBuf,
+          }));
+        for (const offer of extracted) {
+          pageFoundOffer = (await insertImageExtractedOffer({
+            db,
+            runId,
+            siteId: htmlRow.siteId,
+            sourceEvidenceId: adEvidenceId ?? htmlRow.id,
+            offer,
+            seen,
+            grader,
+            dealerName: site.name,
+            marketStates,
+            screenshotBuffer: imageBuf,
+            source: "image_extraction",
+          })) || pageFoundOffer;
         }
       }
 
@@ -1392,13 +1422,20 @@ async function processAnalysis(
       );
     }
 
-    await db
-      .update(collectionRuns)
-      .set({ analysisCompletedAt: new Date() })
-      .where(eq(collectionRuns.id, runId));
+    // A stopped analysis is unfinished by definition — leaving
+    // analysisCompletedAt null is what surfaces "Resume Analysis".
+    if (stoppingAnalyses.has(runId)) {
+      console.log(`[analysis] run=${runId} stopped by operator before completion`);
+    } else {
+      await db
+        .update(collectionRuns)
+        .set({ analysisCompletedAt: new Date() })
+        .where(eq(collectionRuns.id, runId));
+    }
   } finally {
     activeAnalyses.delete(runId);
     analysisProgress.delete(runId);
+    stoppingAnalyses.delete(runId);
   }
 }
 
@@ -1482,6 +1519,8 @@ export async function startAnalysis(runId: string, { resume = false }: { resume?
       return 0;
     }
     activeAnalyses.add(runId);
+    // Clear any stop signal from a previous pass before this one queues.
+    stoppingAnalyses.delete(runId);
     await getDb()
       .update(collectionRuns)
       .set({ analysisStartedAt: new Date() })
@@ -1518,10 +1557,23 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
   void (async () => {
     try {
       const db = getDb();
-      const allEvidenceIds = [
-        ...htmlRows.map((r) => r.evidence.id),
-        ...disclaimerRows.map((r) => r.evidence.id),
-      ];
+      // Every evidence row for this site+mission, not just the html/disclaimer
+      // rows we re-read: the image pass stores each OCR'd ad graphic as its own
+      // evidence row, and offers hang off THOSE. Deleting by the html ids alone
+      // would leave the previous run's image-extracted offers behind and
+      // duplicate them on every re-analysis.
+      const allEvidenceIds = (
+        await db
+          .select({ id: evidence.id })
+          .from(evidence)
+          .where(
+            and(
+              eq(evidence.collectionRunId, runId),
+              eq(evidence.siteId, siteId),
+              eq(evidence.missionType, missionType)
+            )
+          )
+      ).map((r) => r.id);
 
       // Delete existing offers sourced from this site+mission's evidence only,
       // leaving offers from other missions for this site intact.
@@ -1645,7 +1697,12 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
       // Image pass (per page): mirror of processAnalysis. A page whose text yield
       // is smaller than its ad-card image count likely renders offers as graphics
       // (DDC/Dealer.com). Gate per html row so one weak text offer no longer
-      // suppresses OCR recovery for this site+mission's other pages.
+      // suppresses OCR recovery for this site+mission's other pages. Shared ad
+      // graphics (the same hero image in every captured tab state) are OCR'd
+      // once — see the cache in processAnalysis.
+      const adOcrByUrl = new Map<string, OcrArtifact | null>();
+      const adImageIndex = await loadAdImageIndex(runId);
+      const runHasStoredAdImages = adImageIndex.size > 0;
       for (const { evidence: htmlRow, site } of htmlRows) {
         if (htmlRow.missionType === "service_specials") continue;
         const coveredCount =
@@ -1654,30 +1711,47 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         if (coveredCount > MAX_DOM_OFFERS_FOR_IMAGE_PASS) continue;
         const html = await getEvidenceText(htmlRow);
         if (!html) continue;
-        const pageUrl = pageUrlFromLabel(htmlRow.label);
-        const adImageUrls = extractAdImageUrls(html, pageUrl);
-        const wantImagePass = coveredCount === 0 || adImageUrls.length > coveredCount;
+        // Stored ad graphics first; live fetch only for pre-capture runs — see
+        // the same switch in processAnalysis.
+        const adSources: AdSource[] = runHasStoredAdImages
+          ? (adImageIndex.get(`${htmlRow.siteId}:${htmlRow.missionType}`) ?? []).map(
+              (row) => ({
+                url: row.sourceUrl ?? "",
+                evidenceId: row.id,
+                load: () => getEvidenceBody(row),
+              })
+            )
+          : legacyAdSources(extractAdImageUrls(html, pageUrlFromLabel(htmlRow.label)));
+        const wantImagePass = coveredCount === 0 || adSources.length > coveredCount;
         if (!wantImagePass) continue;
         const marketStates = [site.state, ...(site.otherStates ?? [])].filter((s): s is string => Boolean(s));
-        console.log(`[partial-analysis] image pass site="${site.name}" mission=${htmlRow.missionType}: text offers=${coveredCount}, ad images=${adImageUrls.length}`);
+        console.log(`[partial-analysis] image pass site="${site.name}" mission=${htmlRow.missionType}: text offers=${coveredCount}, ad images=${adSources.length}${runHasStoredAdImages ? " (stored)" : " (legacy live fetch)"}`);
 
         let pageFoundOffer = false;
-        let directTried = 0;
-        for (const url of adImageUrls) {
-          if (directTried >= MAX_AD_IMAGES) break;
-          directTried++;
-          const directOffers = extractDealerInspireScene7Offers(url, {
+        for (const ad of adSources) {
+          const directOffers = extractDealerInspireScene7Offers(ad.url, {
             missionType: htmlRow.missionType,
             brand: site.brand,
           });
           if (directOffers.length === 0) continue;
-          const imageBuf = await fetchImageBuffer(url);
+          const imageBuf = await ad.load();
+          const adEvidenceId =
+            ad.evidenceId ??
+            (imageBuf
+              ? await storeAdImageEvidence({
+                  runId,
+                  siteId: htmlRow.siteId,
+                  missionType: htmlRow.missionType,
+                  imageUrl: ad.url,
+                  body: imageBuf,
+                })
+              : null);
           for (const offer of directOffers) {
             pageFoundOffer = (await insertImageExtractedOffer({
               db,
               runId,
               siteId: htmlRow.siteId,
-              sourceEvidenceId: htmlRow.id,
+              sourceEvidenceId: adEvidenceId ?? htmlRow.id,
               offer,
               seen,
               grader,
@@ -1695,36 +1769,39 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         }
 
         if (isMistralConfigured()) {
-          let tried = 0;
-          for (const url of adImageUrls) {
-            if (tried >= MAX_AD_IMAGES) break;
-            tried++;
-            if (extractDealerInspireScene7Offers(url, {
+          for (const ad of adSources) {
+            if (extractDealerInspireScene7Offers(ad.url, {
               missionType: htmlRow.missionType,
               brand: site.brand,
             }).length > 0) {
               continue;
             }
-            let imageBuf: Buffer | null = null;
-            try {
-              const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-              if (!resp.ok) continue;
-              imageBuf = Buffer.from(await resp.arrayBuffer());
-            } catch { continue; }
-            if (!(await isAdSizedImage(imageBuf))) continue;
-            const artifact = await runMistralOcr(imageBuf);
+            const imageBuf = await ad.load();
+            if (!imageBuf) continue;
+            let artifact = adOcrByUrl.get(ad.url);
+            if (artifact === undefined) {
+              artifact = await runMistralOcr(imageBuf);
+              adOcrByUrl.set(ad.url, artifact);
+            }
             if (!artifact || !artifact.imageText.trim()) continue;
             const extracted = extractOffersFromOcrImage(artifact.imageText, {
               missionType: htmlRow.missionType,
               brand: site.brand,
             });
-            console.log(`[partial-analysis] img-src OCR site=${site.name} url=...${url.slice(-60)} extracted ${extracted.length} offer(s)`);
+            console.log(`[partial-analysis] img-src OCR site=${site.name} url=...${redactUrl(ad.url).slice(-60)} extracted ${extracted.length} offer(s)`);
+            const adEvidenceId = ad.evidenceId ?? (await storeAdImageEvidence({
+              runId,
+              siteId: htmlRow.siteId,
+              missionType: htmlRow.missionType,
+              imageUrl: ad.url,
+              body: imageBuf,
+            }));
             for (const offer of extracted) {
               pageFoundOffer = (await insertImageExtractedOffer({
                 db,
                 runId,
                 siteId: htmlRow.siteId,
-                sourceEvidenceId: htmlRow.id,
+                sourceEvidenceId: adEvidenceId ?? htmlRow.id,
                 offer,
                 seen,
                 grader,
@@ -1732,7 +1809,6 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
                 marketStates,
                 screenshotBuffer: imageBuf,
                 source: "image_extraction",
-                aiAssisted: true,
               })) || pageFoundOffer;
             }
           }

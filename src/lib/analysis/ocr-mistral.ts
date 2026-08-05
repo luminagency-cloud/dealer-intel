@@ -27,6 +27,9 @@ export interface OcrArtifact {
 }
 
 const MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr";
+/** Upper bound on what we send to Mistral. Images within this are sent as-is. */
+const MAX_OCR_WIDTH = 1600;
+const MAX_OCR_HEIGHT = 7900;
 let mistralUnauthorized = false;
 
 /** Converts Mistral's Markdown-oriented OCR response into the plain visible
@@ -46,8 +49,16 @@ export function normalizeOcrText(text: string): string {
     .trim();
 }
 
+/** Pinned deliberately — do NOT put "mistral-ocr-latest" back here. Measured
+ *  Aug 5 2026 against five Anchor Nissan hero ads with the prices read off the
+ *  graphics by eye: the ocr-4 line that "latest" now resolves to read a Murano
+ *  "$389/MO" as "$399/MO" (a wrong price that looks perfectly confident
+ *  downstream), while mistral-ocr-3 read all five ads correctly. Re-measure
+ *  before moving this. */
+const DEFAULT_OCR_MODEL = "mistral-ocr-3";
+
 function mistralModel(): string {
-  return process.env.MISTRAL_OCR_MODEL || "mistral-ocr-latest";
+  return process.env.MISTRAL_OCR_MODEL || DEFAULT_OCR_MODEL;
 }
 
 function isTransientNetworkError(err: unknown): boolean {
@@ -130,13 +141,29 @@ export async function runMistralOcr(
 
   let imageBase64: string;
   try {
-    const resized = await sharp(imageBuffer)
-      .resize({ width: 1600, height: 7900, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-    imageBase64 = resized.toString("base64");
+    // Send the original bytes whenever they already fit. The q85 JPEG
+    // round-trip we used to apply unconditionally is lossy on exactly the
+    // small print that matters: it cost us a whole "$2,999 Total Due at
+    // signing" line on a real dealer ad that OCRs fine untouched. Only
+    // oversized images (tall full-page screenshots) get resized.
+    const meta = await sharp(imageBuffer).metadata();
+    const oversized =
+      (meta.width ?? 0) > MAX_OCR_WIDTH || (meta.height ?? 0) > MAX_OCR_HEIGHT;
+    if (oversized) {
+      const resized = await sharp(imageBuffer)
+        .resize({ width: MAX_OCR_WIDTH, height: MAX_OCR_HEIGHT, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      imageBase64 = resized.toString("base64");
+      mimeType = "image/jpeg";
+    } else {
+      imageBase64 = imageBuffer.toString("base64");
+      // The data URI must describe the bytes actually sent, not the caller's
+      // default, now that they're no longer always re-encoded to JPEG.
+      if (meta.format) mimeType = `image/${meta.format}`;
+    }
   } catch (err) {
-    console.error("[ocr-mistral] image resize failed:", err);
+    console.error("[ocr-mistral] image preprocessing failed:", err);
     return null;
   }
 

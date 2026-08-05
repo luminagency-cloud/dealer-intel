@@ -3,6 +3,7 @@ import {
   ChromeCollectorError,
   completeChromeItem,
   failChromeItem,
+  touchChromeHeartbeat,
   uploadChromeCaptureState,
   type ChromeCaptureStateKind,
 } from "@/lib/chrome-collector";
@@ -49,6 +50,10 @@ export async function POST(
     const missionId = requiredString(formData, "missionId");
     const action = requiredString(formData, "action");
     const captureError = formData.get("error");
+
+    // Any result traffic means the driving tab is alive. Stamped before the
+    // work so a capture that fails validation still counts as proof of life.
+    await touchChromeHeartbeat(runId);
 
     if (action === "failure") {
       if (typeof captureError !== "string" || !captureError.trim()) {

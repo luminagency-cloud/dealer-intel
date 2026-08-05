@@ -225,6 +225,20 @@
       "when": 1785701713214,
       "tag": "0031_familiar_union_jack",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1785902338184,
+      "tag": "0032_busy_blue_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1785940973126,
+      "tag": "0033_wealthy_black_knight",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ import { getCollectionRun, listWorkItemsForRun } from "@/lib/db/repository";
 import { uploadEvidence } from "@/lib/evidence";
 import { finalizeRunIfDone } from "@/lib/run-executor";
 import { MISSION_EXPLORATION } from "@/lib/collector/mission-knowledge";
+import { captureAdImages } from "@/lib/collector/ad-images";
 
 export const CHROME_COLLECTOR_PROTOCOL_VERSION = 3;
 
@@ -41,6 +42,37 @@ export interface ChromeCollectionJob {
   protocolVersion: number;
   runId: string;
   items: ChromeCollectionItem[];
+}
+
+/** How long a Chrome run may go silent before we call its tab dead.
+ *  ponytail: the heartbeat piggybacks on the extension's existing result POSTs
+ *  rather than a dedicated ping, so this window has to cover the longest
+ *  plausible gap between captures. Add a real ping if a slow dealer page ever
+ *  trips it mid-run. */
+export const CHROME_HEARTBEAT_STALE_MS = 3 * 60_000;
+
+/** Chrome collection happens in the operator's browser, so `isRunExecuting`
+ *  (the in-process Playwright registry) never knows about it. A fresh
+ *  heartbeat is what "this run is actually collecting right now" means. */
+export function isChromeRunLive(run: {
+  collectorMode: string;
+  status: string;
+  chromeHeartbeatAt: Date | null;
+}): boolean {
+  if (run.collectorMode !== "chrome_extension" || run.status !== "running") {
+    return false;
+  }
+  if (!run.chromeHeartbeatAt) return false;
+  return Date.now() - run.chromeHeartbeatAt.getTime() < CHROME_HEARTBEAT_STALE_MS;
+}
+
+/** Called on every result POST from the driving tab — that traffic is the
+ *  proof of life, so no separate ping channel is needed. */
+export async function touchChromeHeartbeat(runId: string): Promise<void> {
+  await getDb()
+    .update(collectionRuns)
+    .set({ chromeHeartbeatAt: new Date() })
+    .where(eq(collectionRuns.id, runId));
 }
 
 export class ChromeCollectorError extends Error {
@@ -132,7 +164,12 @@ export async function startChromeRun(
       });
     await db
       .update(collectionRuns)
-      .set({ status: "running", startedAt: run.startedAt ?? now, completedAt: null })
+      .set({
+        status: "running",
+        startedAt: run.startedAt ?? now,
+        completedAt: null,
+        chromeHeartbeatAt: now,
+      })
       .where(eq(collectionRuns.id, runId));
 
     return {
@@ -141,6 +178,10 @@ export async function startChromeRun(
       items: chromeItems,
     };
   }
+
+  // Resuming an already-running run: claim it now so the page reads as live
+  // before the first capture lands.
+  await touchChromeHeartbeat(runId);
 
   const unfinished = await db
     .select({
@@ -257,6 +298,21 @@ export async function uploadChromeCaptureState(input: {
     captureKey: `${artifactPrefix}:screenshot`,
     ...metadata,
   });
+
+  // Same as the Current collector: on image-rendered platforms the offer lives
+  // inside a JPEG, so the ad graphic is evidence and belongs to this capture,
+  // not to a later analysis pass re-downloading it from the dealer's CDN.
+  // Skipped for failure states, which have no page worth mining.
+  if (input.stateKind !== "failure") {
+    await captureAdImages({
+      collectionRunId: input.runId,
+      siteId: input.siteId,
+      missionType: item.mission.missionType,
+      html: input.html,
+      pageUrl: input.finalUrl,
+      captureStateId: manifestStateId,
+    });
+  }
 
   await getDb()
     .update(missionResults)

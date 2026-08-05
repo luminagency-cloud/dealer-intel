@@ -1,0 +1,1 @@
+ALTER TABLE "collection_runs" ADD COLUMN "chrome_heartbeat_at" timestamp with time zone;

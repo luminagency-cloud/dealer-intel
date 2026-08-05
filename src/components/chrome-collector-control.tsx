@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
@@ -194,7 +194,6 @@ export function ChromeCollectorControl({
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [fallbackAvailable, setFallbackAvailable] = useState(false);
-  const autoResumeAttempted = useRef(false);
 
   async function startChromeCollection() {
     if (busy) return;
@@ -341,18 +340,18 @@ export function ChromeCollectorControl({
     );
   }
 
-  useEffect(() => {
-    if (!needsRecovery || autoResumeAttempted.current) return;
-    autoResumeAttempted.current = true;
-    void claimChromeRun();
-    // Recovery is deliberately a mount-time handoff. The runner holds the
-    // browser lock until this collection attempt settles.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsRecovery]);
-
   return (
     <div className="flex max-w-xl flex-col items-end gap-2">
-      {canStart && (
+      {needsRecovery && !busy && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-left text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          This Chrome run was interrupted — its browser tab stopped reporting.
+          Resume to finish the dealers it never got to.
+        </p>
+      )}
+      {/* `busy` keeps the button mounted on the driving tab: once its own
+          heartbeat lands, the run reads as executing and `canStart` goes
+          false, which would otherwise yank the progress affordance mid-run. */}
+      {(canStart || busy) && (
         <button
           type="button"
           onClick={claimChromeRun}

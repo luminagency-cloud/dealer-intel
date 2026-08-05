@@ -8,6 +8,7 @@ import {
   type SiteMission,
 } from "@/lib/db";
 import { uploadEvidence } from "@/lib/evidence";
+import { captureAdImages } from "./ad-images";
 import {
   CollectionError,
   cleanErrorMessage,
@@ -253,6 +254,14 @@ async function uploadCaptureEvidence(
       })
     );
   }
+  // On image-rendered platforms the offer lives inside a JPEG, so the ad
+  // graphic is evidence too — captured here rather than re-downloaded from the
+  // dealer's CDN at analysis time.
+  await captureAdImages({
+    ...base,
+    html: capture.html,
+    pageUrl: capture.finalUrl,
+  });
   return out;
 }
 

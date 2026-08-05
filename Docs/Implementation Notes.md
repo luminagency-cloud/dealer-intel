@@ -50,9 +50,15 @@ collector-specific branch. The Chrome pilot performs extension preflight before
 starting and can switch an evidence-free attempt back to the Current collector.
 The suite pilot seeds the whole selected scope, processes work sequentially,
 and reuses one visible Chrome window for all selected missions on a dealer.
-Chrome progress is database-backed: reopening or reloading a running run
-automatically resumes only its unfinished items, while a browser lock prevents
-two Dealer Intel tabs from driving the same run.
+Chrome progress is database-backed. Because the collection loop lives in the
+operator's browser, the server cannot observe it the way it observes the
+in-process Current collector: `isRunExecuting` knows nothing about a Chrome run.
+`collection_runs.chrome_heartbeat_at`, stamped on every result POST, is the
+substitute. A heartbeat newer than `CHROME_HEARTBEAT_STALE_MS` means the run is
+live, which is what the run page's status polling keys off; an older one means
+the driving tab died. Reopening an interrupted run offers a Resume button rather
+than resuming on mount, and re-queues only its unfinished items. A browser lock
+prevents two Dealer Intel tabs from driving the same run.
 
 Chrome protocol 4 is stateful. The extension prepares the visible page, expands
 mission-selected accordions, captures a true full-page base image through the
@@ -283,6 +289,7 @@ Stored evidence includes:
 - HTML snapshots,
 - failure screenshots,
 - disclaimer screenshots,
+- ad graphics (`ad_image`) — the offer-card images on image-rendered platforms,
 - captured disclaimer text on `evidence.text_content`.
 
 Stateful Chrome evidence also records `capture_key`, `capture_state_id`,
@@ -310,6 +317,13 @@ Each run keeps its own analysis rows. Re-analyzing one run replaces only that
 run's offers and grades; it does not erase analysis from earlier runs that cover
 the same dealers.
 
+A running analysis can be stopped. The signal is cooperative — the three
+evidence loops in `processAnalysis` check it between rows, so the stop lands
+after the current page rather than mid-page. A stopped analysis deliberately
+leaves `analysisCompletedAt` null, which is the same state Resume Analysis
+already keys off, so stop/resume needs no separate bookkeeping: resume skips
+sites that already have offers, and a full re-run clears the run's offers first.
+
 Rule-based extraction handles the normal path. Claude is a secondary,
 text-only pass for low-confidence corrections when `ANTHROPIC_API_KEY` is
 configured. Dealer Inspire Scene7 image ads are parsed from their structured
@@ -320,6 +334,46 @@ deterministic extractor as DOM text — Mistral reads the image, the app
 classifies it. OCR text is stored in `ocr_artifacts` (one row per screenshot)
 for audit/debug before deterministic extraction. `MISTRAL_API_KEY` is present
 locally and the `ocr_artifacts` migration has been applied.
+
+Ad graphics are captured, not re-fetched. On image-rendered platforms the whole
+offer lives inside a JPEG, so the ad graphic is primary evidence and the
+collector stores it (`evidence_type = 'ad_image'`, label `Ad graphic — <url>`)
+alongside the page's HTML and screenshot — both collectors, via
+`src/lib/collector/ad-images.ts`. Analysis reads those rows out of R2.
+Previously the analysis runner downloaded ad images from the dealer's CDN at
+analysis time, which broke its own contract ("no site visits") and made
+re-analysis non-reproducible: re-running a three-week-old run pulled whatever
+creative the dealer was serving that day, so the offers stopped describing the
+captured date. A run captured before this shipped has no `ad_image` rows and
+falls back to the old live-fetch path, logged as `(legacy live fetch)`; the
+switch is per run, not per mission, because an image is stored once per run and
+a mission with none simply had its ads captured under a sibling mission.
+
+The image pass skips map/tile hosts (`maps.googleapis.com` and friends). A
+dealer's embedded "find us" map paints the page with 256x256 tiles that clear
+the ad-size gate, so they were fetched and OCR'd like ad creative — always for
+nothing, on the dealer's own Maps quota, with the dealer's API key (published in
+their page markup) riding into our logs. Anything that still reaches a log line
+or an evidence label/`source_url` goes through `redactUrl`, which strips
+`key`/`token`/`signature` parameters. OCR results are cached per image URL for
+the length of an analysis. Storing each graphic once per run (the capture key is
+run+URL) already collapses the hero image that recurs across missions and every
+captured tab/carousel state down to one row, and therefore one OCR call.
+
+Each ad graphic the image pass reads is stored as its own evidence row
+(evidence type `screenshot`, label `Ad graphic — <url>`), and the offers from it
+point at that row. Offers used to point at the whole page's HTML snapshot, so
+every image-extracted offer on a page shared one "View ad" link and — because
+compliance grades are unique per evidence row — one shared grade, letting the
+last offer graded overwrite every other offer's grade on that page.
+
+The OCR model is pinned, not tracked to `mistral-ocr-latest`. Measured Aug 5
+2026 against five Anchor Nissan hero ads with the prices read off the graphics
+by eye: the ocr-4 line that "latest" resolves to read a "$389/MO" ad as
+"$399/MO", while `mistral-ocr-3` read all five correctly. Images are also sent
+to Mistral as-is unless they exceed the size cap; the q85 JPEG re-encode that
+used to be unconditional dropped a whole "$2,999 Total Due at signing" line
+from an ad that OCRs fine untouched.
 
 Structured vehicle-special pages are analyzed card-first: fields are bounded to
 the repeated DOM card before lease and APR alternatives are separated. A cash

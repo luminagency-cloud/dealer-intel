@@ -10,6 +10,8 @@ import { AnalysisSection } from "@/components/analysis-section";
 interface LiveStatus {
   executing: boolean;
   analyzing: boolean;
+  /** Stop requested — the loop finishes its current page and exits. */
+  analysisStopping: boolean;
   paused: boolean;
   stalled: boolean;
   progress: { processed: number; total: number } | null;
@@ -57,6 +59,7 @@ export function RunLiveData({
   resumeAction,
   runAnalysisAction,
   resumeAnalysisAction,
+  stopAnalysisAction,
   passOfferAction,
   deleteOfferAction,
   verifyBorderlineAction,
@@ -104,6 +107,7 @@ export function RunLiveData({
   resumeAction?: () => Promise<void>;
   runAnalysisAction: () => Promise<void>;
   resumeAnalysisAction?: () => Promise<void>;
+  stopAnalysisAction?: () => Promise<void>;
   passOfferAction: (offerId: string) => Promise<void>;
   deleteOfferAction: (offerId: string) => Promise<void>;
   verifyBorderlineAction?: () => Promise<void>;
@@ -123,6 +127,7 @@ export function RunLiveData({
   const [live, setLive] = useState<LiveStatus>({
     executing: initialExecuting,
     analyzing: initialAnalyzing,
+    analysisStopping: false,
     paused: initialPaused,
     stalled: initialStalled,
     progress: initialProgress,
@@ -138,8 +143,26 @@ export function RunLiveData({
 
   const active = live.executing || live.analyzing || live.partialAnalysisKeys.length > 0;
 
+  // Poll fast while something is in flight, slowly the rest of the time — never
+  // not at all. `active` is derived from polled state, so gating the poll on it
+  // was a one-way latch: the moment it went false the only thing that could
+  // ever turn it back on was the poll it had just switched off, and the page
+  // stayed frozen until a manual reload.
+  //
+  // Chrome runs hit that on every single run. Their `executing` flag is an
+  // extension heartbeat that stops the instant collection ends, so the page
+  // went idle exactly at the collection -> analysis handoff and never saw the
+  // offers arrive. (The Current collector masked it: `isRunExecuting` stays
+  // true through collection, so the poll was already alive when `analyzing`
+  // took over.) Opening a finished run, or a stale heartbeat mid-collection,
+  // wedged it the same way — even Run Analysis couldn't wake it, since
+  // `analyzing` is only read from props at mount.
+  //
+  // ponytail: flat 15s idle poll; give it a backoff if idle admin tabs ever
+  // show up in database load.
+  const pollMs = active ? 3000 : 15000;
+
   useEffect(() => {
-    if (!active) return;
     const poll = async () => {
       try {
         const res = await fetch(`/api/runs/${runId}/status`);
@@ -157,9 +180,12 @@ export function RunLiveData({
         // ignore transient errors
       }
     };
-    const timer = setInterval(poll, 3000);
+    // Once immediately, so opening a run that finished while the tab was closed
+    // (or picking up the moment work starts) doesn't wait out a whole interval.
+    void poll();
+    const timer = setInterval(poll, pollMs);
     return () => clearInterval(timer);
-  }, [active, runId]);
+  }, [pollMs, runId]);
 
   // Sync freshly server-rendered data (offers/grades/analysis timestamps) into
   // live state when the props actually change post-mount — i.e. a server-action
@@ -294,12 +320,14 @@ export function RunLiveData({
           siteNames={siteNames}
           siteOptions={siteOptions}
           analyzing={live.analyzing}
+          analysisStopping={live.analysisStopping}
           analysisStartedAt={live.analysisStartedAt}
           analysisCompletedAt={live.analysisCompletedAt}
           evidencePageCount={live.progress?.total ?? evidencePageCount}
           pagesProcessed={live.progress?.processed ?? null}
           runAnalysisAction={runAnalysisAction}
           resumeAnalysisAction={resumeAnalysisAction}
+          stopAnalysisAction={stopAnalysisAction}
           passOfferAction={passOfferAction}
           deleteOfferAction={deleteOfferAction}
           verifyBorderlineAction={verifyBorderlineAction}
