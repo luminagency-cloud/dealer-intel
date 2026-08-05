@@ -16,7 +16,7 @@
  *
  * Reading is tiered, most trustworthy first:
  *
- *   1. a model refinement list, located by its "Model" heading
+ *   1. the model refinement list, read from its facet inputs
  *   2. the model teaser strip ("Sportage 12 available")
  *   3. the "Model ... Trim" text block with parenthetical counts
  *
@@ -77,11 +77,18 @@
   // -------------------------------------------------------------------------
 
   /**
-   * Tier 1 — a refinement list found by its heading.
+   * Tier 1 — the model refinement list.
    *
-   * Anchored on the visible "Model" heading rather than on a class name,
-   * because Sokal themes vary and none of them publish a stable facet
-   * attribute the way Dealer.com and Dealer Inspire do.
+   * Sokal's refine rail is a set of collapsed accordion panels whose headings
+   * are `<a class="section-heading">`, and whose rows live in a `.filter-list
+   * .hidden` container. That defeated a heading-text walk twice over: `<a>` was
+   * not in the heading selector, and with the panel collapsed the row text is
+   * absent from `innerText` everywhere, so the prose tiers missed as well.
+   *
+   * The facet inputs themselves are the stable contract — `name="model"`, one
+   * per row, present in the DOM whether the panel is open, closed or scrolled.
+   * Read those first and only fall back to the heading walk for themes that
+   * render the facet some other way.
    */
   async function readModelFacet(tabId) {
     return execute(tabId, () => {
@@ -90,8 +97,34 @@
           .replace(/\s+/g, " ")
           .trim();
 
+      const parseRow = (text) => {
+        const match = text.match(/^(.+?)\s*[\(\[]?\s*([\d,]+)\s*[\)\]]?(?:\s*available)?$/i);
+        if (!match) return null;
+        const count = Number(match[2].replace(/,/g, ""));
+        const name = clean(match[1]);
+        if (!name || !Number.isFinite(count)) return null;
+        return { name, count };
+      };
+
+      // Keyed by name: a theme that ships both a desktop rail and a mobile
+      // drawer has the same facet twice, and summing both doubles the dealer's
+      // inventory.
+      const byName = new Map();
+      for (const box of document.querySelectorAll(
+        'input[type=checkbox][name="model"], input[type=checkbox][name="model[]"]'
+      )) {
+        // The label carries the count; `textContent` not `innerText`, because a
+        // collapsed panel is not rendered.
+        const row = parseRow(clean((box.closest("label") || box.parentElement)?.textContent));
+        if (row && !byName.has(row.name.toLowerCase())) byName.set(row.name.toLowerCase(), row);
+      }
+      if (byName.size >= 1) return { found: true, rows: [...byName.values()] };
+
       const headings = Array.from(
-        document.querySelectorAll("h1,h2,h3,h4,h5,legend,button,summary,[role=heading],label,span")
+        // `a` included because Sokal's accordion headings are anchors.
+        document.querySelectorAll(
+          "h1,h2,h3,h4,h5,legend,button,summary,a,[role=heading],label,span"
+        )
       ).filter((element) => /^models?$/i.test(clean(element.textContent)));
 
       for (const heading of headings) {
@@ -100,15 +133,7 @@
         let container = heading.parentElement;
         for (let depth = 0; depth < 5 && container; depth += 1) {
           const rows = Array.from(container.querySelectorAll("label, li, a, [role=checkbox]"))
-            .map((row) => clean(row.innerText || row.textContent))
-            .map((text) => {
-              const match = text.match(/^(.+?)\s*[\(\[]?\s*([\d,]+)\s*[\)\]]?(?:\s*available)?$/i);
-              if (!match) return null;
-              const count = Number(match[2].replace(/,/g, ""));
-              const name = clean(match[1]);
-              if (!name || !Number.isFinite(count)) return null;
-              return { name, count };
-            })
+            .map((row) => parseRow(clean(row.textContent)))
             .filter(Boolean);
 
           // Two counted rows is the smallest thing that is plausibly a facet

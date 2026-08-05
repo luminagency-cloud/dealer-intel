@@ -132,8 +132,12 @@
             .replace(/[-]/g, "")
             .replace(/\s+/g, " ")
             .trim();
+        // Radios are here because single-brand DDC stores render the model
+        // facet as a radio group ("Model Family" on Toyota themes) rather than
+        // as checkboxes. We only ever READ these controls, so single- vs
+        // multi-select makes no difference to us.
         const CONTROL_SELECTOR =
-          'input[type="checkbox"], [role="checkbox"], a[data-value], button[aria-label*="matched vehicles" i]';
+          'input[type="checkbox"], input[type="radio"], [role="checkbox"], a[data-value], button[aria-label*="matched vehicles" i]';
 
         // Find the tightest container whose id or heading looks like this
         // facet.
@@ -144,15 +148,24 @@
         // checkboxes for `make`, `model` and the rest until each is opened.
         // Requiring controls here meant the container was skipped before the
         // expand step could ever run — the facet could never be read at all.
+        //
+        // DDC facet ids are camelCase, and the humps are word boundaries the
+        // matchers have to see: the "Model Family" facet is `superModel`, whose
+        // "model" is not preceded by a non-letter, so it failed `want` outright.
+        // The real container then dropped to the loosest tier and lost on
+        // subtree size to its own `superModel--heading` div — which holds no
+        // controls, so the facet read empty forever.
+        const humps = (value) => value.replace(/([a-z])([A-Z])/g, "$1 $2");
+
         let best = null;
         const groups = document.querySelectorAll(
           "[data-facet-group], [data-facet], fieldset, section, div[id], li[id]"
         );
         for (const group of groups) {
-          const facetAttr = clean(
-            group.getAttribute("data-facet-group") || group.getAttribute("data-facet")
+          const facetAttr = humps(
+            clean(group.getAttribute("data-facet-group") || group.getAttribute("data-facet"))
           );
-          const id = clean(group.id);
+          const id = humps(clean(group.id));
           const heading = clean(
             group.querySelector("legend, h2, h3, h4, [role=heading], button")?.textContent
           );
