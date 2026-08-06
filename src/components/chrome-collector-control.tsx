@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
@@ -190,10 +190,12 @@ export function ChromeCollectorControl({
   switchToCurrentAction: () => Promise<void>;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [fallbackAvailable, setFallbackAvailable] = useState(false);
+  const autoStarted = useRef(false);
 
   async function startChromeCollection() {
     if (busy) return;
@@ -339,6 +341,19 @@ export function ChromeCollectorControl({
       }
     );
   }
+
+  // AUTO_START_RUN: the create-run action redirects here with `autostart=1`
+  // when the operator's env asks collection to begin without a second click.
+  // An interrupted run is left alone — resuming stays a deliberate choice.
+  useEffect(() => {
+    if (autoStarted.current) return;
+    if (searchParams.get("autostart") !== "1") return;
+    if (!canStart || needsRecovery) return;
+    autoStarted.current = true;
+    void claimChromeRun();
+    // Fires once on arrival; claimChromeRun holds a browser lock until done.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex max-w-xl flex-col items-end gap-2">

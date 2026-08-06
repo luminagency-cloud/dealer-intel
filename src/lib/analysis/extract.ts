@@ -195,10 +195,13 @@ function firstMatch(text: string, re: RegExp): RegExpMatchArray | null {
 // --- Field extractors ----------------------------------------------------
 
 function extractMonthlyPayment(text: string) {
-  // "$279/mo", "$279 per month", "$279 a month", "$279 monthly"
+  // "$279/mo", "$279 per month", "$279 a month", "$279 monthly", and the
+  // slash-plus-word form real ad art uses: "$419 /per mo." — the slash and the
+  // "per" are stacked separately in the graphic, so they must both be optional
+  // AND combinable, not alternatives.
   const m = firstMatch(
     text,
-    /\$\s?([\d,]{2,7})\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i
+    /\$\s?([\d,]{2,7})\s*\/?\s*(?:per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i
   );
   return m ? { value: parseAmount(m[1]), match: m[0].trim() } : null;
 }
@@ -208,8 +211,47 @@ function extractApr(text: string) {
   const m =
     firstMatch(text, /([\d]+(?:\.\d+)?)\s*%\s*APR\b/i) ??
     firstMatch(text, /\bAPR[:\s]+([\d]+(?:\.\d+)?)\s*%/i) ??
-    firstMatch(text, /([\d]+(?:\.\d+)?)\s*%\s*(?:financing|annual percentage rate)\b/i);
+    firstMatch(text, /([\d]+(?:\.\d+)?)\s*%\s*(?:financing|annual percentage rate)\b/i) ??
+    // Hero ads routinely drop the letters "APR" entirely and let the term carry
+    // the meaning: "2.9% for 72 months!". Requiring the term keeps this off
+    // unrelated percentages ("2.9% on gas Forester only", "0% down").
+    firstMatch(
+      text,
+      /([\d]+(?:\.\d+)?)\s*%\s*(?:apr\s+)?for\s+\d{2,3}\s*(?:months?|mos?)\b/i
+    );
   return m ? { value: Number(m[1]), match: m[0].trim() } : null;
+}
+
+/** EVERY distinct rate advertised in the chunk, in reading order. Hero ads
+ *  routinely stack two finance tiers side by side ("0% APR FOR 36 MONTHS |
+ *  3.9% APR FOR 84 MONTHS") — those are two separate offers, and reading only
+ *  the first silently drops the second. Deduped by rate so the same tier
+ *  restated in the fine print ("0% APR financing for 36 months equals $27.78
+ *  per $1,000 financed") doesn't become a third offer; the earliest occurrence
+ *  wins, which is the ad copy rather than the disclaimer. */
+function extractAprs(text: string): Array<{ value: number; match: string }> {
+  // Same forms extractApr accepts, run globally. Order matters: the first
+  // pattern to register a rate supplies the anchor text used for term lookup,
+  // so the bare "0% APR" form is tried before the term-carrying one.
+  const patterns = [
+    /([\d]+(?:\.\d+)?)\s*%\s*APR\b/gi,
+    /\bAPR[:\s]+([\d]+(?:\.\d+)?)\s*%/gi,
+    /([\d]+(?:\.\d+)?)\s*%\s*(?:financing|annual percentage rate)\b/gi,
+    /([\d]+(?:\.\d+)?)\s*%\s*(?:apr\s+)?for\s+\d{2,3}\s*(?:months?|mos?)\b/gi,
+  ];
+  const byRate = new Map<number, { pos: number; value: number; match: string }>();
+  for (const re of patterns) {
+    for (const m of text.matchAll(re)) {
+      const value = Number(m[1]);
+      const prev = byRate.get(value);
+      if (!prev || m.index < prev.pos) {
+        byRate.set(value, { pos: m.index, value, match: m[0].trim() });
+      }
+    }
+  }
+  return [...byRate.values()]
+    .sort((a, b) => a.pos - b.pos)
+    .map(({ value, match }) => ({ value, match }));
 }
 
 function extractTerm(text: string) {
@@ -1136,42 +1178,96 @@ function splitHtmlIntoVehicleCards(html: string): string[] {
   return best;
 }
 
-/** Detects combo ad chunks — a single OCR or text window that contains both
- *  an APR offer and a monthly-payment offer. Image-based ad cards commonly
- *  present two alternatives side-by-side (APR column / lease column) with no
- *  "OR" text between them, so no separator is required. Whenever both fields
- *  appear together the chunk is split into a pure-finance offer (APR only) and
- *  a payment offer (lease if due-at-signing is present, otherwise finance).
- *  Returns the original single offer when only one pricing field is present. */
-function splitComboOffer(offer: ExtractedOffer): ExtractedOffer[] {
-  if (offer.monthlyPayment === null || offer.apr === null) return [offer];
+/** Splits one ad chunk into the separate offers it actually advertises. Two
+ *  shapes, and a hero ad can carry either or both:
+ *   - an APR column beside a monthly-payment column (image ads present these
+ *     side by side with no "OR" text, so no separator is required), and
+ *   - two or more APR tiers ("0% APR FOR 36 MONTHS | 3.9% APR FOR 84 MONTHS"),
+ *     which are two distinct finance offers rather than one.
+ *  Each alternative then re-resolves its term against its OWN rate/payment
+ *  anchor, so the term stated for one tier is never reported on the other.
+ *  Returns the original single offer when the chunk advertises only one thing. */
+function splitComboOffer(offer: ExtractedOffer, text: string): ExtractedOffer[] {
+  const found = offer.apr === null ? [] : extractAprs(text);
+  // extractApr found a rate, so the global pass should too; fall back to the
+  // single known rate rather than dropping it if the two ever disagree.
+  const aprs =
+    offer.apr !== null && found.length === 0
+      ? [{ value: offer.apr, match: offer.matches.apr ?? "" }]
+      : found;
+  const hasPayment = offer.monthlyPayment !== null;
+  const isCombo = hasPayment && offer.apr !== null;
+  if (!isCombo && aprs.length <= 1) return [offer];
 
-  const financeOffer: ExtractedOffer = {
+  const results: ExtractedOffer[] = aprs.map((apr) => ({
     ...offer,
     offerType: "finance",
+    apr: apr.value,
     monthlyPayment: null,
     dueAtSigning: null,
     mileageAllowance: null,
-    matches: Object.fromEntries(
-      Object.entries(offer.matches).filter(([k]) => k !== "monthlyPayment" && k !== "dueAtSigning")
-    ),
-  };
+    matches: {
+      ...Object.fromEntries(
+        Object.entries(offer.matches).filter(
+          ([k]) => k !== "monthlyPayment" && k !== "dueAtSigning"
+        )
+      ),
+      apr: apr.match,
+    },
+  }));
 
-  const paymentOffer: ExtractedOffer = {
-    ...offer,
-    // Keep the lease call the combo chunk already earned (due-at-signing, a
-    // lease keyword, or a mileage allowance); only a bare payment is finance.
-    offerType:
-      offer.offerType === "lease" || offer.dueAtSigning !== null
-        ? "lease"
-        : "finance",
-    apr: null,
-    matches: Object.fromEntries(
-      Object.entries(offer.matches).filter(([k]) => k !== "apr")
-    ),
-  };
+  if (hasPayment) {
+    results.push({
+      ...offer,
+      // Keep the lease call the combo chunk already earned (due-at-signing, a
+      // lease keyword, or a mileage allowance); only a bare payment is finance.
+      offerType:
+        offer.offerType === "lease" || offer.dueAtSigning !== null
+          ? "lease"
+          : "finance",
+      apr: null,
+      matches: Object.fromEntries(
+        Object.entries(offer.matches).filter(([k]) => k !== "apr")
+      ),
+    });
+  }
 
-  return [financeOffer, paymentOffer];
+  // Resolve every alternative's own term first, so each can then tell whether
+  // the term it inherited from the shared chunk was actually claimed by a
+  // neighbour.
+  const anchored = results.map((result) => {
+    const anchor =
+      result.monthlyPayment !== null
+        ? result.matches.monthlyPayment
+        : result.matches.apr;
+    return anchor ? extractTermAfterAnchor(text, anchor) : null;
+  });
+
+  results.forEach((result, i) => {
+    const own = anchored[i];
+    if (own) {
+      result.termMonths = own.value;
+      result.matches.termMonths = own.match;
+    } else if (
+      // Every alternative inherits the chunk's single term, but a combo ad
+      // often states only one: "LEASE FOR $389/MO $2,999 due at signing -or- 0%
+      // FINANCING for 60 months" has a finance term and no lease term, and the
+      // lease row was reporting "60 mo" as if the ad had said so. Drop the
+      // inherited term only when another alternative anchored that exact value
+      // to its own price — an unanchored term nobody else claimed (e.g. "2.9%
+      // APR Financing for Up to 48 Months", which the anchor pattern can't
+      // match) is still this offer's own and must survive.
+      anchored.some((other, j) => j !== i && other?.value === result.termMonths)
+    ) {
+      result.termMonths = null;
+      delete result.matches.termMonths;
+    }
+    if (result.apr !== null && result.matches.apr) {
+      result.rawText = contextAround(text, result.matches.apr);
+    }
+  });
+
+  return results;
 }
 
 function extractTermAfterAnchor(text: string, anchor: string): { value: number; match: string } | null {
@@ -1187,57 +1283,17 @@ function extractTermAfterAnchor(text: string, anchor: string): { value: number; 
   return { value, match: termMatch?.[0] ?? `${value} months` };
 }
 
-/** One repeated DOM card is one vehicle promotion. It may advertise two real
- * alternatives (lease payment and APR), so split those alternatives once and
- * resolve each term against its own anchor. Customer-cash copy is deliberately
- * ignored; it is neither an advertised purchase price nor part of either row. */
+/** One repeated DOM card is one vehicle promotion. It may advertise several
+ * real alternatives (a lease payment, and one APR tier per rate), so hand the
+ * whole card to the splitter, which separates them and anchors each term to its
+ * own price. Customer-cash copy is deliberately ignored; it is neither an
+ * advertised purchase price nor part of any of those rows. */
 function extractVehicleOffersFromCard(
   text: string,
   hints: ExtractHints
 ): ExtractedOffer[] {
   const offer = extractOfferFromText(text, hints);
-  if (!offer) return [];
-
-  const results = splitComboOffer(offer);
-  const payment = extractMonthlyPayment(text);
-  const apr = extractApr(text);
-
-  // Resolve every alternative's own term first, so each can then tell whether
-  // the term it inherited from the shared chunk was actually claimed by its
-  // neighbour.
-  const anchored = results.map((result) =>
-    result.monthlyPayment !== null && payment
-      ? extractTermAfterAnchor(text, payment.match)
-      : result.apr !== null && apr
-        ? extractTermAfterAnchor(text, apr.match)
-        : null
-  );
-
-  results.forEach((result, i) => {
-    const own = anchored[i];
-    if (own) {
-      result.termMonths = own.value;
-      result.matches.termMonths = own.match;
-    } else if (
-      // Both halves of a split inherit the chunk's single term, but a combo ad
-      // often states only one: "LEASE FOR $389/MO $2,999 due at signing -or- 0%
-      // FINANCING for 60 months" has a finance term and no lease term, and the
-      // lease row was reporting "60 mo" as if the ad had said so. Drop the
-      // inherited term only when the other alternative anchored that exact
-      // value to its own price — an unanchored term nobody else claimed (e.g.
-      // "2.9% APR Financing for Up to 48 Months", which the anchor pattern
-      // can't match) is still this offer's own and must survive.
-      anchored.some((other, j) => j !== i && other?.value === result.termMonths)
-    ) {
-      result.termMonths = null;
-      delete result.matches.termMonths;
-    }
-    if (result.apr !== null && apr) {
-      result.rawText = contextAround(text, apr.match);
-    }
-  });
-
-  return results;
+  return offer ? splitComboOffer(offer, text) : [];
 }
 
 /** Captured disclaimer modals are already one bounded promotion, even though
@@ -1290,7 +1346,7 @@ function extractVehicleOffersFromText(
     );
     const offer = extractOfferFromText(chunk, hints);
     if (!offer) continue;
-    for (const split of splitComboOffer(offer)) {
+    for (const split of splitComboOffer(offer, chunk)) {
       const sig = offerSig(split);
       if (seen.has(sig)) continue;
       seen.add(sig);
@@ -1303,7 +1359,7 @@ function extractVehicleOffersFromText(
   const offer = extractOfferFromText(text, hints);
   if (!offer) return [];
   const fallbackSeen = new Set<string>();
-  return splitComboOffer(offer).filter((split) => {
+  return splitComboOffer(offer, text).filter((split) => {
     const sig = offerSig(split);
     if (fallbackSeen.has(sig)) return false;
     fallbackSeen.add(sig);

@@ -88,7 +88,7 @@ export function RunScopePicker({
       {/* Collector backend — persisted on the run, never a global toggle. */}
       <select
         name="collectorMode"
-        defaultValue="current"
+        defaultValue="chrome_extension"
         aria-label="Collector"
         className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
       >

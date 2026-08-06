@@ -84,7 +84,7 @@ Status: **implemented and configured**
 
 Status: **implemented and locally configured**
 
-- `.env` contains the news and inventory API configuration keys.
+- `.env` contains the news API configuration keys.
 - News and inventory are wired into the current ops flow.
 - Inventory runs through the inventory page/batch flow and appears in report
   views as an Inventory Snapshot section.
@@ -93,11 +93,17 @@ Status: **implemented and locally configured**
   (`dealer_on`), Apollo (`apollo`), Dealer Alchemist (`dealer_alchemist`),
   Dealer Masters (`dealer_masters`), and Sokal (`sokal`). Each adapter owns its
   navigation, filtering, and count reading. Unknown platforms still fail
-  closed. The sibling `dealer-inventory-api` remains the matched baseline until
-  every dealer on a platform passes.
-- The Inventory page exposes separate API-baseline and Chrome run buttons plus
-  a Cancel Run control that stops the queue and closes the Chrome collection
-  window.
+  closed. The sibling `dealer-inventory-api` fallback and its `INVENTORY_API_*`
+  configuration were removed in 3.7.1 — visible Chrome is the only inventory
+  collector.
+- The Inventory page exposes one Run button plus a Cancel Run control that
+  stops the queue and closes the Chrome collection window.
+- New collection runs default to the Chrome extension collector.
+- `AUTO_START_RUN=true` applies to both collectors: the current collector
+  starts server-side at creation, while a Chrome run is redirected to
+  `/runs/<id>?autostart=1` and the run page claims it on arrival.
+  `AUTO_ANALYZE_AFTER_SCRAPE` already covered both — every collector finishes
+  through `finalizeRunIfDone`.
 
 ### Reporting
 

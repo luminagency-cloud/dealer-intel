@@ -19,7 +19,7 @@ import type { ExtractedOffer } from "./extract";
  * The zero-DOM-text "image pass" (image-only platforms like DDC/Dealer.com)
  * also no longer routes through this module — runner.ts OCRs the screenshot
  * with Mistral and runs the same deterministic extractOffers() used for DOM
- * text. See src/lib/analysis/ocr-mistral.ts.
+ * text. See src/lib/analysis/ocr.ts.
  *
  * Gated like the compliance grader: with no ANTHROPIC_API_KEY it's a no-op, so
  * the platform builds and runs unchanged. Drop a key in `.env` to activate.

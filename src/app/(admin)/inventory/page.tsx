@@ -1,7 +1,7 @@
 import { asc, desc, inArray } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, runGroupMembers, runGroups, sites } from "@/lib/db";
 import { inventoryResults } from "@/lib/db/schema";
-import { isInventoryConfigured, brandsToMakeAllowList, getInventoryFreshnessStatus } from "@/lib/inventory";
+import { brandsToMakeAllowList, getInventoryFreshnessStatus } from "@/lib/inventory";
 import { getActiveInventoryBatch } from "@/lib/inventory-batch";
 import { formatInventoryDetail } from "@/lib/coverage";
 import { DbNotConfigured } from "@/components/db-not-configured";
@@ -19,14 +19,13 @@ export default async function InventoryPage() {
     );
   }
 
-  const configured = isInventoryConfigured();
   const db = getDb();
 
   const [allGroups, allSites, allMembers, freshness] = await Promise.all([
     db.select().from(runGroups).orderBy(asc(runGroups.name)),
     db.select().from(sites).orderBy(asc(sites.name)),
     db.select({ groupId: runGroupMembers.runGroupId, siteId: runGroupMembers.siteId }).from(runGroupMembers),
-    configured ? getInventoryFreshnessStatus() : Promise.resolve(null),
+    getInventoryFreshnessStatus(),
   ]);
 
   const activeSites = allSites.filter((s) => s.active);
@@ -90,11 +89,9 @@ export default async function InventoryPage() {
             <p className="mt-0.5 text-sm text-zinc-700 dark:text-zinc-200">
               Navigate dealer menus and collect live vehicle counts in visible Chrome.
             </p>
-            {configured && (
-              <p className="mt-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-                This week: {formatInventoryDetail(freshness)}
-              </p>
-            )}
+            <p className="mt-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              This week: {formatInventoryDetail(freshness)}
+            </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs text-zinc-700 mr-1">Age:</span>
@@ -115,7 +112,6 @@ export default async function InventoryPage() {
         <InventoryTable
           sites={tableRows}
           groups={groups}
-          configured={configured}
           initialActiveBatch={await getActiveInventoryBatch()}
         />
       )}

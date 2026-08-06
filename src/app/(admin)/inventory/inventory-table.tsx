@@ -2,11 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useEffect, useRef } from "react";
-import {
-  cancelInventoryBatchAction,
-  runInventoryApiBatch,
-  runInventoryBatch,
-} from "./actions";
+import { cancelInventoryBatchAction, runInventoryBatch } from "./actions";
 import { fmtDateTime } from "@/lib/fmt-date";
 import {
   cancelChromeInventoryCollection,
@@ -65,17 +61,14 @@ type BatchStatusPayload = {
 export function InventoryTable({
   sites,
   groups,
-  configured,
   initialActiveBatch,
 }: {
   sites: InventorySiteRow[];
   groups: { id: string; name: string; siteIds: string[] }[];
-  configured: boolean;
   initialActiveBatch: {
     batchId: string;
     siteIds: string[];
     startedAt: Date;
-    collectorMode: "inventory_api" | "chrome_extension";
   } | null;
 }) {
   const router = useRouter();
@@ -92,11 +85,7 @@ export function InventoryTable({
   const chromeAbortRef = useRef<AbortController | null>(null);
   const cancelRequestedRef = useRef(false);
   const autoResumeAttempted = useRef(false);
-  const recoveryBatchId = useRef(
-    initialActiveBatch?.collectorMode === "chrome_extension"
-      ? initialActiveBatch.batchId
-      : null
-  );
+  const recoveryBatchId = useRef(initialActiveBatch?.batchId ?? null);
 
   // Scope picker state
   const [scope, setScope] = useState<"all" | "groups" | "custom">("all");
@@ -344,53 +333,6 @@ export function InventoryTable({
     }
   }
 
-  async function runApiBaselineFor(ids: string[]) {
-    if (ids.length === 0) return;
-    cancelRequestedRef.current = false;
-    setChromeFailed(false);
-    setChromeMessage("Starting inventory API baseline…");
-    setBatchSiteIds((prev) => {
-      const next = [...new Set([...prev, ...ids])];
-      setBatchTotal(next.length);
-      return next;
-    });
-    setPhases((prev) => {
-      const next = { ...prev };
-      for (const id of ids) {
-        if (prev[id]?.kind !== "running") next[id] = { kind: "queued" };
-      }
-      return next;
-    });
-    if (!activeBatchId) {
-      setBatchStartedAt(new Date());
-      setBatchEndedAt(null);
-    }
-    try {
-      const { batchId } = await runInventoryApiBatch(ids);
-      if (cancelRequestedRef.current) {
-        await cancelInventoryBatchAction(batchId);
-        return;
-      }
-      setActiveBatchId(batchId);
-      setChromeMessage("Inventory API baseline is running…");
-    } catch (error) {
-      setPhases((prev) => {
-        const next = { ...prev };
-        for (const id of ids) {
-          if (next[id]?.kind === "queued" || next[id]?.kind === "running") {
-            next[id] = { kind: "idle" };
-          }
-        }
-        return next;
-      });
-      setBatchEndedAt(new Date());
-      setChromeFailed(true);
-      setChromeMessage(
-        error instanceof Error ? error.message : "Could not start the API baseline"
-      );
-    }
-  }
-
   useEffect(() => {
     const batchId = recoveryBatchId.current;
     if (!batchId || autoResumeAttempted.current) return;
@@ -531,53 +473,42 @@ export function InventoryTable({
           )}
         </div>
 
-        {configured && (
-          <div className="flex items-center gap-2">
-            {anyActive ? (
-              <>
-                <button
-                  disabled
-                  className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-                >
-                  Running — {batchDone} / {batchTotal ?? batchSiteIds.length}
-                  {(batchTotal ?? 0) - batchDone > 0
-                    ? ` (${(batchTotal ?? 0) - batchDone} left)`
-                    : ""}
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelRun}
-                  disabled={cancelling}
-                  className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:bg-zinc-900 dark:text-red-300 dark:hover:bg-red-950"
-                >
-                  {cancelling ? "Cancelling…" : "Cancel Run"}
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={() => runApiBaselineFor(scopeSiteIds())}
-                  disabled={scopeDisabled}
-                  className="rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
-                >
-                  Run API Baseline — {runLabel}
-                </button>
-                <button
-                  onClick={() => runBatchFor(chromeScopeIds)}
-                  disabled={scopeDisabled || chromeScopeHasUnsupported}
-                  title={
-                    chromeScopeHasUnsupported
-                      ? "Some selected dealers have a platform visible Chrome has no adapter for. Choose supported rows individually, or set the dealer's platform if it is missing."
-                      : undefined
-                  }
-                  className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
-                >
-                  Run Chrome Supported — {runLabel}
-                </button>
-              </>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {anyActive ? (
+            <>
+              <button
+                disabled
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                Running — {batchDone} / {batchTotal ?? batchSiteIds.length}
+                {(batchTotal ?? 0) - batchDone > 0
+                  ? ` (${(batchTotal ?? 0) - batchDone} left)`
+                  : ""}
+              </button>
+              <button
+                type="button"
+                onClick={cancelRun}
+                disabled={cancelling}
+                className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:bg-zinc-900 dark:text-red-300 dark:hover:bg-red-950"
+              >
+                {cancelling ? "Cancelling…" : "Cancel Run"}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => runBatchFor(chromeScopeIds)}
+              disabled={scopeDisabled || chromeScopeHasUnsupported}
+              title={
+                chromeScopeHasUnsupported
+                  ? "Some selected dealers have a platform visible Chrome has no adapter for. Choose supported rows individually, or set the dealer's platform if it is missing."
+                  : undefined
+              }
+              className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            >
+              Run — {runLabel}
+            </button>
+          )}
+        </div>
       </div>
 
       {chromeMessage && (
@@ -661,9 +592,7 @@ export function InventoryTable({
                   key={site.id}
                   site={site}
                   phase={phase}
-                  configured={
-                    configured && supportsChromeInventory(site.platform)
-                  }
+                  supported={supportsChromeInventory(site.platform)}
                   onRun={() => runBatchFor([site.id])}
                 />
               );
@@ -740,12 +669,12 @@ const TIER_BTN: Record<AgeTier, string> = {
 function SiteRow({
   site,
   phase,
-  configured,
+  supported,
   onRun,
 }: {
   site: InventorySiteRow;
   phase: RowPhase;
-  configured: boolean;
+  supported: boolean;
   onRun: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -884,7 +813,7 @@ function SiteRow({
                 {expanded ? "Hide" : "Details"}
               </button>
             )}
-            {configured ? (
+            {supported ? (
               <button
                 onClick={onRun}
                 disabled={phase.kind === "running" || phase.kind === "queued"}

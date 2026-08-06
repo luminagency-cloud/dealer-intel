@@ -1,41 +1,9 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb, inventoryResults, sites } from "@/lib/db";
 import { getISOWeekLabel } from "@/lib/cycle";
-import { ensureLocalInventoryApi } from "@/lib/local-inventory-process";
 
 // ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-// Some dealer sites block the deployed inventory API's IP but pass fine when
-// it runs on the operator's own machine. RUN_INVENTORY_LOCALLY switches the
-// collector to a locally-running instance of the same service (see
-// local-inventory-process.ts, which auto-starts it) instead of editing env
-// vars by hand every time. Never active in production, regardless of the flag.
-export function runningLocally(): boolean {
-  return process.env.NODE_ENV !== "production" && process.env.RUN_INVENTORY_LOCALLY === "true";
-}
-
-// Visible-Chrome inventory collection is built into Dealer Intel and does not
-// require the sibling API. The API configuration remains available as a
-// parity/fallback path until the Chrome results have been matched across the
-// supported dealer platforms.
-export const isInventoryConfigured = (): boolean => true;
-
-function apiBase(): string {
-  if (runningLocally()) return process.env.INVENTORY_API_URL_LOCAL ?? "";
-  return process.env.INVENTORY_API_URL ?? "";
-}
-
-function apiHeaders(): HeadersInit {
-  const key = runningLocally()
-    ? process.env.INVENTORY_API_KEY_LOCAL ?? process.env.INVENTORY_API_KEY ?? ""
-    : process.env.INVENTORY_API_KEY ?? "";
-  return { "x-api-key": key, "Content-Type": "application/json" };
-}
-
-// ---------------------------------------------------------------------------
-// API types
+// Result types — visible-Chrome collection is the only inventory collector.
 // ---------------------------------------------------------------------------
 
 export type InventoryTotals = {
@@ -57,65 +25,6 @@ export type ModelRow = {
   inTransit: number | null;
   status: string;
 };
-
-export type InventoryApiSuccess = {
-  ok: true;
-  dealerId?: string;
-  url: string;
-  sourceUrl: string;
-  detectedPlatform: string;
-  accessRoute: "direct" | "browser";
-  attempts: number;
-  totals: InventoryTotals;
-  makeSubtotals: MakeSubtotal[];
-  models: ModelRow[];
-  warnings?: string[];
-};
-
-export type InventoryApiError = {
-  ok: false;
-  dealerId?: string;
-  url: string;
-  error: { message: string; code: string; statusCode?: number; isRateLimited?: boolean };
-};
-
-export type InventoryApiResult = InventoryApiSuccess | InventoryApiError;
-
-// ---------------------------------------------------------------------------
-// API call — one dealer
-// ---------------------------------------------------------------------------
-
-export type CollectInventoryInput = {
-  url: string;
-  makeAllowList: string[];
-  platform?: string;
-  dealerId?: string;
-  name?: string;
-  inventoryPath?: string;
-};
-
-export async function collectInventoryForDealer(
-  input: CollectInventoryInput
-): Promise<InventoryApiResult | null> {
-  if (runningLocally()) await ensureLocalInventoryApi();
-  const base = apiBase();
-  if (!base) return null;
-  const endpoint = `${base}/v1/inventory`;
-  try {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify(input),
-      cache: "no-store",
-    });
-    console.log(`[inventory] POST ${endpoint} (${input.name ?? input.url}) → ${res.status}`);
-    const json = await res.json();
-    return json as InventoryApiResult;
-  } catch (err) {
-    console.error(`[inventory] fetch error for ${input.url}:`, err);
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Storage
@@ -176,80 +85,6 @@ export async function upsertInventoryBatchRow(
   return row;
 }
 
-/** Collect inventory for a site and store the result. */
-export async function collectAndStore(
-  site: { id: string; url: string; brand: string | null; platform: string | null; name: string; inventoryPath?: string | null },
-  batchId: string
-): Promise<CollectAndStoreResult> {
-  const weekKey = getISOWeekLabel();
-  const makeAllowList = brandsToMakeAllowList(site.brand);
-
-  const apiResult = await collectInventoryForDealer({
-    url: site.url,
-    makeAllowList,
-    platform: site.platform ?? undefined,
-    dealerId: site.id,
-    name: site.name,
-    inventoryPath: site.inventoryPath ?? undefined,
-  });
-
-  if (!apiResult) {
-    const err = { message: "Network error — no response from inventory API", code: "network_error" };
-    const row = await upsertInventoryBatchRow({
-      siteId: site.id,
-      batchId,
-      weekKey,
-      status: "failed",
-      error: err,
-      detectedPlatform: null,
-      accessRoute: null,
-      attempts: null,
-      sourceUrl: null,
-      totals: null,
-      makeSubtotals: null,
-      models: null,
-      warnings: [],
-    });
-    return { id: row.id, status: "failed", error: err };
-  }
-
-  if (!apiResult.ok) {
-    const row = await upsertInventoryBatchRow({
-      siteId: site.id,
-      batchId,
-      weekKey,
-      status: "failed",
-      error: apiResult.error,
-      detectedPlatform: null,
-      accessRoute: null,
-      attempts: null,
-      sourceUrl: null,
-      totals: null,
-      makeSubtotals: null,
-      models: null,
-      warnings: [],
-    });
-    return { id: row.id, status: "failed", error: apiResult.error };
-  }
-
-  const row = await upsertInventoryBatchRow({
-      siteId: site.id,
-      batchId,
-      weekKey,
-      status: "ok",
-      detectedPlatform: apiResult.detectedPlatform,
-      accessRoute: apiResult.accessRoute,
-      attempts: apiResult.attempts,
-      sourceUrl: apiResult.sourceUrl,
-      totals: apiResult.totals,
-      makeSubtotals: apiResult.makeSubtotals,
-      models: apiResult.models,
-      warnings: apiResult.warnings ?? [],
-      error: null,
-    });
-  return { id: row.id, status: "ok", totals: apiResult.totals, makeSubtotals: apiResult.makeSubtotals, models: apiResult.models };
-}
-
 export type ChromeInventoryResult = {
   sourceUrl: string;
   detectedPlatform: string;
@@ -259,8 +94,7 @@ export type ChromeInventoryResult = {
   warnings?: string[];
 };
 
-/** Stores a visible-Chrome inventory result in the same row shape used by the
- * sibling API, keeping reporting and freshness behavior collector-agnostic. */
+/** Stores a visible-Chrome inventory result. */
 export async function storeChromeInventoryResult(
   siteId: string,
   batchId: string,

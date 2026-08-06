@@ -4,7 +4,6 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
   brandsToMakeAllowList,
-  collectAndStore,
   storeChromeInventoryResult,
   type ChromeInventoryResult,
   type CollectAndStoreResult,
@@ -12,22 +11,15 @@ import {
 import { supportsChromeInventory } from "@/lib/inventory-platforms";
 
 /**
- * Background inventory batch execution. The "Run" server action seeds/extends
- * a batch here and returns immediately; processing happens off-request in
- * this Node process so it keeps going regardless of what the browser tab
- * does afterward (navigates away, closes, whatever) — mirroring the pattern
- * `run-executor.ts` uses for collection runs, for the same reason: a
- * client-side loop that awaits one server action per work item can get
- * permanently stranded mid-navigation (Next's router discards the in-flight
- * action's promise without ever resolving it), silently killing the rest of
- * the queue.
+ * Inventory batch bookkeeping. Collection itself runs in the operator's
+ * visible Chrome via the extension; this module seeds the work queue, hands
+ * it out, and records each dealer's outcome.
  *
- * Progress is also persisted to `inventory_results` as queued/running rows so
- * the UI can poll reliably even if status requests land on a different worker.
+ * Progress is persisted to `inventory_results` as queued/running rows so the
+ * UI can poll reliably even if status requests land on a different worker.
  */
 
 interface ActiveBatch {
-  collectorMode: "inventory_api" | "chrome_extension";
   /** Every site ever added to this batch, in the order added — for display. */
   siteIds: string[];
   /** Mutable work queue; shift() one at a time. Clicking "Run" again while a
@@ -50,13 +42,9 @@ type PersistedBatchRow =
 // Survives dev-server HMR module reloads; one active batch at a time.
 const globalState = globalThis as unknown as {
   __activeInventoryBatch?: { id: string; batch: ActiveBatch } | null;
-  __cancelledInventoryBatchIds?: Set<string>;
 };
 if (globalState.__activeInventoryBatch === undefined) {
   globalState.__activeInventoryBatch = null;
-}
-if (!globalState.__cancelledInventoryBatchIds) {
-  globalState.__cancelledInventoryBatchIds = new Set<string>();
 }
 
 async function clearStaleActiveBatch() {
@@ -77,11 +65,7 @@ async function clearStaleActiveBatch() {
   }
 }
 
-async function seedBatchRows(
-  batchId: string,
-  siteIds: string[],
-  collectorMode: ActiveBatch["collectorMode"]
-) {
+async function seedBatchRows(batchId: string, siteIds: string[]) {
   if (siteIds.length === 0) return;
   const weekKey = getISOWeekLabel();
   await getDb().insert(inventoryResults).values(
@@ -90,7 +74,7 @@ async function seedBatchRows(
       batchId,
       weekKey,
       status: "queued",
-      accessRoute: collectorMode === "chrome_extension" ? "chrome" : null,
+      accessRoute: "chrome",
     }))
   );
 }
@@ -99,7 +83,6 @@ export async function getActiveInventoryBatch(): Promise<{
   batchId: string;
   siteIds: string[];
   startedAt: Date;
-  collectorMode: ActiveBatch["collectorMode"];
 } | null> {
   await clearStaleActiveBatch();
   const active = globalState.__activeInventoryBatch;
@@ -108,7 +91,6 @@ export async function getActiveInventoryBatch(): Promise<{
       batchId: active.id,
       siteIds: active.batch.siteIds,
       startedAt: active.batch.startedAt,
-      collectorMode: active.batch.collectorMode,
     };
   }
 
@@ -117,7 +99,6 @@ export async function getActiveInventoryBatch(): Promise<{
       batchId: inventoryResults.batchId,
       siteId: inventoryResults.siteId,
       collectedAt: inventoryResults.collectedAt,
-      accessRoute: inventoryResults.accessRoute,
     })
     .from(inventoryResults)
     .where(inArray(inventoryResults.status, ["queued", "running"]))
@@ -131,9 +112,6 @@ export async function getActiveInventoryBatch(): Promise<{
     batchId,
     siteIds: [...new Set(batchRows.map((row) => row.siteId))],
     startedAt: batchRows[0]?.collectedAt ?? new Date(),
-    collectorMode: batchRows.some((row) => row.accessRoute === "chrome")
-      ? "chrome_extension"
-      : "inventory_api",
   };
 }
 
@@ -143,7 +121,6 @@ export interface InventoryBatchStatus {
   current: string | null;
   startedAt: Date | null;
   results: Record<string, PersistedBatchRow>;
-  collectorMode: ActiveBatch["collectorMode"];
 }
 
 /** Latest result per site within one batch (one row per site, updated
@@ -158,7 +135,6 @@ export async function getInventoryBatchStatus(batchId: string): Promise<Inventor
       siteId: inventoryResults.siteId,
       collectedAt: inventoryResults.collectedAt,
       status: inventoryResults.status,
-      accessRoute: inventoryResults.accessRoute,
       totals: inventoryResults.totals,
       makeSubtotals: inventoryResults.makeSubtotals,
       models: inventoryResults.models,
@@ -199,11 +175,6 @@ export async function getInventoryBatchStatus(batchId: string): Promise<Inventor
     current: isThisBatch ? active.batch.current : persistedCurrent,
     startedAt: isThisBatch ? active.batch.startedAt : rows[0]?.collectedAt ?? null,
     results,
-    collectorMode: isThisBatch
-      ? active.batch.collectorMode
-      : rows.some((row) => row.accessRoute === "chrome")
-        ? "chrome_extension"
-        : "inventory_api",
   };
 }
 
@@ -234,88 +205,6 @@ async function markBatchRow(
         eq(inventoryResults.siteId, siteId)
       )
     );
-}
-
-async function runBatch(batchId: string): Promise<void> {
-  try {
-    while (true) {
-      if (globalState.__cancelledInventoryBatchIds?.has(batchId)) return;
-      const active = globalState.__activeInventoryBatch;
-      if (!active || active.id !== batchId) return;
-      const siteId = active.batch.remaining.shift();
-      if (!siteId) return;
-      active.batch.current = siteId;
-      await markBatchRow(siteId, batchId, "running");
-
-      const [site] = await getDb().select().from(sites).where(eq(sites.id, siteId));
-      if (!site) {
-        await markBatchRow(siteId, batchId, "failed", {
-          message: "Dealer record not found",
-          code: "missing_site",
-        });
-        continue;
-      }
-
-      try {
-        await collectAndStore(site, batchId);
-        if (globalState.__cancelledInventoryBatchIds?.has(batchId)) {
-          await markBatchRow(siteId, batchId, "cancelled");
-          return;
-        }
-      } catch (err) {
-        if (globalState.__cancelledInventoryBatchIds?.has(batchId)) {
-          await markBatchRow(siteId, batchId, "cancelled");
-          return;
-        }
-        console.error(`[inventory-batch] ${batchId} failed for site ${siteId}:`, err);
-        await markBatchRow(siteId, batchId, "failed", {
-          message: err instanceof Error ? err.message : "Unexpected inventory batch error",
-          code: "unexpected_error",
-        });
-      }
-    }
-  } finally {
-    if (globalState.__activeInventoryBatch?.id === batchId) {
-      globalState.__activeInventoryBatch = null;
-    }
-    globalState.__cancelledInventoryBatchIds?.delete(batchId);
-    revalidatePath("/inventory");
-  }
-}
-
-/** Starts a new inventory batch, or appends to the currently active one.
- *  Returns immediately — the actual collection runs in the background. */
-export async function startInventoryBatch(siteIds: string[]): Promise<{ batchId: string }> {
-  const ids = [...new Set(siteIds)];
-  await clearStaleActiveBatch();
-  const active = globalState.__activeInventoryBatch;
-
-  if (active) {
-    if (active.batch.collectorMode !== "inventory_api") {
-      throw new Error("A Chrome inventory batch is already active");
-    }
-    const fresh = ids.filter((id) => !active.batch.siteIds.includes(id));
-    active.batch.siteIds.push(...fresh);
-    active.batch.remaining.push(...fresh);
-    await seedBatchRows(active.id, fresh, "inventory_api");
-    return { batchId: active.id };
-  }
-
-  const batchId = crypto.randomUUID();
-  const startedAt = new Date();
-  await seedBatchRows(batchId, ids, "inventory_api");
-  globalState.__activeInventoryBatch = {
-    id: batchId,
-    batch: {
-      collectorMode: "inventory_api",
-      siteIds: [...ids],
-      remaining: [...ids],
-      current: null,
-      startedAt,
-    },
-  };
-  void runBatch(batchId);
-  return { batchId };
 }
 
 export interface ChromeInventoryJobItem {
@@ -356,23 +245,19 @@ export async function startChromeInventoryBatch(
   const active = globalState.__activeInventoryBatch;
 
   if (active) {
-    if (active.batch.collectorMode !== "chrome_extension") {
-      throw new Error("An inventory API batch is already active");
-    }
     const fresh = ids.filter((id) => !active.batch.siteIds.includes(id));
     active.batch.siteIds.push(...fresh);
     active.batch.remaining.push(...fresh);
-    await seedBatchRows(active.id, fresh, "chrome_extension");
+    await seedBatchRows(active.id, fresh);
     return { batchId: active.id };
   }
 
   const batchId = crypto.randomUUID();
   const startedAt = new Date();
-  await seedBatchRows(batchId, ids, "chrome_extension");
+  await seedBatchRows(batchId, ids);
   globalState.__activeInventoryBatch = {
     id: batchId,
     batch: {
-      collectorMode: "chrome_extension",
       siteIds: [...ids],
       remaining: [...ids],
       current: null,
@@ -498,15 +383,10 @@ export async function failChromeInventoryItem(
   await settleChromeBatch(batchId, siteId);
 }
 
-/** Cancels queued work immediately. The API collector finishes unwinding its
- * current request, while the Chrome client separately aborts and closes its
- * visible collection window. */
+/** Cancels queued work immediately. The Chrome client separately aborts and
+ * closes its visible collection window. */
 export async function cancelInventoryBatch(batchId: string): Promise<void> {
   const active = globalState.__activeInventoryBatch;
-  const apiIsRunning =
-    active?.id === batchId && active.batch.collectorMode === "inventory_api";
-  if (apiIsRunning) globalState.__cancelledInventoryBatchIds?.add(batchId);
-
   if (active?.id === batchId) {
     active.batch.remaining = [];
     active.batch.current = null;

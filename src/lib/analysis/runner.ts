@@ -32,7 +32,7 @@ import {
   type ExtractedOffer,
 } from "./extract";
 import { getComplianceGrader, type ComplianceGrader } from "./compliance";
-import { runMistralOcr, type OcrArtifact } from "./ocr-mistral";
+import { runOcr, type OcrArtifact } from "./ocr";
 import { parseMileage, deriveAnnualMileage } from "@/lib/report";
 import {
   aiConfidenceThreshold,
@@ -440,12 +440,20 @@ async function loadScreenshotIndex(
   return index;
 }
 
-/** Ad graphics the collector stored for this run, grouped by site+mission.
+/** Ad graphics the collector stored for this run, grouped by SITE.
  *
  *  These are the primary input to the image pass. A given image URL is stored
  *  once per run (the capture key is run+URL), so a hero graphic that appears on
  *  the homepage, the specials page, and every carousel state of both yields one
- *  row — and therefore one OCR call — instead of one per page state. */
+ *  row — and therefore one OCR call — instead of one per page state.
+ *
+ *  Grouped by site and NOT by mission precisely because of that dedupe: the one
+ *  stored row carries whichever mission happened to capture it first, so keying
+ *  by mission made every sibling mission look like it had no ad graphics at all.
+ *  Those pages then fell through to full-page screenshot OCR, which re-read the
+ *  same banner at page scale — a duplicate, lower-confidence offer whose "View
+ *  ad" opened the whole page instead of the ad. Callers narrow the site-wide set
+ *  to the images their own page renders. */
 async function loadAdImageIndex(
   runId: string
 ): Promise<Map<string, Evidence[]>> {
@@ -460,10 +468,9 @@ async function loadAdImageIndex(
     );
   const index = new Map<string, Evidence[]>();
   for (const { evidence: row } of rows) {
-    const key = `${row.siteId}:${row.missionType}`;
-    const list = index.get(key);
+    const list = index.get(row.siteId);
     if (list) list.push(row);
-    else index.set(key, [row]);
+    else index.set(row.siteId, [row]);
   }
   return index;
 }
@@ -525,7 +532,7 @@ async function getOcrArtifact(
     pending = (async () => {
       const buf = bufferHint ?? (await getEvidenceBody(screenshotRow));
       if (!buf) return null;
-      const artifact = await runMistralOcr(buf);
+      const artifact = await runOcr(buf);
       if (artifact) {
         await db
           .insert(ocrArtifacts)
@@ -616,6 +623,36 @@ function legacyAdSources(urls: string[]): AdSource[] {
       return (await isAdSizedImage(buf)) ? buf : null;
     },
   }));
+}
+
+/** The stored ad graphics to run the image pass over for ONE page: the ones
+ *  captured from that page's own states, plus any of the site's graphics this
+ *  page's HTML references. The second half is what makes shared creative work —
+ *  capture stores an image URL once per run, so a banner the homepage and the
+ *  finance page both show belongs to whichever mission reached it first, and the
+ *  other page would otherwise see no ad graphics at all and fall through to
+ *  full-page screenshot OCR. */
+export function storedAdSources(
+  index: Map<string, Evidence[]>,
+  htmlRow: Evidence,
+  html: string
+): AdSource[] {
+  // Capture-state ids are "<pageId>:<state>" — the prefix is the page.
+  const pageId = htmlRow.captureStateId?.split(":")[0];
+  const onPage = new Set(
+    extractAdImageUrls(html, pageUrlFromLabel(htmlRow.label)).map(imageKey)
+  );
+  return (index.get(htmlRow.siteId) ?? [])
+    .filter(
+      (row) =>
+        (pageId && row.captureStateId?.startsWith(`${pageId}:`)) ||
+        (row.sourceUrl != null && onPage.has(imageKey(row.sourceUrl)))
+    )
+    .map((row) => ({
+      url: row.sourceUrl ?? "",
+      evidenceId: row.id,
+      load: () => getEvidenceBody(row),
+    }));
 }
 
 async function fetchImageBuffer(url: string): Promise<Buffer | null> {
@@ -773,7 +810,7 @@ async function serviceCouponOffers(
           ? await getEvidenceBody(stored)
           : await fetchImageBuffer(coupon.imageUrl);
         if (buf && (await isAdSizedImage(buf))) {
-          const artifact = await runMistralOcr(buf);
+          const artifact = await runOcr(buf);
           ocrText = artifact?.imageText ?? null;
         }
       } catch {
@@ -801,14 +838,15 @@ function imageKey(url: string): string {
   }
 }
 
-/** Stored ad graphics for one site+mission, keyed by image identity. */
+/** Stored ad graphics for one site, keyed by image identity. Callers match
+ *  against URLs read out of a specific page, so the site-wide set costs nothing
+ *  extra — an image the page doesn't reference is simply never looked up. */
 function adImagesByUrl(
   index: Map<string, Evidence[]>,
-  siteId: string,
-  missionType: MissionType
+  siteId: string
 ): Map<string, Evidence> {
   const byUrl = new Map<string, Evidence>();
-  for (const row of index.get(`${siteId}:${missionType}`) ?? []) {
+  for (const row of index.get(siteId) ?? []) {
     if (row.sourceUrl) byUrl.set(imageKey(row.sourceUrl), row);
   }
   return byUrl;
@@ -922,7 +960,7 @@ async function processAnalysis(
         extracted = await serviceCouponOffers(
           html,
           site.brand,
-          adImagesByUrl(adImageIndex, row.siteId, row.missionType)
+          adImagesByUrl(adImageIndex, row.siteId)
         );
         console.log(`[analysis] service coupon OCR pass for site="${site.name}" -> ${extracted.length} offer(s)`);
       }
@@ -1265,17 +1303,9 @@ async function processAnalysis(
       // does not visit dealer sites. The legacy branch below exists only for
       // runs captured before ad-image capture shipped; those stay re-analysable
       // at the cost of a live fetch whose creative may no longer match the
-      // capture date. The switch is per RUN, not per mission: an image is
-      // stored once per run, so a mission legitimately having none means its
-      // ads were captured (and are processed) under a sibling mission.
+      // capture date.
       const adSources: AdSource[] = runHasStoredAdImages
-        ? (adImageIndex.get(`${htmlRow.siteId}:${htmlRow.missionType}`) ?? []).map(
-            (row) => ({
-              url: row.sourceUrl ?? "",
-              evidenceId: row.id,
-              load: () => getEvidenceBody(row),
-            })
-          )
+        ? storedAdSources(adImageIndex, htmlRow, html)
         : legacyAdSources(extractAdImageUrls(html, pageUrlFromLabel(htmlRow.label)));
 
       // Run the pass when the page has more ad-card images than offers we found
@@ -1351,7 +1381,7 @@ async function processAnalysis(
         if (!imageBuf) continue;
         let artifact = adOcrByUrl.get(ad.url);
         if (artifact === undefined) {
-          artifact = await runMistralOcr(imageBuf);
+          artifact = await runOcr(imageBuf);
           adOcrByUrl.set(ad.url, artifact);
         }
         if (!artifact || !artifact.imageText.trim()) continue;
@@ -1654,7 +1684,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           extracted = await serviceCouponOffers(
             html,
             site.brand,
-            adImagesByUrl(adImageIndex, row.siteId, row.missionType)
+            adImagesByUrl(adImageIndex, row.siteId)
           );
         }
         const pageText = htmlToText(html);
@@ -1760,13 +1790,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
         // Stored ad graphics first; live fetch only for pre-capture runs — see
         // the same switch in processAnalysis.
         const adSources: AdSource[] = runHasStoredAdImages
-          ? (adImageIndex.get(`${htmlRow.siteId}:${htmlRow.missionType}`) ?? []).map(
-              (row) => ({
-                url: row.sourceUrl ?? "",
-                evidenceId: row.id,
-                load: () => getEvidenceBody(row),
-              })
-            )
+          ? storedAdSources(adImageIndex, htmlRow, html)
           : legacyAdSources(extractAdImageUrls(html, pageUrlFromLabel(htmlRow.label)));
         const wantImagePass = coveredCount === 0 || adSources.length > coveredCount;
         if (!wantImagePass) continue;
@@ -1826,7 +1850,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
             if (!imageBuf) continue;
             let artifact = adOcrByUrl.get(ad.url);
             if (artifact === undefined) {
-              artifact = await runMistralOcr(imageBuf);
+              artifact = await runOcr(imageBuf);
               adOcrByUrl.set(ad.url, artifact);
             }
             if (!artifact || !artifact.imageText.trim()) continue;

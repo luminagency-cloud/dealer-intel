@@ -172,13 +172,22 @@ export async function createRun(formData?: FormData) {
   }
   revalidatePath("/runs");
 
-  if (collectorMode === "current" && process.env.AUTO_START_RUN === "true") {
+  // AUTO_START_RUN jumps straight from creation to collection for either
+  // collector. The current collector runs server-side so it starts here;
+  // Chrome collection is driven by the operator's browser, so the run page
+  // picks the `autostart` flag up on arrival and claims the run itself.
+  const autoStart = process.env.AUTO_START_RUN === "true";
+  if (autoStart && collectorMode === "current") {
     void startRunExecution(run.id).catch((err) => {
       console.error(`AUTO_START_RUN: failed to start run ${run.id}:`, err);
     });
   }
 
-  redirect(`/runs/${run.id}`);
+  redirect(
+    autoStart && collectorMode === "chrome_extension"
+      ? `/runs/${run.id}?autostart=1`
+      : `/runs/${run.id}`
+  );
 }
 
 export async function deleteRun(runId: string) {

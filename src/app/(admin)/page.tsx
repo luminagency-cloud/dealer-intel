@@ -11,7 +11,7 @@ import {
   type WeekAggregate,
 } from "@/lib/db/ops-board";
 import { getLocalNewsPullStatus, isNewsConfigured } from "@/lib/news";
-import { getInventoryFreshnessStatus, isInventoryConfigured } from "@/lib/inventory";
+import { getInventoryFreshnessStatus } from "@/lib/inventory";
 import { getActiveInventoryBatch, getInventoryBatchStatus } from "@/lib/inventory-batch";
 import { formatCollectDetail, formatAnalyzeDetail, formatInventoryDetail, getLiveAnalysisProgress } from "@/lib/coverage";
 import { refreshNews } from "./actions";
@@ -251,8 +251,8 @@ export default async function HomePage() {
     getWeekAggregate(currentCycle, total),
     getWeekAggregate(priorCycle, total),
     isNewsConfigured() ? getLocalNewsPullStatus() : Promise.resolve(null),
-    isInventoryConfigured() ? getInventoryFreshnessStatus() : Promise.resolve(null),
-    isInventoryConfigured() ? getActiveInventoryBatch() : Promise.resolve(null),
+    getInventoryFreshnessStatus(),
+    getActiveInventoryBatch(),
   ]);
 
   // Inventory batches run in the background independent of the weekly
@@ -282,10 +282,9 @@ export default async function HomePage() {
   const newsDone = newsPullStatus !== null || !isNewsConfigured();
   const inventoryActive = activeInventoryBatch !== null;
   const inventoryDone =
-    !isInventoryConfigured() ||
-    (inventoryStatus !== null &&
-      inventoryStatus.totalActiveSites > 0 &&
-      inventoryStatus.okCount + inventoryStatus.failedCount >= inventoryStatus.totalActiveSites);
+    inventoryStatus !== null &&
+    inventoryStatus.totalActiveSites > 0 &&
+    inventoryStatus.okCount + inventoryStatus.failedCount >= inventoryStatus.totalActiveSites;
   const allFrozen = currentAgg.frozenGroupCount >= total && total > 0;
   const allLive = currentAgg.liveGroupCount >= total && total > 0;
 
@@ -341,19 +340,17 @@ export default async function HomePage() {
             </form>
           )}
         </Step>
-        {isInventoryConfigured() && (
-          <Step n={4} label="Run inventory" state={inventoryState}
-            detail={
-              inventoryActive
-                ? `Running — ${inventoryProgress?.done ?? 0} of ${inventoryProgress?.total ?? 0} dealers`
-                : formatInventoryDetail(inventoryStatus)
-            }>
-            <Link href="/inventory" className="mt-1.5 inline-block text-xs text-zinc-700 hover:text-zinc-600 underline underline-offset-2">
-              {inventoryActive ? "View progress →" : "Go to inventory →"}
-            </Link>
-          </Step>
-        )}
-        <Step n={isInventoryConfigured() ? 5 : 4} label="Reports live" state={reportsState} isLast
+        <Step n={4} label="Run inventory" state={inventoryState}
+          detail={
+            inventoryActive
+              ? `Running — ${inventoryProgress?.done ?? 0} of ${inventoryProgress?.total ?? 0} dealers`
+              : formatInventoryDetail(inventoryStatus)
+          }>
+          <Link href="/inventory" className="mt-1.5 inline-block text-xs text-zinc-700 hover:text-zinc-600 underline underline-offset-2">
+            {inventoryActive ? "View progress →" : "Go to inventory →"}
+          </Link>
+        </Step>
+        <Step n={5} label="Reports live" state={reportsState} isLast
           detail={
             !newsDone ? "—"
             : allLive ? `${currentAgg.liveGroupCount} of ${total} groups live`

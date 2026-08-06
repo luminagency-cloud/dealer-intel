@@ -6,7 +6,7 @@ import {
   extractOffersFromOcrImage,
   reconcileServiceCoupon,
 } from "../src/lib/analysis/extract";
-import { normalizeOcrText } from "../src/lib/analysis/ocr-mistral";
+import { looksMisread, normalizeOcrText } from "../src/lib/analysis/ocr";
 import {
   extractAdImageUrls,
   isThirdPartyTile,
@@ -273,5 +273,79 @@ assert.deepEqual(extractAdImageUrls(pageMarkup, "https://www.anchor-nissan.com/"
   "https://pictures.dealer.com/a/anchornissan/1234/murano.jpg?impolicy=downsize_bkpt&w=1600",
   "https://pictures.dealer.com/a/anchornissan/1234/rogue.jpg?impolicy=downsize_bkpt&w=1600",
 ]);
+
+// --- Hero-ad OCR text (Aug 5 2026) ---------------------------------------
+// Three real hero ads whose data the pipeline dropped. Mistral read all the
+// numbers off the first two correctly; the extractor was what lost them.
+
+// "/per mo." — the slash and the word are stacked separately in the artwork.
+const kiaOcr = extractOffersFromOcrImage(
+  `2027 Kia\nTELLURIDE\n\nLease for Only\n$419 /per mo.\nfor 24 months, 10k miles/yr.,\n$5,037 Due at Signing`,
+  { missionType: "promotional_banners", brand: "Kia" }
+);
+assert.equal(kiaOcr.length, 1);
+assert.equal(kiaOcr[0].offerType, "lease");
+assert.equal(kiaOcr[0].monthlyPayment, 419);
+assert.equal(kiaOcr[0].termMonths, 24);
+assert.equal(kiaOcr[0].mileageAllowance, 10000);
+assert.equal(kiaOcr[0].dueAtSigning, 5037);
+
+// APR advertised with no "APR" anywhere — the term carries the meaning.
+const subaruOcr = extractOffersFromOcrImage(
+  `2026 Subaru Forester\n\nSave up to\n\n$2,055 off TSRP\n\n2.9%\n\nfor 72 months!\n\n2.9% on gas Forester only. Excludes hybrid models.`,
+  { missionType: "finance_offers", brand: "Subaru" }
+);
+assert.equal(subaruOcr.length, 1);
+assert.equal(subaruOcr[0].offerType, "finance");
+assert.equal(subaruOcr[0].apr, 2.9);
+assert.equal(subaruOcr[0].termMonths, 72);
+
+// A bare percentage with no term must still be ignored.
+assert.equal(
+  extractOffersFromOcrImage(`2026 Subaru Forester\n\n2.9% on gas Forester only.`, {
+    missionType: "finance_offers",
+    brand: "Subaru",
+  }).some((offer) => offer.apr !== null),
+  false
+);
+
+// A per-$1,000 finance rate is not a monthly payment.
+assert.equal(
+  extractOffersFromOcrImage(`$17.92 per month per $1,000 financed.`, hints)
+    .some((offer) => offer.monthlyPayment !== null),
+  false
+);
+
+// The misread that motivated the OCR contrast retry: $4.79 is not a lease
+// payment, and must not be published as one if a retry still can't fix it.
+const ramMisread = extractOffersFromOcrImage(
+  `2026 Ram 1500\nLease For Only\n$4.79/Mo\nFor 39 Months $4,500 Due At Signing`,
+  { missionType: "promotional_banners", brand: "Ram" }
+);
+assert.equal(ramMisread.every((offer) => offer.monthlyPayment === null), true);
+assert.equal(looksMisread("Lease For Only $4.79/Mo"), true);
+assert.equal(looksMisread("$17.92 per month per $1,000 financed"), false);
+assert.equal(looksMisread("Lease For Only $479/Mo"), false);
+assert.equal(looksMisread("   "), true);
+
+// Two APR tiers stacked in one hero ad are two offers, not one. Real Bald Hill
+// CDJR Pacifica ad (evidence 93a87344) — we used to report only the 0%/36 and
+// silently drop the 3.9%/84. Each tier keeps the term printed beside its own
+// rate, never the neighbour's, and the ad's fine print keeps the tiers from
+// leaking a third offer.
+const twoTierApr = extractOffersFromOcrImage(
+  `NEW 2026 CHRYSLER PACIFICA AWD FINANCE FOR 0% APR FOR 36 MONTHS 3.9% APR FOR 84 MONTHS ` +
+    `OR SAVE UP TO $5,000 OFF MSRP APR: 3.9% APR financing for 72 months equals $15.60 per ` +
+    `month per $1,000 financed. 0% APR financing for 36 months equals $27.78 per month per ` +
+    `$1,000 financed for well-qualified buyers. Not all buyers will qualify.`,
+  { missionType: "homepage_offers", brand: "Chrysler" }
+);
+assert.deepEqual(
+  twoTierApr.map((offer) => [offer.offerType, offer.apr, offer.termMonths, offer.vehicleModel]),
+  [
+    ["finance", 0, 36, "Pacifica"],
+    ["finance", 3.9, 84, "Pacifica"],
+  ]
+);
 
 console.log("Offer extraction regression checks passed.");

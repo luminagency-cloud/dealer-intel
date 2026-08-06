@@ -161,7 +161,7 @@ which is the line the tally's `enumerated` flag draws:
 
 - Enumerated sources (DealerOn, Apollo, Dealer Masters) read the whole lot in
   one pass, so an absent make is confirmed absent. The make is dropped from the
-  subtotals with no warning, matching what the API baseline stores.
+  subtotals with no warning.
 - Facet readers cannot tell "none in stock" from "the refinement silently
   failed", so they keep the zero subtotal row and warn.
 
@@ -245,15 +245,11 @@ Completed dealer results remain intact and unfinished dealers can be rerun
 individually.
 Menu links that open a new tab are adopted into the tracked collection tab and
 the untracked child is closed before collection continues.
-The unchanged `dealer-inventory-api` and `src/lib/local-inventory-process.ts`
-remain available during matched-result verification and should be removed only
-after platform parity is established.
-
-One matched pair is checked with
-`node scripts/compare-inventory-batches.mjs <api-batch> <chrome-batch>`.
-When an API fallback reports transit as unknown, the verifier compares its
-combined model/make/total counts to Chrome's on-lot-plus-transit counts while
-still requiring Chrome's status rows to reconcile internally.
+Visible Chrome is the only inventory collector. The sibling
+`dealer-inventory-api` fallback, its `INVENTORY_API_*` configuration, and the
+local auto-spawn helper were removed in 3.7.1 once every dealer platform passed
+in Chrome; `scripts/compare-inventory-batches.mjs` only applies to batch pairs
+collected before that.
 
 Key files:
 
