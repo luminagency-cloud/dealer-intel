@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./index";
 import { mintShareToken } from "../share";
 import {
@@ -15,7 +15,6 @@ import {
   reportSnapshots,
   runGroupMembers,
   runGroups,
-  siteRelationships,
   sites,
   snapshotOffers,
   userRunGroups,
@@ -31,46 +30,13 @@ import {
   type NewEvidence,
   type NewOffer,
   type NewReportSnapshot,
-  type NewSiteRelationship,
   type Offer,
   type ReportSnapshot,
   type RunStatus,
-  type SiteRelationship,
   type SnapshotOffer,
   type User,
   type InventoryResult,
 } from "./schema";
-
-/**
- * CRUD for the Phase 2 entities that have no admin UI yet. Sites and
- * missions keep their server actions; later phases (run management,
- * evidence services, discovery) build on these functions.
- */
-
-// --- Site Relationships -------------------------------------------------
-
-export async function createSiteRelationship(
-  data: NewSiteRelationship
-): Promise<SiteRelationship> {
-  const [row] = await getDb().insert(siteRelationships).values(data).returning();
-  return row;
-}
-
-export async function listSiteRelationships(
-  siteId?: string
-): Promise<SiteRelationship[]> {
-  const db = getDb();
-  return siteId
-    ? db
-        .select()
-        .from(siteRelationships)
-        .where(eq(siteRelationships.siteId, siteId))
-    : db.select().from(siteRelationships);
-}
-
-export async function deleteSiteRelationship(id: string): Promise<void> {
-  await getDb().delete(siteRelationships).where(eq(siteRelationships.id, id));
-}
 
 // --- Collection Runs ----------------------------------------------------
 
@@ -289,25 +255,6 @@ export async function listOffersForRun(
     .select()
     .from(offers)
     .where(eq(offers.collectionRunId, collectionRunId));
-}
-
-export async function listOfferCountsByMissionForRun(
-  collectionRunId: string
-): Promise<{ siteId: string; missionType: string; count: number }[]> {
-  const rows = await getDb()
-    .select({
-      siteId: offers.siteId,
-      missionType: evidence.missionType,
-      count: count(),
-    })
-    .from(offers)
-    .innerJoin(
-      evidence,
-      and(eq(offers.sourceEvidenceId, evidence.id), isNotNull(offers.sourceEvidenceId))
-    )
-    .where(eq(offers.collectionRunId, collectionRunId))
-    .groupBy(offers.siteId, evidence.missionType);
-  return rows.map((r) => ({ siteId: r.siteId, missionType: r.missionType, count: r.count }));
 }
 
 export async function updateOffer(
@@ -622,22 +569,6 @@ export async function setUserRunGroups(
 }
 
 /** Client-visible snapshots for a set of run groups, newest first. */
-export async function listClientSnapshotsForGroups(
-  runGroupIds: string[]
-): Promise<ReportSnapshot[]> {
-  if (runGroupIds.length === 0) return [];
-  return getDb()
-    .select()
-    .from(reportSnapshots)
-    .where(
-      and(
-        inArray(reportSnapshots.runGroupId, runGroupIds),
-        eq(reportSnapshots.clientVisible, true)
-      )
-    )
-    .orderBy(desc(reportSnapshots.approvedAt));
-}
-
 /** Toggle client visibility on a snapshot. */
 export async function setSnapshotClientVisible(
   id: string,

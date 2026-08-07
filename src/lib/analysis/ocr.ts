@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import sharp from "sharp";
+import { isTransientNetworkError } from "./net";
 
 /**
  * OCR client (Phase 12 image pass). Reads visible text/layout off an image —
@@ -66,15 +67,6 @@ function mistralModel(): string {
   return process.env.MISTRAL_OCR_MODEL || DEFAULT_OCR_MODEL;
 }
 
-function isTransientNetworkError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const code = (err as NodeJS.ErrnoException).code;
-  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED" || code === "EPIPE") return true;
-  const cause = (err as { cause?: unknown }).cause;
-  if (cause instanceof Error) return isTransientNetworkError(cause);
-  return false;
-}
-
 /** Retries 429/5xx and transient network errors once with a short backoff.
  *  Never retries 401 — that's a key/config problem, not a transient one. */
 async function fetchMistralWithRetry(
@@ -134,13 +126,34 @@ async function fetchMistralWithRetry(
   throw new Error("[ocr] retry loop exhausted without a response");
 }
 
+/** Asset placeholders Mistral emits in place of a region it segmented but could
+ *  not transcribe — `tbl-0.md`, `img-3.jpeg`, `Figura 1`. normalizeOcrText
+ *  unwraps the surrounding Markdown link, so the bare token is what survives
+ *  into `imageText`. */
+const OCR_PLACEHOLDER_TOKEN =
+  /\b(?:tbl|img|image|table|figure|figura|fig)[-_ ]?\d+(?:\.[a-z0-9]+)?\b/gi;
+
 /** Signatures of a read worth one boosted retry. Nothing subtle — an empty
- *  read, or a monthly payment of a few dollars and cents, which no dealer has
- *  ever advertised. Measured Aug 5 2026: a real Ram 1500 hero ad (light grey
- *  numerals over a washed-out photo) read "$479/Mo" as "$4.79/Mo" from the
- *  original bytes and read correctly after a contrast boost. */
+ *  read, a read that transcribed nothing but placeholders, or a monthly payment
+ *  of a few dollars and cents, which no dealer has ever advertised. Measured
+ *  Aug 5 2026: a real Ram 1500 hero ad (light grey numerals over a washed-out
+ *  photo) read "$479/Mo" as "$4.79/Mo" from the original bytes and read
+ *  correctly after a contrast boost.
+ *
+ *  The placeholder case is the one that used to slip through, and it was the
+ *  common failure rather than an exotic one. A full-page screenshot Mistral
+ *  cannot read comes back as `tbl-0.md | tbl-1.md | ... | tbl-7.md` — non-empty,
+ *  no cents-per-month pattern, so the old check called it a good read, returned
+ *  it, and neither the contrast retry nor the Claude escalation ever fired. Five
+ *  dealers in the Aug 6 run produced no offers at all behind exactly that. */
 export function looksMisread(text: string): boolean {
   if (!text.trim()) return true;
+  // Nothing but segmentation placeholders, stray digits and punctuation: no
+  // text was actually transcribed, whatever the character count says. One
+  // three-letter run is the bar, and every real ad clears it ("MO", "APR" and
+  // "$319" alone would not, but no ad consists solely of those). A bare-digit
+  // read like Tasca's `1 | 1 | 1 | ...` is a failed read, not a terse ad.
+  if (!/[a-z]{3}/i.test(text.replace(OCR_PLACEHOLDER_TOKEN, " "))) return true;
   // The lookahead spares finance disclosures, where a few dollars and cents
   // per month is legitimate: "$8.10 per month per $1,000 financed".
   return /\$\s?\d\.\d{2}\s*\/?\s*(?:per\s+|a\s+)?mo(?:nth)?\b(?!\s*per\s*\$)/i.test(text);

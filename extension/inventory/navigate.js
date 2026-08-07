@@ -144,7 +144,11 @@
    * best inventory URL we can name up front rather than on the homepage.
    */
   async function openInventorySession({ item, platform, helpers }) {
-    return helpers.ensureSiteSession(item, preferredLandingUrl(item, platform));
+    return helpers.ensureSiteSession(
+      item,
+      preferredLandingUrl(item, platform),
+      inventoryShared.sessionLifetimeMs(item?.makeAllowList?.length)
+    );
   }
 
   /**

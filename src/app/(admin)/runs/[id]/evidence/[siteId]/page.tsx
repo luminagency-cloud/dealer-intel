@@ -17,6 +17,7 @@ import {
   deleteRunEvidence,
   uploadRunEvidence,
 } from "../../../actions";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
 
@@ -103,7 +104,7 @@ export default async function SiteEvidencePage({
                     {MISSION_TYPE_LABELS[row.missionType]}
                   </td>
                   <td className="px-4 py-3 text-zinc-600 dark:text-zinc-200">
-                    {new Date(row.createdAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    {fmtDateTime(row.createdAt)}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">

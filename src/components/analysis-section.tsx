@@ -3,11 +3,8 @@
 import { useState } from "react";
 import { OFFER_TYPE_LABELS, type ComplianceGrade, type Offer, type Site } from "@/lib/db";
 import { ComplianceGradeBadge } from "@/components/compliance-grade-badge";
-import { fmtMileage } from "@/lib/report";
-
-function money(value: number | null): string {
-  return value === null ? "—" : `$${value.toLocaleString()}`;
-}
+import { fmtMileage, fmtMoney as money } from "@/lib/report";
+import { fmtDateTime as fmtTime, totalMin } from "@/lib/fmt-date";
 
 /** Confidence value styling. Anything BELOW the publish floor (it won't reach a
  *  report) gets a loud red PILL so junk is impossible to miss — black text on
@@ -60,17 +57,6 @@ const TYPE_ORDER: Record<string, number> = {
   service: 3,
   promotional: 4,
 };
-
-function fmtTime(d: Date | null | undefined): string {
-  if (!d) return "—";
-  return new Date(d).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function totalMin(start: Date | null | undefined, end: Date | null | undefined): string {
-  if (!start || !end) return "";
-  const mins = Math.round((end.getTime() - start.getTime()) / 60000);
-  return mins < 1 ? "< 1 min" : `${mins} min`;
-}
 
 export function AnalysisSection({
   offers,

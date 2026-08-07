@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { requireApiSession } from "@/lib/session";
 import { getInventoryBatchStatus } from "@/lib/inventory-batch";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +8,8 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ batchId: string }> }
 ) {
-  const session = await getSession();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { response } = await requireApiSession();
+  if (response) return response;
 
   const { batchId } = await params;
   const status = await getInventoryBatchStatus(batchId);

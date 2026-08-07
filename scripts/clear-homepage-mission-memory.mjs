@@ -7,11 +7,23 @@
 // Only touches non-homepage missions whose last_known_url IS the dealer
 // homepage. Homepage/banner missions legitimately point there.
 //   node scripts/clear-homepage-mission-memory.mjs [--apply]
+//
+// The comparison must ignore `www.`, not just the trailing slash. Dealers are
+// configured at the apex and redirect to `www.`, so the memorized homepage is
+// `https://www.example.com/` against a site url of `https://example.com`. A
+// plain string compare called that a different page and this script reported
+// zero rows while 28 were pinned to the homepage.
 import "dotenv/config";
 import { neon } from "@neondatabase/serverless";
 
 const apply = process.argv.includes("--apply");
 const sql = neon(process.env.DATABASE_URL);
+
+/** `https://www.example.com/path/` -> `example.com/path` */
+const SAME_PAGE = sql`
+  regexp_replace(rtrim(sm.last_known_url, '/'), '^https?://(www\.)?', '')
+  = regexp_replace(rtrim(s.url, '/'), '^https?://(www\.)?', '')
+`;
 
 const affected = await sql`
   SELECT s.name, m.mission_type, sm.last_known_url
@@ -20,7 +32,7 @@ const affected = await sql`
   JOIN missions m ON m.id = sm.mission_id
   WHERE m.mission_type NOT IN ('homepage_offers', 'promotional_banners')
     AND sm.last_known_url IS NOT NULL
-    AND rtrim(sm.last_known_url, '/') = rtrim(s.url, '/')
+    AND ${SAME_PAGE}
   ORDER BY s.name, m.mission_type
 `;
 
@@ -40,7 +52,7 @@ if (!apply) {
       AND m.id = sm.mission_id
       AND m.mission_type NOT IN ('homepage_offers', 'promotional_banners')
       AND sm.last_known_url IS NOT NULL
-      AND rtrim(sm.last_known_url, '/') = rtrim(s.url, '/')
+      AND ${SAME_PAGE}
     RETURNING sm.id
   `;
   console.log(`Cleared ${cleared.length} row(s).`);

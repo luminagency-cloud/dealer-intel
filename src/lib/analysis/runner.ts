@@ -37,6 +37,7 @@ import { parseMileage, deriveAnnualMileage } from "@/lib/report";
 import {
   aiConfidenceThreshold,
   getOfferEnricher,
+  type OfferEnricher,
 } from "./ai-enrich";
 
 /**
@@ -697,23 +698,70 @@ async function insertImageExtractedOffer(input: {
   screenshotBuffer: Buffer | null;
   source: string;
   aiAssisted?: boolean;
+  /** The ad's own transcribed text (OCR output, or the Scene7 raw copy). Scope
+   *  for model recovery below — one ad, so no cross-ad bleed. */
+  adText?: string | null;
+  /** Dealer brand prior, for the same recovery. */
+  brand?: string | null;
+  enricher?: OfferEnricher;
+  aiThreshold?: number;
 }): Promise<boolean> {
   const {
     db,
     runId,
     siteId,
     sourceEvidenceId,
-    offer,
     seen,
     grader,
     dealerName,
     marketStates,
     screenshotBuffer,
     source,
-    aiAssisted = false,
+    adText = null,
+    brand = null,
+    enricher,
+    aiThreshold = 0,
   } = input;
 
+  let offer = input.offer;
+  let aiAssisted = input.aiAssisted ?? false;
+
   if (offer.confidence < 0.3) return false;
+  // Cheap exact-duplicate exit before spending anything on recovery.
+  if (seen.has(offerSignature(siteId, offer))) return false;
+
+  // Model recovery, which this path used to have none of. A priced offer with
+  // no model is discarded outright (isUnmodeledPricedOffer), and the DOM pass
+  // gets two chances to resolve one — an OCR hint and the AI enricher — while
+  // the image pass got zero, so a correctly-read, correctly-parsed ad was
+  // simply thrown away. Elmwood's "SAVE $5,000 ON ALL JEEP GRAND WAGONEERS AND
+  // GET 2.97% APR for 72 months" was read, classified as finance at 2.97%, and
+  // dropped for want of the word "Wagoneer" in a form findKnownModel accepted.
+  const needsModel =
+    isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel) ||
+    offer.confidence < aiThreshold;
+  if (needsModel) {
+    const hint = adText ? findKnownModel(adText) : null;
+    if (hint && !offer.vehicleModel) {
+      offer = { ...offer, vehicleModel: hint };
+    }
+    if (enricher && isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel)) {
+      const enrichment = await enricher.enrich({
+        pageText: adText ?? offer.rawText ?? "",
+        brand,
+        current: offer,
+        ocrModelHint: hint,
+      });
+      if (enrichment && enrichment.confidence >= offer.confidence) {
+        offer = { ...offer, ...enrichment };
+        aiAssisted = true;
+      }
+    }
+  }
+
+  // Signature is computed on the RESOLVED offer: recovering a model changes it,
+  // and deduping on the pre-recovery shape would let the same ad land twice
+  // (once model-less from one page state, once resolved from another).
   const sig = offerSignature(siteId, offer);
   if (seen.has(sig)) return false;
   seen.add(sig);
@@ -1353,6 +1401,10 @@ async function processAnalysis(
             marketStates,
             screenshotBuffer: imageBuf,
             source: "dealer_inspire_scene7",
+            adText: offer.disclaimerText ?? offer.rawText,
+            brand: site.brand,
+            enricher,
+            aiThreshold,
           })) || pageFoundOffer;
         }
       }
@@ -1412,6 +1464,10 @@ async function processAnalysis(
             marketStates,
             screenshotBuffer: imageBuf,
             source: "image_extraction",
+            adText: artifact.imageText,
+            brand: site.brand,
+            enricher,
+            aiThreshold,
           })) || pageFoundOffer;
         }
       }
@@ -1430,54 +1486,29 @@ async function processAnalysis(
               ? extractOffers(artifact.imageText, { missionType: screenshotRow.missionType, brand: site.brand })
               : [];
             console.log(`[analysis] screenshot OCR fallback site=${site.name} screenshot=${screenshotRow.id} extracted ${extracted.length} offer(s)`);
+            // Routed through insertImageExtractedOffer rather than a private
+            // copy of it. This block used to inline the same insert + grade,
+            // which is how it ended up as the one image path with no model
+            // recovery long after the shared helper grew some.
             for (const offer of extracted) {
-              if (offer.confidence < 0.3) continue;
-              const sig = [htmlRow.siteId, offer.offerType, offer.vehicleModel ?? "", offer.monthlyPayment ?? "", offer.apr ?? "", offer.termMonths ?? "", offer.cashIncentive ?? "", offer.salePrice ?? "", offer.dueAtSigning ?? "", offer.mileageAllowance ?? "", offer.matches?.serviceOffer ?? "", offer.offerType === "service" ? (offer.rawText ?? "") : ""].join("|");
-              if (seen.has(sig)) continue;
-              seen.add(sig);
-              if (isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel)) continue;
-              await db.insert(offers).values({
-                collectionRunId: runId,
+              await insertImageExtractedOffer({
+                db,
+                runId,
                 siteId: htmlRow.siteId,
                 sourceEvidenceId: screenshotRow.id,
-                offerType: offer.offerType,
-                vehicleMake: offer.vehicleMake,
-                vehicleModel: offer.vehicleModel,
-                vehicleTrim: offer.vehicleTrim,
-                monthlyPayment: offer.monthlyPayment,
-                apr: offer.apr,
-                cashIncentive: offer.cashIncentive,
-                salePrice: offer.salePrice,
-                termMonths: offer.termMonths,
-                dueAtSigning: offer.dueAtSigning,
-                mileageAllowance:
-                  offer.offerType === "lease"
-                    ? offer.mileageAllowance ?? parseMileage(offer.disclaimerText)
-                    : null,
-                rawText: offer.rawText,
-                normalizedJson: { matches: offer.matches, aiAssisted: true, source: "image_extraction" },
-                disclaimerText: offer.disclaimerText,
-                confidence: offer.confidence,
+                offer,
+                seen,
+                grader,
+                dealerName: site.name,
+                marketStates,
+                screenshotBuffer: buf,
+                source: "image_extraction",
+                aiAssisted: true,
+                adText: artifact?.imageText ?? null,
+                brand: site.brand,
+                enricher,
+                aiThreshold,
               });
-              const COMPLIANCE_TYPES: typeof offer.offerType[] = ["lease", "finance", "cash"];
-              const result = COMPLIANCE_TYPES.includes(offer.offerType)
-                ? await grader.grade({
-                    evidenceId: screenshotRow.id,
-                    offerType: offer.offerType,
-                    disclaimerText: offer.disclaimerText,
-                    adText: offer.rawText,
-                    dealerName: site.name,
-                    marketStates,
-                    screenshotBuffer: buf,
-                  })
-                : { grade: "n/a", details: { notApplicable: true, offerType: offer.offerType } };
-              await db
-                .insert(complianceGrades)
-                .values({ evidenceId: screenshotRow.id, collectionRunId: runId, grade: result.grade, detailsJson: result.details })
-                .onConflictDoUpdate({
-                  target: complianceGrades.evidenceId,
-                  set: { grade: result.grade, detailsJson: result.details, gradedAt: new Date() },
-                });
             }
           }
         }
@@ -1829,6 +1860,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
               marketStates,
               screenshotBuffer: imageBuf,
               source: "dealer_inspire_scene7",
+              adText: offer.disclaimerText ?? offer.rawText,
+              brand: site.brand,
+              enricher,
+              aiThreshold,
             })) || pageFoundOffer;
           }
         }
@@ -1879,6 +1914,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
                 marketStates,
                 screenshotBuffer: imageBuf,
                 source: "image_extraction",
+                adText: artifact.imageText,
+                brand: site.brand,
+                enricher,
+                aiThreshold,
               })) || pageFoundOffer;
             }
           }
@@ -1909,6 +1948,10 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
                   screenshotBuffer: buf,
                   source: "image_extraction",
                   aiAssisted: true,
+                  adText: artifact?.imageText ?? null,
+                  brand: site.brand,
+                  enricher,
+                  aiThreshold,
                 });
               }
             }

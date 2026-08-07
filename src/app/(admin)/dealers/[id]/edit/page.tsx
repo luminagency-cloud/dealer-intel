@@ -9,6 +9,7 @@ import {
 } from "@/lib/db";
 import { SiteForm } from "@/components/site-form";
 import { missionTargetsHomepage } from "@/lib/collector/mission-knowledge";
+import { fmtDateTime } from "@/lib/fmt-date";
 import { saveSiteMission, updateSite } from "../../actions";
 
 export const dynamic = "force-dynamic";
@@ -105,7 +106,7 @@ export default async function EditDealerPage({
                 <div className="mt-2 flex items-center justify-between">
                   <span className="text-xs text-zinc-700 dark:text-zinc-200">
                     {config?.lastSuccessAt
-                      ? `Last success: ${new Date(config.lastSuccessAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                      ? `Last success: ${fmtDateTime(config.lastSuccessAt)}`
                       : "Never collected"}
                   </span>
                   <button

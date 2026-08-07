@@ -7,7 +7,7 @@ import {
   uploadChromeCaptureState,
   type ChromeCaptureStateKind,
 } from "@/lib/chrome-collector";
-import { getSession } from "@/lib/session";
+import { requireApiSession } from "@/lib/session";
 
 function requiredString(formData: FormData, name: string): string {
   const value = formData.get(name);
@@ -38,10 +38,8 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { response } = await requireApiSession();
+  if (response) return response;
 
   try {
     const { id: runId } = await params;

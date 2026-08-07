@@ -19,11 +19,15 @@ import {
 } from "./engine";
 import {
   DISCOVERY_KEYWORDS,
+  MAX_DISCOVERY_CANDIDATES,
   MISSION_EXPLORATION,
   PLATFORM_DEFAULT_PATHS,
-  SIGNAL_CHECKED_MISSIONS,
+  isSameLocation,
   missionTargetsHomepage,
-  pageHasOfferSignal,
+  navLinkIsExcluded,
+  navTextMatchesKeyword,
+  pageIsBannedProgram,
+  urlIsBannedProgram,
 } from "./mission-knowledge";
 
 /**
@@ -106,16 +110,11 @@ function configuredUrls(
   return [...new Set(urls)].slice(0, MAX_PAGES_PER_MISSION);
 }
 
-/** Recovery sequence steps 3-4: platform default paths, then nav discovery.
+/** Finds a page for a mission the dealer record has no URL for: the dealer's
+ *  own nav first, then the platform default paths.
  *
- *  For finance/service missions, reachability alone isn't good enough to pick
- *  a winner: the first default-path guess that responds 200 might be a bare
- *  nav hub while a later candidate (often the nav-discovered one) is where the
- *  real specials live. So every candidate — default paths AND nav-keyword
- *  matches — is captured and the first one showing actual pricing/discount
- *  signal wins. Falls back to the first merely-reachable candidate when none
- *  show signal, so discovery never regresses to finding nothing. Other
- *  mission types keep the original cheap probe-only behavior. */
+ *  Only runs when nothing is configured. When the record does list URLs, those
+ *  are the answer and this is never called — see runMissionInSession. */
 async function discoverUrl(
   session: CollectorSession,
   mission: Mission,
@@ -127,52 +126,56 @@ async function discoverUrl(
   );
   const keywords = DISCOVERY_KEYWORDS[mission.missionType];
 
-  // Nav links are tried before the platform default paths. Measured against
-  // the live dealer list, the hardcoded guess paths 404 on nearly every site
-  // (only Balise's `/specials/service` answered), while the dealer's own nav
-  // points at whatever path its CMS actually uses — `/promotions/service/` on
-  // Dealer.com, `/service-parts-specials.html` on Sokal, and so on. Probing
-  // the guesses first just burns six round trips before reaching the answer.
+  // The dealer's own nav first, then the platform paths — a link the dealer
+  // labels as specials beats any path convention, and plenty of dealers sit on
+  // a vanity URL no list could guess.
   const navMatches: string[] = [];
   if (keywords.length > 0) {
     const links = await session.collectLinks(site.url);
+    // First usable match per keyword — see the note in chrome-collector's
+    // discoverMissionUrl for why the same-location test belongs here.
     for (const keyword of keywords) {
-      const match = links.find((l) => l.text.includes(keyword));
+      const match = links.find(
+        (l) =>
+          navTextMatchesKeyword(l.text, keyword) &&
+          !navLinkIsExcluded(l.text, l.href, mission.missionType) &&
+          !isSameLocation(l.href, site.url)
+      );
       if (match && !navMatches.includes(match.href)) navMatches.push(match.href);
     }
   }
-  const candidates = [...new Set([...navMatches, ...defaultPaths])];
+  const candidates = [...new Set([...navMatches, ...defaultPaths])]
+    // A candidate that resolves back to the homepage is the bug discovery
+    // exists to stop — an `href="#"` toggle resolves to `/#`.
+    .filter((candidate) => !isSameLocation(candidate, site.url))
+    .slice(0, MAX_DISCOVERY_CANDIDATES);
 
-  if (!SIGNAL_CHECKED_MISSIONS.includes(mission.missionType)) {
-    for (const candidate of candidates) {
-      if (await session.probeUrl(candidate)) return candidate;
-    }
-    return null;
-  }
-
-  let fallback: string | null = null;
+  // First candidate that loads wins. Every candidate here is already justified
+  // as a specials location, so there is nothing to rank — and nothing to settle
+  // for when none of them load. See discoverMissionUrl in chrome-collector.ts
+  // for why this is not gated on pageHasOfferSignal: an empty specials page is
+  // a normal early-in-the-month state and still the correct page.
   for (const candidate of candidates) {
-    let capture: PageCapture;
-    try {
-      capture = await session.capturePage(candidate, {});
-    } catch {
+    const landed = await session.probeUrl(candidate);
+    if (!landed) continue;
+    // A candidate that quietly redirected to the homepage did not exist. See
+    // probeUrl and chrome-collector's discoverMissionUrl.
+    if (isSameLocation(landed.url, site.url)) continue;
+    if (urlIsBannedProgram(landed.url) || pageIsBannedProgram(landed.html)) {
       continue;
     }
-    fallback ??= candidate;
-    if (pageHasOfferSignal(capture.html)) return candidate;
+    return landed.url;
   }
-  return fallback;
+  return null;
 }
 
 /** Site memory: remember what worked for this dealer+mission. Creates the
  *  site_missions row when collection succeeded purely via discovery.
  *
- *  `discoveredUrl` non-null means discovery actually ran this visit (either
- *  because nothing was memorized, or because the memorized URL turned out
- *  stale/empty and got re-validated — see the rediscovery fallback in
- *  runMissionInSession) — so it overwrites whatever was memorized rather than
- *  only filling a null slot. When discovery didn't run, `discoveredUrl` is
- *  null and the existing memory is left untouched. */
+ *  `discoveredUrl` non-null means discovery ran this visit, which only happens
+ *  when nothing was configured — so it fills the empty slot. When the record
+ *  already listed URLs, `discoveredUrl` is null and the existing memory is left
+ *  untouched: discovery never overwrites what the operator configured. */
 async function recordSuccess(
   site: Site,
   mission: Mission,
@@ -264,10 +267,8 @@ export async function runMissionInSession(
   };
   const explore = MISSION_EXPLORATION[mission.missionType];
   const sig = exploreSignature(explore);
-  const checkSignal = SIGNAL_CHECKED_MISSIONS.includes(mission.missionType);
 
   let urls = configuredUrls(mission, siteMission, site);
-  const wasMemorized = urls.length > 0;
   let discoveredUrl: string | null = null;
   if (urls.length === 0) {
     discoveredUrl = await discoverUrl(session, mission, site);
@@ -291,7 +292,6 @@ export async function runMissionInSession(
   const evidence: Evidence[] = [];
   let successfulUrl: string | undefined;
   let pagesCaptured = 0;
-  let anySignal = false;
   let firstError: string | undefined;
 
   for (const url of urls) {
@@ -305,7 +305,6 @@ export async function runMissionInSession(
       evidence.push(...(await uploadCaptureEvidence(base, capture)));
       pagesCaptured++;
       successfulUrl ??= url;
-      if (checkSignal && pageHasOfferSignal(capture.html)) anySignal = true;
     } catch (err) {
       if (err instanceof CollectionError && err.failureScreenshot) {
         try {
@@ -326,42 +325,14 @@ export async function runMissionInSession(
     }
   }
 
-  // A memorized URL that now errors outright (dead link) or that loads fine
-  // but shows no pricing/discount signal at all (drifted to a nav hub) is no
-  // longer trustworthy — re-run discovery once as a fallback and, if it finds
-  // something better, promote it. Without this, a site can get stuck on a
-  // stale/empty URL indefinitely: nothing here ever re-validates a memorized
-  // URL once it's been recorded as "working".
-  if (
-    wasMemorized &&
-    (pagesCaptured === 0 || (checkSignal && !anySignal))
-  ) {
-    const freshUrl = await discoverUrl(session, mission, site);
-    if (freshUrl && !urls.includes(freshUrl)) {
-      try {
-        const cacheKey = `${freshUrl}|${sig}`;
-        let capture = captureCache.get(cacheKey);
-        if (!capture) {
-          capture = await session.capturePage(freshUrl, explore);
-          captureCache.set(cacheKey, capture);
-        }
-        const freshHasSignal = !checkSignal || pageHasOfferSignal(capture.html);
-        // Only keep this extra capture when it's actually an improvement —
-        // the old URL captured nothing at all, or this one carries signal the
-        // old one lacked. Otherwise discard it silently; the old result already
-        // stands.
-        if (pagesCaptured === 0 || freshHasSignal) {
-          evidence.push(...(await uploadCaptureEvidence(base, capture)));
-          pagesCaptured++;
-          successfulUrl ??= freshUrl;
-          discoveredUrl = freshUrl;
-          if (freshHasSignal) anySignal = true;
-        }
-      } catch (err) {
-        firstError ??= cleanErrorMessage(err);
-      }
-    }
-  }
+  // No rediscovery fallback. When the dealer record lists URLs for this
+  // mission, those URLs are the answer: if they all fail, the mission fails and
+  // the operator fixes the record. Discovery used to re-run here whenever a
+  // memorized URL captured nothing *or* showed no pricing, and swap in whatever
+  // it found — which meant a specials page that was simply empty (normal early
+  // in the month) got silently replaced by some other page that happened to
+  // have a price on it. A configured page with no specials on it is a correct,
+  // reportable result, not a reason to go looking.
 
   if (pagesCaptured > 0) {
     await recordSuccess(site, mission, discoveredUrl);
@@ -380,19 +351,6 @@ export async function runMissionInSession(
     // flag results as needs_review.
     error: firstError,
   };
-}
-
-/** Single-mission collection in its own browser session. Retained for the
- *  Phase 5/6 ad-hoc collect path; run execution uses collectSite. */
-export async function runMission(input: {
-  collectionRunId: string;
-  mission: Mission;
-  site: Site;
-  siteMission: SiteMission | null;
-}): Promise<MissionRunResult> {
-  return withCollectorSession((session) =>
-    runMissionInSession(session, input, new Map())
-  );
 }
 
 /** Outcome of visiting one site: per-mission results, settled in order. */

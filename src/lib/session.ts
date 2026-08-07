@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 
 /**
@@ -45,4 +46,17 @@ export async function requireAdminSession() {
   if (!session?.user) redirect("/login");
   if (session.user.role !== "admin") redirect("/");
   return session;
+}
+
+/** Guard for JSON API routes: returns the session, or a 401 response to
+ *  return immediately. `if (response) return response;` */
+export async function requireApiSession(): Promise<
+  | { session: NonNullable<Awaited<ReturnType<typeof getSession>>>; response: null }
+  | { session: null; response: NextResponse }
+> {
+  const session = await getSession();
+  if (!session?.user) {
+    return { session: null, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+  return { session, response: null };
 }

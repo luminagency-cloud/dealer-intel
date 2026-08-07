@@ -22,6 +22,16 @@ export function fmtMonthYear(date: Date | string | null | undefined): string {
   });
 }
 
+/** Elapsed time between two timestamps, e.g. "12 min" or "< 1 min". */
+export function totalMin(
+  start: Date | null | undefined,
+  end: Date | null | undefined
+): string {
+  if (!start || !end) return "";
+  const mins = Math.round((end.getTime() - start.getTime()) / 60000);
+  return mins < 1 ? "< 1 min" : `${mins} min`;
+}
+
 /** Compact snapshot label, e.g. "20Jun-3grps-53pgs" */
 export function fmtSnapshotLabel(
   date: Date,

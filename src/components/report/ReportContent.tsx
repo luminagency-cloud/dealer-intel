@@ -27,6 +27,7 @@ import {
 } from "@/lib/report";
 import type { InventoryResult, ReportSnapshot, SnapshotOffer } from "@/lib/db";
 import type { NewsData, NewsItem } from "@/lib/news";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -1538,7 +1539,7 @@ export function ReportContent({
                 {groupSnapshots.map((s) => (
                   <tr key={s.id} className={s.id === snapshot.id ? "bg-blue-50/50 dark:bg-blue-950/30" : ""}>
                     <td className="px-4 py-2.5 font-semibold text-black dark:text-zinc-50">
-                      {new Date(s.approvedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                      {fmtDateTime(s.approvedAt)}
                     </td>
                     <td className="px-4 py-2.5">
                       {s.id === snapshot.id ? (

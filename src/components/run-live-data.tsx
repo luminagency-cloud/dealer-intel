@@ -6,6 +6,7 @@ import { fmtDateTime } from "@/lib/fmt-date";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
 import { RunWorkflowStrip } from "@/components/run-workflow-strip";
 import { AnalysisSection } from "@/components/analysis-section";
+import { RunOfferBreakdown } from "@/components/run-offer-breakdown";
 
 interface LiveStatus {
   executing: boolean;
@@ -43,6 +44,8 @@ export function RunLiveData({
   grades,
   siteNames,
   siteOptions,
+  siteMeta,
+  publishableConfidenceFloor,
   canCollect,
   canAnalyze,
   canPublish,
@@ -91,6 +94,8 @@ export function RunLiveData({
   grades: ComplianceGrade[];
   siteNames: Record<string, string>;
   siteOptions: Pick<Site, "id" | "name">[];
+  siteMeta: Record<string, { name: string; platform: string | null }>;
+  publishableConfidenceFloor: number;
   canCollect: boolean;
   canAnalyze: boolean;
   canPublish: boolean;
@@ -158,11 +163,20 @@ export function RunLiveData({
   // wedged it the same way — even Run Analysis couldn't wake it, since
   // `analyzing` is only read from props at mount.
   //
-  // ponytail: flat 15s idle poll; give it a backoff if idle admin tabs ever
-  // show up in database load.
+  // A hidden tab polls nothing at all — see the visibility gate below. That is
+  // safe against the latch described above precisely because `visibilitychange`
+  // is a browser event rather than polled state: it always fires on return, so
+  // nothing the poll itself reports can keep the poll switched off.
+  //
+  // ponytail: flat 15s idle poll, no backoff. Each tick is 4 Neon HTTP queries,
+  // so a visible-but-idle tab keeps the endpoint awake indefinitely. Add
+  // backoff only if that ever costs real money — the visibility gate already
+  // covers the common case (a tab left open and forgotten).
   const pollMs = active ? 3000 : 15000;
 
   useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+
     const poll = async () => {
       try {
         const res = await fetch(`/api/runs/${runId}/status`);
@@ -180,11 +194,23 @@ export function RunLiveData({
         // ignore transient errors
       }
     };
-    // Once immediately, so opening a run that finished while the tab was closed
-    // (or picking up the moment work starts) doesn't wait out a whole interval.
-    void poll();
-    const timer = setInterval(poll, pollMs);
-    return () => clearInterval(timer);
+    // Poll once immediately, then on an interval — but only while the tab is
+    // actually visible. The immediate poll means opening a run that finished
+    // while the tab was closed (or returning to a backgrounded one) doesn't
+    // wait out a whole interval to catch up.
+    const sync = () => {
+      clearInterval(timer);
+      if (document.hidden) return;
+      void poll();
+      timer = setInterval(poll, pollMs);
+    };
+
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", sync);
+    };
   }, [pollMs, runId]);
 
   // Sync freshly server-rendered data (offers/grades/analysis timestamps) into
@@ -335,6 +361,23 @@ export function RunLiveData({
           canAnalyze={canAnalyze}
         />
       </div>
+
+      {/* Offer breakdown — pre-publish gut check, same view as verify-offers.ts.
+          Lives here rather than in the server page so it reads the same polled
+          offers as the analysis section; rendered from a server snapshot it
+          stayed stale until a manual reload once analysis finished. */}
+      {live.offers.length > 0 && (
+        <div className="mb-8">
+          <h2 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            Offer breakdown
+          </h2>
+          <RunOfferBreakdown
+            offers={live.offers}
+            siteMeta={siteMeta}
+            publishableConfidenceFloor={publishableConfidenceFloor}
+          />
+        </div>
+      )}
     </>
   );
 }

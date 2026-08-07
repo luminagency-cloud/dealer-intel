@@ -275,6 +275,111 @@ The global mission row defines the mission type. The per-dealer
 Homepage offers and promotional banners can remain separate mission types
 without double-fetching because the capture cache dedupes shared pages.
 
+A mission with no memorized URL discovers one: nav links the dealer's own menu
+offers, then the platform default paths. Both collectors share that logic in
+`mission-knowledge.ts` so they agree on where a mission goes.
+
+`PLATFORM_DEFAULT_PATHS` leads with Dealer.com's canonical
+`/promotions/new/index.htm` and `/promotions/service/index.htm`. Measured
+against the live list, 35 of 38 Dealer.com stores answer both with 200 — and
+Dealer.com is more than half the dealers. Those two paths were missing, which is
+what made the guess paths look like they "404 on nearly every site" and left
+discovery leaning on nav crawling for stores that never needed it.
+
+**A configured URL is the answer, and its failure is the result.** When the
+dealer record lists URLs for a mission, discovery never runs — not before, and
+not after they fail. If every listed URL fails, the mission fails and the
+operator fixes the record. There used to be a rediscovery fallback that re-ran
+discovery whenever a memorized URL captured nothing *or* showed no pricing, and
+swapped in whatever it found; that silently replaced a specials page which was
+merely empty with some other page that happened to have a price on it.
+
+**Discovery never settles.** Every candidate has to be justified — a path the
+platform publishes, or a link the dealer's own nav labels as specials — and if
+none of them is really there the mission fails with `NO_MISSION_URL_ERROR` and
+asks for a URL. It does not fall back to the nearest page that looks like it
+might carry an offer. That is why the bare `offers` / `incentives` /
+`promotions` / `specials` guess paths were removed: they land on a nav hub or a
+section index, and a mission that lands on one has not found the specials page,
+it has found something shaped like it.
+
+The corollary matters just as much: **an empty specials page is a correct
+result.** Early in the month a dealer may have a "New Specials" section with
+nothing in it. That is the right page and the honest answer, so selection is
+deliberately *not* gated on `pageHasOfferSignal` — requiring visible pricing
+would reject the real page and send the mission hunting for a substitute.
+
+Five rules here are load-bearing, each of them a bug that reached production:
+
+- **A 200 does not mean the page exists.** Most non-Dealer.com platforms answer
+  an unknown path with 200 and a silent redirect to the homepage — verified with
+  a deliberately nonsensical path on Toyota of Dartmouth. So discovery compares
+  where it *landed* against where it asked to go and rejects a homepage landing,
+  and both `fetchPageHtml` and `probeUrl` return the final URL to make that
+  possible. Without it the collector memorized `/promotions/service/index.htm`
+  for stores whose served page was the front page — the original bug, rebuilt.
+- **Manufacturer programs are banned outright.** Two families: the OEM's
+  national incentive search (`/global-incentives-search/`), and OEM parts and
+  service coupon programs — Mopar for Stellantis stores, ACDelco for GM. All are
+  nationwide content identical across every store selling the brand, so a price
+  read off one is not that dealer's offer. The ban is checked three ways,
+  because each was needed: the nav label, the URL landed on after redirects, and
+  the page's own `<title>`/`<h1>`. Anchor Nissan's nav calls the incentive
+  search "Current Offers"; Elmwood CDJR serves "Coupons for Mopar Parts And
+  Service" from a perfectly neutral `/coupons.htm`. Only title and h1 are read,
+  never body copy — a dealer's genuine specials page may mention Mopar parts
+  without being the Mopar program.
+
+- **A dropdown group header is not a destination.** Dealer.com marks it
+  `data-toggle="dropdown"` / `class="nav-with-children"` and points its href
+  somewhere plausible but wrong: Gengras Subaru's "Finance & Specials" menu
+  resolves to `/financing/index.htm`, the finance department, while the actual
+  specials page sits in the submenu beneath it. Both link readers skip these.
+
+- **Nav labels are matched as ordered word sequences, not substrings.** Dealers
+  name the page after themselves — "New **Subaru** Specials", "New **Volvo**
+  Special Offers" — so a literal `includes()` missed the correct page on nine
+  dealers. Words may be separated by at most two of the dealer's own words, must
+  appear in order, and match whole (so "renew specials" is not "new specials").
+  Number is ignored on both sides.
+- **Some links are excluded outright** (`DISCOVERY_EXCLUSIONS`). A military
+  rebate page, a pre-owned feed, and a credit-application funnel are not the
+  dealer's advertised specials even though a keyword reaches them. Broad
+  keywords are only safe behind this list, which is why "incentives" is written
+  as "current incentives".
+- **A candidate that resolves back to the homepage is rejected**, and rejected
+  while picking the per-keyword match rather than afterwards — Dealer.com emits
+  the same label twice, an `href="#"` dropdown toggle followed by the real link
+  nested under it, so filtering later dropped both. `isSameLocation` normalizes
+  `www.`: dealers are configured at the apex and redirect to `www.`, so strict
+  host comparison called the homepage a different page and waved it past every
+  guard built on this function.
+
+That last one is why the homepage kept winning. A non-homepage mission that
+lands on the dealer's front page must never memorize it: memorized URLs beat
+discovery, so one bad capture pins the mission there on every later run.
+`scripts/clear-homepage-mission-memory.mjs` repairs rows already poisoned that
+way; `scripts/verify-mission-url-discovery.ts` is the regression guard.
+
+Discovery runs over plain `fetch`, not a browser, which is cheap but means a
+dealer that answers a bare GET with 403 is undiscoverable — five stores in the
+current list. Those need a URL set by hand on the site's mission config.
+
+`pageHasOfferSignal` is deliberately absent from all of this. Besides rejecting
+legitimately empty specials pages, it cannot do the job it was given:
+it returns **false on every Dealer.com specials page**, because DDC renders
+offers as JPEGs and the markup carries no price text (the same fact the analysis
+OCR path exists for). On the majority platform it never fired at all, while on
+the others it happily promoted whatever page had incidental pricing. It is still
+used elsewhere in `mission-runner.ts` to decide whether a *memorized* URL has
+gone stale, which is a different question.
+
+Platform paths sit behind nav, not in front of it. Leading with them was tried
+and reverted: it overrode 43 correct dealer-authored pages, including Westerly's
+`/westerly-service-specials.htm` and Elmwood's `/mopar-service-coupons.htm`. A
+link the dealer's own menu labels as specials is stronger evidence than any path
+convention.
+
 ## Evidence
 
 Evidence is the canonical raw record.

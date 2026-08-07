@@ -1,4 +1,5 @@
 ﻿import { FRESHNESS_LABELS, freshnessOf } from "@/lib/freshness";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 const STYLES: Record<string, string> = {
   fresh: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
@@ -16,7 +17,7 @@ export function FreshnessBadge({
   return (
     <span
       className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${STYLES[freshness]}`}
-      title={lastCollectedAt ? new Date(lastCollectedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Never collected"}
+      title={lastCollectedAt ? fmtDateTime(lastCollectedAt) : "Never collected"}
     >
       {FRESHNESS_LABELS[freshness]}
     </span>

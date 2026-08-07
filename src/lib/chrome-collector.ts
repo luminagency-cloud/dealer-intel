@@ -13,13 +13,18 @@ import {
 } from "@/lib/db";
 import { getCollectionRun, listWorkItemsForRun } from "@/lib/db/repository";
 import { uploadEvidence } from "@/lib/evidence";
-import { finalizeRunIfDone } from "@/lib/run-executor";
+import { finalizeRunIfDone, isRunExecuting, isPausedRun } from "@/lib/run-executor";
 import {
   DISCOVERY_KEYWORDS,
+  MAX_DISCOVERY_CANDIDATES,
   MISSION_EXPLORATION,
   PLATFORM_DEFAULT_PATHS,
+  isSameLocation,
   missionTargetsHomepage,
-  pageHasOfferSignal,
+  navLinkIsExcluded,
+  navTextMatchesKeyword,
+  pageIsBannedProgram,
+  urlIsBannedProgram,
 } from "@/lib/collector/mission-knowledge";
 import { captureAdImages } from "@/lib/collector/ad-images";
 
@@ -75,6 +80,35 @@ export function isChromeRunLive(run: {
   return Date.now() - run.chromeHeartbeatAt.getTime() < CHROME_HEARTBEAT_STALE_MS;
 }
 
+export interface RunLiveState {
+  executing: boolean;
+  paused: boolean;
+  stalled: boolean;
+}
+
+/** Single source of truth for a run's executing/paused/stalled UI state —
+ *  shared by the run detail page and its status-poll API route. Chrome's
+ *  interrupted state is surfaced by its own recovery button, not the Current
+ *  collector's Resume banner, so an unfinished Chrome run is never "stalled"
+ *  in the sense this flag means. */
+export function computeRunLiveState(
+  id: string,
+  run:
+    | { collectorMode: string; status: string; chromeHeartbeatAt: Date | null }
+    | undefined,
+  results: { status: string }[]
+): RunLiveState {
+  const chromeRun = run?.collectorMode === "chrome_extension";
+  const executing = chromeRun ? !!run && isChromeRunLive(run) : isRunExecuting(id);
+  const paused = isPausedRun(id);
+  const stalled =
+    !chromeRun &&
+    !executing &&
+    !paused &&
+    results.some((r) => r.status === "pending" || r.status === "running");
+  return { executing, paused, stalled };
+}
+
 /** Called on every result POST from the driving tab — that traffic is the
  *  proof of life, so no separate ping channel is needed. */
 export async function touchChromeHeartbeat(runId: string): Promise<void> {
@@ -85,7 +119,6 @@ export async function touchChromeHeartbeat(runId: string): Promise<void> {
 }
 
 const DISCOVERY_TIMEOUT_MS = 20_000;
-const MAX_DISCOVERY_CANDIDATES = 6;
 const DISCOVERY_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -105,7 +138,9 @@ const MAX_REDIRECT_HOPS = 10;
  *  has no jar, so it just burns its 20 hops and throws. Bristol Toyota's
  *  service and finance pages were both unreachable that way and resolve in one
  *  hop with the cookie echoed back. */
-async function fetchPageHtml(url: string): Promise<string | null> {
+async function fetchPageHtml(
+  url: string
+): Promise<{ html: string; finalUrl: string } | null> {
   const jar = new Map<string, string>();
   let current = url;
   try {
@@ -133,7 +168,7 @@ async function fetchPageHtml(url: string): Promise<string | null> {
         continue;
       }
       if (!response.ok) return null;
-      return await response.text();
+      return { html: await response.text(), finalUrl: current };
     }
     return null;
   } catch {
@@ -168,6 +203,16 @@ function decodeEntities(text: string): string {
   });
 }
 
+/** True for an anchor that only opens a submenu. Kept next to `pageLinks` and
+ *  mirrored by `CollectorSession.collectLinks` so both collectors read nav the
+ *  same way. */
+export function isMenuToggle(anchorAttrs: string): boolean {
+  return (
+    /\bdata-toggle=["']dropdown["']/i.test(anchorAttrs) ||
+    /\bclass=["'][^"']*\bnav-with-children\b/i.test(anchorAttrs)
+  );
+}
+
 /** Same-host `{text, href}` pairs parsed out of raw markup — the fetch-based
  *  twin of CollectorSession.collectLinks. Dealer platforms server-render their
  *  primary nav, so a plain GET sees the same links a browser would. */
@@ -177,10 +222,16 @@ export function pageLinks(
 ): { text: string; href: string }[] {
   const host = new URL(pageUrl).host;
   const links: { text: string; href: string }[] = [];
-  const anchors = html.matchAll(
-    /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
-  );
-  for (const [, href, inner] of anchors) {
+  const anchors = html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi);
+  for (const [, attrs, inner] of anchors) {
+    const href = /\bhref=["']([^"']+)["']/i.exec(attrs)?.[1];
+    if (!href) continue;
+    // A dropdown group header is not a destination. Dealer.com labels the
+    // "Finance & Specials" menu with `data-toggle="dropdown"` and points its
+    // href at the finance department, so treating it as a link sent the
+    // finance mission to /financing/ instead of the specials page nested
+    // underneath it.
+    if (isMenuToggle(attrs)) continue;
     const text = decodeEntities(inner.replace(/<[^>]+>/g, " "))
       .replace(/\s+/g, " ")
       .trim()
@@ -218,8 +269,21 @@ export async function discoverMissionUrl(
   const navMatches: string[] = [];
   if (homepageHtml) {
     const links = pageLinks(homepageHtml, site.url);
+    // First *usable* match per keyword. The same-location test has to happen
+    // here rather than on the finished candidate list: Dealer.com renders the
+    // same label twice — an `href="#"` dropdown toggle and the real link nested
+    // under it — and the toggle comes first in source order, so filtering later
+    // dropped the placeholder and the real page along with it. Keeping every
+    // match instead overcorrected: a broad keyword pulled in per-model and
+    // military-rebate pages, which carry prices and so won the offer-signal
+    // test ahead of the dealer's actual specials page.
     for (const keyword of DISCOVERY_KEYWORDS[missionType]) {
-      const match = links.find((link) => link.text.includes(keyword));
+      const match = links.find(
+        (link) =>
+          navTextMatchesKeyword(link.text, keyword) &&
+          !navLinkIsExcluded(link.text, link.href, missionType) &&
+          !isSameLocation(link.href, site.url)
+      );
       if (match && !navMatches.includes(match.href)) navMatches.push(match.href);
     }
   }
@@ -236,18 +300,34 @@ export async function discoverMissionUrl(
     .filter((candidate) => !isSameLocation(candidate, site.url))
     .slice(0, MAX_DISCOVERY_CANDIDATES);
 
-  // Reachability alone isn't trusted: a dealer's generic guess path routinely
-  // resolves to a nav hub that still returns 200. Take the first candidate
-  // carrying actual pricing, and fall back to the first that merely loaded so
-  // discovery never regresses to finding nothing.
-  let reachable: string | null = null;
+  // Every surviving candidate is already justified — it is either a path the
+  // platform publishes or a link the dealer's own nav labels as specials — so
+  // the first one that genuinely loads is the answer.
+  //
+  // "Genuinely" is the load-bearing word. Most non-Dealer.com platforms answer
+  // an unknown path with 200 and a silent redirect to the homepage, so a status
+  // check alone re-creates the original bug through a different door: discovery
+  // would memorize `/promotions/service/index.htm` while the page actually
+  // served is the dealer's front page. Verified live — a deliberately
+  // nonsensical path on Toyota of Dartmouth returns 200 and the homepage. The
+  // candidate is only accepted if it is still where we asked to go.
+  //
+  // Deliberately NOT gated on pageHasOfferSignal. A specials page with nothing
+  // posted yet is a normal state early in the month and is still the right
+  // page; requiring visible pricing would reject it and send the mission
+  // hunting for something that merely looks like an offer. Nothing is returned
+  // on a fishing basis: no match means the mission fails and asks for a URL.
   for (const candidate of candidates) {
-    const html = await fetchPageHtml(candidate);
-    if (!html) continue;
-    reachable ??= candidate;
-    if (pageHasOfferSignal(html)) return candidate;
+    const page = await fetchPageHtml(candidate);
+    if (!page) continue;
+    if (isSameLocation(page.finalUrl, site.url)) continue;
+    // Re-checked after the redirect: a neutral-looking path can land on the
+    // manufacturer program we already refused to follow by name.
+    if (urlIsBannedProgram(page.finalUrl)) continue;
+    if (pageIsBannedProgram(page.html)) continue;
+    return page.finalUrl;
   }
-  return reachable;
+  return null;
 }
 
 type WorkItem = { site: Site; mission: Mission; siteMission: SiteMission | null };
@@ -281,9 +361,23 @@ async function resolveCollectionUrls(
       let homepageHtml: string | null | undefined;
       for (const { mission, siteMission } of siteItems) {
         const key = workKey(site.id, mission.id);
+        // Memory is only trusted if it points somewhere a non-homepage mission
+        // could plausibly belong. Read-side guard on purpose: the write-side one
+        // is a single point of failure, and when it silently stopped working
+        // (see isSameLocation) every later run kept re-collecting the homepage
+        // for finance/service and reporting success. A memorized homepage now
+        // falls through to discovery instead of pinning the mission forever —
+        // and the check covers alternates too, which the write side never saw.
+        const usable = (value: string | null | undefined): string | null => {
+          const trimmed = value?.trim();
+          if (!trimmed) return null;
+          if (missionTargetsHomepage(mission.missionType)) return trimmed;
+          return isSameLocation(trimmed, site.url) ? null : trimmed;
+        };
         const memorized =
-          siteMission?.lastKnownUrl?.trim() ||
-          siteMission?.alternateUrls.find((value) => value.trim())?.trim();
+          usable(siteMission?.lastKnownUrl) ??
+          siteMission?.alternateUrls.map(usable).find(Boolean) ??
+          null;
         if (memorized) {
           resolved.set(key, memorized);
           continue;
@@ -293,7 +387,7 @@ async function resolveCollectionUrls(
           continue;
         }
         if (homepageHtml === undefined) {
-          homepageHtml = await fetchPageHtml(site.url);
+          homepageHtml = (await fetchPageHtml(site.url))?.html ?? null;
         }
         resolved.set(
           key,
@@ -336,19 +430,7 @@ async function failUnresolvedItems(
     );
 }
 
-/** True when two URLs point at the same page, ignoring a trailing slash. */
-export function isSameLocation(left: string, right: string): boolean {
-  try {
-    const a = new URL(left);
-    const b = new URL(right);
-    return (
-      a.host === b.host &&
-      a.pathname.replace(/\/$/, "") === b.pathname.replace(/\/$/, "")
-    );
-  } catch {
-    return false;
-  }
-}
+export { isSameLocation };
 
 export class ChromeCollectorError extends Error {
   constructor(

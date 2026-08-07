@@ -4,6 +4,7 @@ import {
   extractOffers,
   extractOffersFromDisclosure,
   extractOffersFromOcrImage,
+  findKnownModel,
   reconcileServiceCoupon,
 } from "../src/lib/analysis/extract";
 import { looksMisread, normalizeOcrText } from "../src/lib/analysis/ocr";
@@ -327,6 +328,29 @@ assert.equal(looksMisread("Lease For Only $4.79/Mo"), true);
 assert.equal(looksMisread("$17.92 per month per $1,000 financed"), false);
 assert.equal(looksMisread("Lease For Only $479/Mo"), false);
 assert.equal(looksMisread("   "), true);
+
+// A read that transcribed nothing but Mistral's own segmentation placeholders
+// is a FAILED read, and used to pass as a good one because it is non-empty and
+// carries no cents-per-month. That silently skipped both the contrast retry and
+// the Claude escalation, and it was the common failure, not an exotic one: five
+// dealers in the Aug 6 2026 run produced no offers at all behind exactly this.
+assert.equal(looksMisread("tbl-0.md\ntbl-1.md\ntbl-2.md\ntbl-3.md"), true);
+assert.equal(looksMisread("tbl-0.md"), true);
+assert.equal(looksMisread("Figura 1"), true);
+assert.equal(looksMisread("1\n\n1\n\n1\n\n1\n\n1\n\n1"), true);
+// ...but a real read that merely CONTAINS a placeholder still stands.
+assert.equal(looksMisread("SAVE $4,000 ON EVERY DODGE DURANGO\ntbl-0.md"), false);
+
+// Ad copy pluralizes and possessivizes model names, and the bare word boundary
+// never matched those. A real Elmwood CDJR finance ad parsed to 2.97% APR / 72
+// months and was then discarded as an unmodeled priced offer for want of this.
+assert.equal(
+  findKnownModel("SAVE $5,000 ON ALL JEEP GRAND WAGONEERS AND GET 2.97% APR for 72 months"),
+  "Grand Wagoneer"
+);
+assert.equal(findKnownModel("2026 RAM LARAMIE 1500's SAVE $16,000 OFF MSRP!"), "1500");
+assert.equal(findKnownModel("All Broncos must go"), "Bronco");
+assert.equal(findKnownModel("Visit our showroom today"), null);
 
 // Two APR tiers stacked in one hero ad are two offers, not one. Real Bald Hill
 // CDJR Pacifica ad (evidence 93a87344) — we used to report only the 0%/36 and

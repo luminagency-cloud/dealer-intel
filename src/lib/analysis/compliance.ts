@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import type { OfferType } from "@/lib/db";
 import { getEnv, isAdScoreConfigured } from "@/lib/env";
+import { isTransientNetworkError } from "./net";
 
 /**
  * Compliance grading (Phase 9). All compliance logic lives in an external
@@ -401,15 +402,6 @@ export class AdScoreComplianceGrader implements ComplianceGrader {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function isTransientNetworkError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const code = (err as NodeJS.ErrnoException).code;
-  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED" || code === "EPIPE") return true;
-  const cause = (err as { cause?: unknown }).cause;
-  if (cause instanceof Error) return isTransientNetworkError(cause);
-  return false;
-}
 
 async function fetchWithRetry(
   ...args: Parameters<typeof fetch>

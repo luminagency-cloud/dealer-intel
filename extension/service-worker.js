@@ -89,8 +89,17 @@ const activeInventorySessionRecovery = closeActiveSession();
  * already knows, so it does not have to load the homepage and then immediately
  * navigate away from it. Callers that genuinely want the homepage (evidence
  * capture) omit it and get `item.url`.
+ *
+ * `lifetimeMs` arms the reclaim watchdog and belongs to callers that run under
+ * a wall-clock budget — i.e. inventory. Evidence collection must NOT pass one:
+ * its budget is however long the page's carousels and disclaimers take, and
+ * arming the inventory watchdog there closed the window out from under a
+ * running mission ("No tab with id …" on Mastria's homepage, which walks 30
+ * disclaimer candidates well past two minutes). Evidence windows are closed by
+ * the next dealer's session, the page's CLOSE_SESSION on run end, or
+ * `activeInventorySessionRecovery` on the next worker start.
  */
-async function ensureSiteSession(item, landingUrl) {
+async function ensureSiteSession(item, landingUrl, lifetimeMs) {
   await activeInventorySessionRecovery;
   if (!item?.url || !item?.siteId) {
     throw new Error("Collection job did not include a dealer and URL");
@@ -166,11 +175,13 @@ async function ensureSiteSession(item, landingUrl) {
   await chrome.storage.local.set({
     [ACTIVE_INVENTORY_SESSION_KEY]: activeSession,
   });
-  // Derived from the collection budget itself, so the window can never be
+  // Derived from the caller's own collection budget, so the window can never be
   // reclaimed out from under a collection that is still legitimately running.
-  activeSessionTimeout = setTimeout(() => {
-    closeActiveSession().catch(() => {});
-  }, inventoryShared.sessionLifetimeMs(item.makeAllowList?.length));
+  if (lifetimeMs) {
+    activeSessionTimeout = setTimeout(() => {
+      closeActiveSession().catch(() => {});
+    }, lifetimeMs);
+  }
   await waitForTabComplete(tabId);
   return activeSession;
 }

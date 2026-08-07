@@ -16,14 +16,12 @@ import {
   listWorkItemsForRun,
   resolveRunGroups,
 } from "@/lib/db/repository";
-import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
-import { isChromeRunLive } from "@/lib/chrome-collector";
+import { computeRunLiveState } from "@/lib/chrome-collector";
 import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { reportMinConfidence } from "@/lib/snapshot";
 import { RunStatusBadge } from "@/components/run-status-badge";
 import { RunLiveData } from "@/components/run-live-data";
-import { RunOfferBreakdown } from "@/components/run-offer-breakdown";
 import { SnapshotSection } from "@/components/snapshot-section";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
@@ -104,19 +102,11 @@ export default async function RunDetailPage({
   );
 
   const canCollect = run.status === "pending" || run.status === "running" || run.status === "paused";
-  const executing =
-    run.collectorMode === "current"
-      ? isRunExecuting(run.id)
-      : isChromeRunLive(run);
-  const paused = isPausedRun(run.id);
+  const { executing, paused, stalled } = computeRunLiveState(run.id, run, runResults);
   const evidencePageCount = runResults.reduce(
     (sum, r) => sum + (r.pagesCaptured ?? 0),
     0
   );
-  const stalled =
-    run.collectorMode === "current" &&
-    !executing &&
-    runResults.some((r) => r.status === "pending" || r.status === "running");
   // Chrome run left mid-flight with no live tab behind it — the heartbeat is
   // what distinguishes this from a run that is collecting right now.
   const needsChromeRecovery =
@@ -192,6 +182,8 @@ export default async function RunDetailPage({
         grades={runGrades}
         siteNames={siteNames}
         siteOptions={siteOptions}
+        siteMeta={siteMeta}
+        publishableConfidenceFloor={reportMinConfidence()}
         canCollect={canCollect}
         canAnalyze={canAnalyze}
         canPublish={run.status !== "failed"}
@@ -229,20 +221,6 @@ export default async function RunDetailPage({
         needsChromeRecovery={needsChromeRecovery}
         switchToCurrentCollectorAction={switchToCurrentCollector.bind(null, run.id)}
       />
-
-      {/* Offer breakdown — pre-publish gut check, same view as verify-offers.ts */}
-      {runOffers.length > 0 && (
-        <div className="mb-8">
-          <h2 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-            Offer breakdown
-          </h2>
-          <RunOfferBreakdown
-            offers={runOffers}
-            siteMeta={siteMeta}
-            publishableConfidenceFloor={reportMinConfidence()}
-          />
-        </div>
-      )}
 
       {/* Snapshot section — static, only changes after a publish action */}
       <div id="snapshot" className="mb-8">

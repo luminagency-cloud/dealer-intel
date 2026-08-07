@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { requireApiSession } from "@/lib/session";
 import { eq } from "drizzle-orm";
 import { getDb, missionResults, collectionRuns } from "@/lib/db";
 import { listOffersForRun, listComplianceGradesForRun } from "@/lib/db/repository";
-import { isRunExecuting, isPausedRun } from "@/lib/run-executor";
-import { isChromeRunLive } from "@/lib/chrome-collector";
+import { computeRunLiveState } from "@/lib/chrome-collector";
 import {
   isAnalysisRunning,
   isAnalysisStopping,
@@ -16,13 +15,13 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getSession();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { response } = await requireApiSession();
+  if (response) return response;
 
   const { id } = await params;
 
   const db = getDb();
-  const [results, currentExecuting, analyzing, progress, partialKeys, runRecord, offers, grades] = await Promise.all([
+  const [results, analyzing, progress, partialKeys, runRecord, offers, grades] = await Promise.all([
     db
       .select({
         id: missionResults.id,
@@ -35,7 +34,6 @@ export async function GET(
       })
       .from(missionResults)
       .where(eq(missionResults.collectionRunId, id)),
-    Promise.resolve(isRunExecuting(id)),
     Promise.resolve(isAnalysisRunning(id)),
     Promise.resolve(getAnalysisProgress(id)),
     Promise.resolve(getPartialAnalysisKeys(id)),
@@ -58,20 +56,7 @@ export async function GET(
   ]);
 
   const run = runRecord[0];
-  const chromeRun = run?.collectorMode === "chrome_extension";
-  const executing = chromeRun
-    ? !!run && isChromeRunLive(run)
-    : currentExecuting;
-
-  const paused = isPausedRun(id);
-  // Chrome's interrupted state is surfaced by its own recovery button, not the
-  // Current collector's Resume banner — an unfinished Chrome run is never
-  // "stalled" in the sense this flag means.
-  const stalled =
-    !chromeRun &&
-    !executing &&
-    !paused &&
-    results.some((r) => r.status === "pending" || r.status === "running");
+  const { executing, paused, stalled } = computeRunLiveState(id, run, results);
 
   return NextResponse.json({
     executing,

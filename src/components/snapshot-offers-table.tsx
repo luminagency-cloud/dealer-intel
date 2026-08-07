@@ -4,11 +4,7 @@
   type SnapshotOffer,
 } from "@/lib/db";
 import { ComplianceGradeBadge } from "@/components/compliance-grade-badge";
-import { fmtMileage } from "@/lib/report";
-
-function money(value: number | null): string {
-  return value === null ? "—" : `$${value.toLocaleString()}`;
-}
+import { fmtMileage, fmtMoney as money } from "@/lib/report";
 
 function confidenceStyle(confidence: number | null): string {
   if (confidence === null) return "text-zinc-700";

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { CollectorMode, Mission, MissionResult, MissionResultStatus, Site, SiteMission } from "@/lib/db";
 import { MissionStatusBadge } from "@/components/mission-status-badge";
 import { ChromeCollectorControl } from "@/components/chrome-collector-control";
+import { fmtDateTime as fmtTime, totalMin } from "@/lib/fmt-date";
 
 export interface PanelWorkItem {
   site: Site;
@@ -32,17 +33,6 @@ const FILTER_LABELS: Record<MissionResultStatus, string> = {
 
 /** Mission-driven collection with live background progress: start the whole
  *  run (or one site+mission pair) and watch statuses update. */
-function fmtTime(d: Date | null | undefined): string {
-  if (!d) return "—";
-  return new Date(d).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function totalMin(start: Date | null | undefined, end: Date | null | undefined): string {
-  if (!start || !end) return "";
-  const mins = Math.round((end.getTime() - start.getTime()) / 60000);
-  return mins < 1 ? "< 1 min" : `${mins} min`;
-}
-
 export function MissionRunPanel({
   runId,
   items,

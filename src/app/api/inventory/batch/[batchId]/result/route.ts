@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { requireApiSession } from "@/lib/session";
 import {
   completeChromeInventoryItem,
   failChromeInventoryItem,
@@ -20,10 +20,8 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ batchId: string }> }
 ) {
-  const session = await getSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { response } = await requireApiSession();
+  if (response) return response;
 
   try {
     const { batchId } = await params;

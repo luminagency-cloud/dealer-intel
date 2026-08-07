@@ -217,16 +217,23 @@ export class CollectorSession {
 
   /** True when the URL responds without an error status. Used for URL
    *  discovery probing — cheaper than a full capture. */
-  async probeUrl(url: string): Promise<boolean> {
+  /** Resolves to the URL actually served, or null if the probe failed.
+   *
+   *  Returns the final URL rather than a boolean because a 200 does not mean
+   *  the page exists: most non-Dealer.com platforms answer an unknown path with
+   *  200 and a silent redirect to the homepage, so the caller has to compare
+   *  where it landed against where it asked to go. */
+  async probeUrl(url: string): Promise<{ url: string; html: string } | null> {
     const page = await this.context.newPage();
     try {
       const response = await page.goto(url, {
         waitUntil: "domcontentloaded",
         timeout: 20_000,
       });
-      return response !== null && response.ok();
+      if (response === null || !response.ok()) return null;
+      return { url: page.url(), html: await page.content() };
     } catch {
-      return false;
+      return null;
     } finally {
       await page.close().catch(() => {});
     }
@@ -243,10 +250,19 @@ export class CollectorSession {
       });
       const host = new URL(page.url()).host;
       const links = await page.evaluate(() =>
-        [...document.querySelectorAll("a[href]")].map((a) => ({
-          text: (a.textContent ?? "").trim().toLowerCase(),
-          href: (a as HTMLAnchorElement).href,
-        }))
+        [...document.querySelectorAll("a[href]")]
+          // Skip submenu openers — see isMenuToggle in chrome-collector.ts.
+          // Dealer.com's "Finance & Specials" is one of these and its href is
+          // the finance department, not the specials page under it.
+          .filter(
+            (a) =>
+              a.getAttribute("data-toggle") !== "dropdown" &&
+              !a.classList.contains("nav-with-children")
+          )
+          .map((a) => ({
+            text: (a.textContent ?? "").trim().toLowerCase(),
+            href: (a as HTMLAnchorElement).href,
+          }))
       );
       return links.filter((l) => {
         try {

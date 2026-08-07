@@ -575,10 +575,19 @@ function escapeRe(s: string): string {
 }
 
 /** First known model appearing in `scope`, matched longest-first so multi-word
- *  models (e.g. "Grand Cherokee") beat their substrings. Null if none. */
+ *  models (e.g. "Grand Cherokee") beat their substrings. Null if none.
+ *
+ *  A trailing plural or possessive is tolerated because ad copy uses them
+ *  freely — "ON ALL JEEP GRAND WAGONEERS", "2026 RAM LARAMIE 1500's". The bare
+ *  `\b` sits between two word characters there and never matches, so a real,
+ *  fully-parsed finance offer ("...GRAND WAGONEERS AND GET 2.97% APR for 72
+ *  months") resolved to a null model and was then discarded outright as an
+ *  unmodeled priced offer. */
 export function findKnownModel(scope: string): string | null {
   for (const model of KNOWN_MODELS) {
-    if (new RegExp(`\\b${escapeRe(model)}\\b`, "i").test(scope)) return model;
+    if (new RegExp(`\\b${escapeRe(model)}(?:['’]?s)?\\b`, "i").test(scope)) {
+      return model;
+    }
   }
   return null;
 }
@@ -687,19 +696,15 @@ function contextAround(text: string, anchor: string | null): string | null {
  *  a confident offer (see extraction hard rules: a fabricated/noisy offer is
  *  worse than a missing one). Service confidence is computed separately and is
  *  not routed through here. */
+const MISSION_PROVENANCE_FACTOR: Record<MissionType, number> = {
+  finance_offers: 1,
+  service_specials: 1,
+  homepage_offers: 0.85,
+  promotional_banners: 0.8,
+};
+
 function missionProvenanceFactor(mission: MissionType): number {
-  switch (mission) {
-    case "finance_offers":
-      return 1;
-    case "service_specials":
-      return 1;
-    case "homepage_offers":
-      return 0.85;
-    case "promotional_banners":
-      return 0.8;
-    default:
-      return 1;
-  }
+  return MISSION_PROVENANCE_FACTOR[mission];
 }
 
 /** Core extraction pass over an already-stripped text chunk (either a
