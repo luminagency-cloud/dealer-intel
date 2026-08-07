@@ -1,0 +1,47 @@
+// Repairs site_missions rows the Chrome collector poisoned before it had URL
+// discovery: it handed every mission the dealer homepage, then memorized that
+// homepage as the mission's page. A memorized URL beats discovery, so those
+// rows keep the bug alive even after the code fix — clearing them lets the
+// next run rediscover the real page.
+//
+// Only touches non-homepage missions whose last_known_url IS the dealer
+// homepage. Homepage/banner missions legitimately point there.
+//   node scripts/clear-homepage-mission-memory.mjs [--apply]
+import "dotenv/config";
+import { neon } from "@neondatabase/serverless";
+
+const apply = process.argv.includes("--apply");
+const sql = neon(process.env.DATABASE_URL);
+
+const affected = await sql`
+  SELECT s.name, m.mission_type, sm.last_known_url
+  FROM site_missions sm
+  JOIN sites s ON s.id = sm.site_id
+  JOIN missions m ON m.id = sm.mission_id
+  WHERE m.mission_type NOT IN ('homepage_offers', 'promotional_banners')
+    AND sm.last_known_url IS NOT NULL
+    AND rtrim(sm.last_known_url, '/') = rtrim(s.url, '/')
+  ORDER BY s.name, m.mission_type
+`;
+
+for (const row of affected) {
+  console.log(`${row.mission_type.padEnd(18)} ${row.name.padEnd(30)} ${row.last_known_url}`);
+}
+console.log(`\n${affected.length} row(s) pinned to the dealer homepage.`);
+
+if (!apply) {
+  console.log("Dry run. Re-run with --apply to clear last_known_url on these rows.");
+} else {
+  const cleared = await sql`
+    UPDATE site_missions sm
+    SET last_known_url = NULL, updated_at = now()
+    FROM sites s, missions m
+    WHERE s.id = sm.site_id
+      AND m.id = sm.mission_id
+      AND m.mission_type NOT IN ('homepage_offers', 'promotional_banners')
+      AND sm.last_known_url IS NOT NULL
+      AND rtrim(sm.last_known_url, '/') = rtrim(s.url, '/')
+    RETURNING sm.id
+  `;
+  console.log(`Cleared ${cleared.length} row(s).`);
+}

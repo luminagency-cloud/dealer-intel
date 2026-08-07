@@ -490,18 +490,68 @@ async function pageMetadata(tabId) {
   return result;
 }
 
+// Skia caps a single texture at 16384px; asking for a taller shot returns a
+// blank or truncated image rather than an error.
+const MAX_CAPTURE_HEIGHT_PX = 16_384;
+
+async function pageContentSize(target) {
+  const metrics = await chrome.debugger.sendCommand(
+    target,
+    "Page.getLayoutMetrics"
+  );
+  const content = metrics?.cssContentSize || metrics?.contentSize;
+  if (!content?.width || !content?.height) {
+    throw new Error("Chrome could not measure the full dealer page");
+  }
+  return {
+    width: Math.ceil(content.width),
+    height: Math.min(Math.ceil(content.height), MAX_CAPTURE_HEIGHT_PX),
+  };
+}
+
+/** Full-page screenshot by resizing the layout viewport to the whole document
+ *  and capturing it in one pass.
+ *
+ *  Deliberately NOT `captureBeyondViewport: true`. On any page carrying a
+ *  position:fixed or sticky element — which is every dealer site, they all
+ *  have a sticky header — Chromium repaints the same viewport-sized tile down
+ *  the length of the image instead of scrolling the content. That turned an
+ *  Anchor Nissan homepage capture into the identical hero ad seven times over
+ *  a 5486px canvas, with the rest of the page never captured at all.
+ *
+ *  Overriding device metrics forces a real relayout at full height, so fixed
+ *  elements are painted once, where they belong. */
 async function captureFullPage(tabId) {
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
+  let overridden = false;
   try {
     await chrome.debugger.sendCommand(target, "Page.enable");
-    const metrics = await chrome.debugger.sendCommand(
-      target,
-      "Page.getLayoutMetrics"
-    );
-    const content = metrics?.cssContentSize || metrics?.contentSize;
-    if (!content?.width || !content?.height) {
-      throw new Error("Chrome could not measure the full dealer page");
+    let size = await pageContentSize(target);
+    // Resizing reflows `100vh` sections and pulls lazy images into view, which
+    // can grow the document — so measure again and, if it did grow, resize once
+    // more. The capture clip must match the viewport exactly: with
+    // captureBeyondViewport off, anything past it comes back blank.
+    for (let pass = 0; pass < 2; pass += 1) {
+      await chrome.debugger.sendCommand(
+        target,
+        "Emulation.setDeviceMetricsOverride",
+        {
+          mobile: false,
+          width: size.width,
+          height: size.height,
+          deviceScaleFactor: 1,
+          screenOrientation: { angle: 0, type: "portraitPrimary" },
+        }
+      );
+      overridden = true;
+      await sleep(400);
+      const settled = await pageContentSize(target);
+      if (settled.height <= size.height && settled.width <= size.width) break;
+      size = {
+        width: Math.max(size.width, settled.width),
+        height: Math.max(size.height, settled.height),
+      };
     }
     const result = await chrome.debugger.sendCommand(
       target,
@@ -509,19 +559,18 @@ async function captureFullPage(tabId) {
       {
         format: "png",
         fromSurface: true,
-        captureBeyondViewport: true,
-        clip: {
-          x: 0,
-          y: 0,
-          width: Math.ceil(content.width),
-          height: Math.ceil(content.height),
-          scale: 1,
-        },
+        captureBeyondViewport: false,
+        clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 },
       }
     );
     if (!result?.data) throw new Error("Chrome returned an empty full-page image");
     return `data:image/png;base64,${result.data}`;
   } finally {
+    if (overridden) {
+      await chrome.debugger
+        .sendCommand(target, "Emulation.clearDeviceMetricsOverride")
+        .catch(() => {});
+    }
     await chrome.debugger.detach(target).catch(() => {});
   }
 }
@@ -626,9 +675,19 @@ async function clickNextTab(tabId) {
   return result || null;
 }
 
-/** Reads the first visible promotional carousel through its own active-state
- * markers. The fixed safety cap is only a runaway guard; normal completion is
- * detected when the active slide identity repeats or the next control stops. */
+/** Reads the first promotional carousel through its own active-state markers.
+ * The fixed safety cap is only a runaway guard; normal completion is detected
+ * when the active slide identity repeats or the next control stops.
+ *
+ * The carousel is identified by its SLIDES, not by a visible arrow. Dealer.com
+ * ships its specials carousel with `hide-buttons` — the Next control is
+ * `display: none` yet still advances the widget on a DOM click — so requiring a
+ * visible arrow skipped the real hero (13 ads on a live CDJR store) and latched
+ * onto the vehicle slider's visible "Next Vehicle" button instead. That button's
+ * own class contains `btn-carousel`, so `closest('[class*="carousel"]')` matched
+ * the BUTTON, which holds no slides: every DDC homepage captured its base state
+ * and nothing else. Judge the control by whether it drives a real slide
+ * container, and the container by whether IT is on screen. */
 async function readPrimaryCarouselState(tabId, pauseRotation = false) {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
@@ -654,29 +713,59 @@ async function readPrimaryCarouselState(tabId, pauseRotation = false) {
           style.visibility !== "hidden"
         );
       };
+      const slideSelectors = [
+        '[aria-label*="carousel slide number" i]',
+        ".carousel-item",
+        ".item",
+        ".slick-slide",
+        ".swiper-slide",
+      ];
+      const holdsSlides = (element) =>
+        slideSelectors.some((selector) => element.querySelector(selector));
+      // A slide container qualifies only if it is a carousel root that actually
+      // holds slides and is on screen. Ancestors are walked from the control's
+      // PARENT, never `closest` from the control itself, whose own class may
+      // contain "carousel"/"slider" (Dealer.com's `btn-carousel`).
       const resolveContainer = (next) => {
-        const controlledId = next.getAttribute("aria-controls");
-        if (controlledId) {
-          const controlled = document.getElementById(controlledId);
-          if (controlled) return controlled;
+        for (const attribute of ["aria-controls", "data-target"]) {
+          const raw = next.getAttribute(attribute);
+          if (!raw) continue;
+          const controlled = document.getElementById(raw.replace(/^#/, ""));
+          if (controlled && holdsSlides(controlled) && isVisible(controlled)) {
+            return controlled;
+          }
         }
-        const target = next.getAttribute("data-target");
-        if (target?.startsWith("#")) {
-          const controlled = document.getElementById(target.slice(1));
-          if (controlled) return controlled;
+        let node = next.parentElement;
+        for (let depth = 0; depth < 8 && node; depth += 1) {
+          if (
+            node.matches(
+              '[role="region"], .carousel, .slick-slider, .swiper, [class*="carousel" i], [class*="slider" i]'
+            ) &&
+            holdsSlides(node) &&
+            isVisible(node)
+          ) {
+            return node;
+          }
+          node = node.parentElement;
         }
-        return next.closest(
-          '[role="region"], .carousel, .slick-slider, .swiper, [class*="carousel" i], [class*="slider" i]'
-        );
+        return null;
       };
       let next = null;
+      let container = null;
       for (const selector of nextSelectors) {
-        next = Array.from(document.querySelectorAll(selector)).find(isVisible);
-        if (next) break;
+        for (const candidate of document.querySelectorAll(selector)) {
+          const resolved = resolveContainer(candidate);
+          if (resolved) {
+            next = candidate;
+            container = resolved;
+            break;
+          }
+        }
+        if (container) break;
       }
-      if (!(next instanceof HTMLElement)) return null;
-      const container = resolveContainer(next);
-      if (!(container instanceof HTMLElement)) return null;
+      if (!(next instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+        return null;
+      }
       container.dataset.dealerIntelPrimaryCarousel = "true";
 
       if (shouldPause) {
@@ -688,13 +777,6 @@ async function readPrimaryCarouselState(tabId, pauseRotation = false) {
         if (pause instanceof HTMLElement) pause.click();
       }
 
-      const slideSelectors = [
-        '[aria-label*="carousel slide number" i]',
-        ".carousel-item",
-        ".item",
-        ".slick-slide",
-        ".swiper-slide",
-      ];
       const slides = [];
       for (const selector of slideSelectors) {
         for (const slide of container.querySelectorAll(selector)) {
@@ -834,11 +916,14 @@ async function advancePrimaryCarousel(
             return true;
           }
         }
+        // Deliberately NOT filtered by isVisible: Dealer.com hides this arrow
+        // with CSS (`hide-buttons`) and still advances the carousel on a DOM
+        // click, so requiring a visible control ended traversal at slide one.
         const next = Array.from(
           container.querySelectorAll(
             'button[aria-label*="next picture" i], button[data-slide="next"], .carousel-control-next, .slick-next, .swiper-button-next, button[aria-label*="next slide" i]'
           )
-        ).find(isVisible);
+        ).find((element) => element instanceof HTMLElement);
         if (!(next instanceof HTMLElement)) return false;
         // DealerOn temporarily disables this control during its transition.
         // A DOM click is still accepted after that transition settles, so do

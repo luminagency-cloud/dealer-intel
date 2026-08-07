@@ -21,7 +21,9 @@ import {
   DISCOVERY_KEYWORDS,
   MISSION_EXPLORATION,
   PLATFORM_DEFAULT_PATHS,
+  SIGNAL_CHECKED_MISSIONS,
   missionTargetsHomepage,
+  pageHasOfferSignal,
 } from "./mission-knowledge";
 
 /**
@@ -104,30 +106,6 @@ function configuredUrls(
   return [...new Set(urls)].slice(0, MAX_PAGES_PER_MISSION);
 }
 
-/** Missions where a reachable-but-empty page is a real problem worth guarding
- *  against: a dealer's generic "/promotions" guess path routinely redirects to
- *  a nav hub (links to New Inventory / Service / About, no cards) rather than
- *  the actual specials, and that hub still returns 200 — so plain reachability
- *  isn't enough signal to trust it. Homepage/banner missions are teasers by
- *  design (thin content is expected there), so they're exempt. */
-const SIGNAL_CHECKED_MISSIONS: MissionType[] = ["finance_offers", "service_specials"];
-
-/** Cheap, collector-local heuristic for "does this page carry a priced offer
- *  at all" — deliberately NOT the analysis extractor (collection must not
- *  depend on analysis logic; Collect and Analyze are separate phases, see
- *  AGENTS.md). Used only to rank discovery candidates, never to produce an
- *  offer record. */
-function pageHasOfferSignal(html: string): boolean {
-  const text = html
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<[^>]+>/g, " ");
-  return (
-    /\$\s?[\d,]{2,7}\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i.test(text) ||
-    /\d+(?:\.\d+)?\s*%\s*(?:APR\b|off\b|financing\b)/i.test(text) ||
-    /\$\s?[\d,]{1,7}\s*(?:cash back|customer cash|rebate|off\b)/i.test(text)
-  );
-}
-
 /** Recovery sequence steps 3-4: platform default paths, then nav discovery.
  *
  *  For finance/service missions, reachability alone isn't good enough to pick
@@ -144,32 +122,32 @@ async function discoverUrl(
   site: Site
 ): Promise<string | null> {
   const base = site.url.replace(/\/+$/, "");
-  const candidates = PLATFORM_DEFAULT_PATHS[mission.missionType].map(
+  const defaultPaths = PLATFORM_DEFAULT_PATHS[mission.missionType].map(
     (path) => `${base}/${path}`
   );
+  const keywords = DISCOVERY_KEYWORDS[mission.missionType];
+
+  // Nav links are tried before the platform default paths. Measured against
+  // the live dealer list, the hardcoded guess paths 404 on nearly every site
+  // (only Balise's `/specials/service` answered), while the dealer's own nav
+  // points at whatever path its CMS actually uses — `/promotions/service/` on
+  // Dealer.com, `/service-parts-specials.html` on Sokal, and so on. Probing
+  // the guesses first just burns six round trips before reaching the answer.
+  const navMatches: string[] = [];
+  if (keywords.length > 0) {
+    const links = await session.collectLinks(site.url);
+    for (const keyword of keywords) {
+      const match = links.find((l) => l.text.includes(keyword));
+      if (match && !navMatches.includes(match.href)) navMatches.push(match.href);
+    }
+  }
+  const candidates = [...new Set([...navMatches, ...defaultPaths])];
 
   if (!SIGNAL_CHECKED_MISSIONS.includes(mission.missionType)) {
     for (const candidate of candidates) {
       if (await session.probeUrl(candidate)) return candidate;
     }
-    const keywords = DISCOVERY_KEYWORDS[mission.missionType];
-    if (keywords.length > 0) {
-      const links = await session.collectLinks(site.url);
-      for (const keyword of keywords) {
-        const match = links.find((l) => l.text.includes(keyword));
-        if (match) return match.href;
-      }
-    }
     return null;
-  }
-
-  const keywords = DISCOVERY_KEYWORDS[mission.missionType];
-  if (keywords.length > 0) {
-    const links = await session.collectLinks(site.url);
-    for (const keyword of keywords) {
-      const match = links.find((l) => l.text.includes(keyword));
-      if (match && !candidates.includes(match.href)) candidates.push(match.href);
-    }
   }
 
   let fallback: string | null = null;

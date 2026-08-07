@@ -60,3 +60,31 @@ export function missionTargetsHomepage(missionType: MissionType): boolean {
     missionType === "homepage_offers" || missionType === "promotional_banners"
   );
 }
+
+/** Missions where a reachable-but-empty page is a real problem worth guarding
+ *  against: a dealer's generic "/promotions" guess path routinely redirects to
+ *  a nav hub (links to New Inventory / Service / About, no cards) rather than
+ *  the actual specials, and that hub still returns 200 — so plain reachability
+ *  isn't enough signal to trust it. Homepage/banner missions are teasers by
+ *  design (thin content is expected there), so they're exempt. */
+export const SIGNAL_CHECKED_MISSIONS: MissionType[] = [
+  "finance_offers",
+  "service_specials",
+];
+
+/** Cheap, collector-local heuristic for "does this page carry a priced offer
+ *  at all" — deliberately NOT the analysis extractor (collection must not
+ *  depend on analysis logic; Collect and Analyze are separate phases, see
+ *  AGENTS.md). Used only to rank discovery candidates, never to produce an
+ *  offer record. Shared by both collectors so they agree on what counts as a
+ *  real offer page. */
+export function pageHasOfferSignal(html: string): boolean {
+  const text = html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  return (
+    /\$\s?[\d,]{2,7}\s*(?:\/|per\s+|a\s+)?\s*(?:mo(?:nthly)?\b|month\b)/i.test(text) ||
+    /\d+(?:\.\d+)?\s*%\s*(?:APR\b|off\b|financing\b)/i.test(text) ||
+    /\$\s?[\d,]{1,7}\s*(?:cash back|customer cash|rebate|off\b)/i.test(text)
+  );
+}
