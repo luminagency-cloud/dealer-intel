@@ -168,12 +168,37 @@ async function fetchPageHtml(
         continue;
       }
       if (!response.ok) return null;
-      return { html: await response.text(), finalUrl: current };
+      const html = await response.text();
+      // Meta refresh is a redirect too, and `fetch` cannot see it. Dealer
+      // platforms use it to bounce an unknown path to the homepage while
+      // answering 200, which is exactly the case the caller's landing check
+      // exists to catch — so it has to be followed here, not reported as the
+      // requested URL.
+      const refresh = metaRefreshTarget(html);
+      if (refresh) {
+        current = new URL(refresh, current).toString();
+        continue;
+      }
+      return { html, finalUrl: current };
     }
     return null;
   } catch {
     return null;
   }
+}
+
+/** URL out of a zero-ish `<meta http-equiv="refresh">`, or null. Only immediate
+ *  refreshes count — a long delay is a courtesy redirect on a real page, not a
+ *  redirect standing in for one. */
+function metaRefreshTarget(html: string): string | null {
+  const tag = /<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/i.exec(html)?.[0];
+  if (!tag) return null;
+  const content = /content=["']([^"']+)["']/i.exec(tag)?.[1];
+  if (!content) return null;
+  const [delay, ...rest] = content.split(";");
+  if (Number.parseFloat(delay) > 2) return null;
+  const target = rest.join(";").replace(/^\s*url\s*=\s*/i, "").trim();
+  return target ? target.replace(/^["']|["']$/g, "") : null;
 }
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -287,9 +312,12 @@ export async function discoverMissionUrl(
       if (match && !navMatches.includes(match.href)) navMatches.push(match.href);
     }
   }
+  // The cap applies to nav matches only. The default paths are a short fixed
+  // list and always get probed — capping the combined list dropped them
+  // entirely on a store whose nav matched six keywords.
   const candidates = [
     ...new Set([
-      ...navMatches,
+      ...navMatches.slice(0, MAX_DISCOVERY_CANDIDATES),
       ...PLATFORM_DEFAULT_PATHS[missionType].map((path) => `${base}/${path}`),
     ]),
   ]
@@ -297,8 +325,7 @@ export async function discoverMissionUrl(
     // discovery exists to stop. Colonial Subaru's "Current Offers" nav entry is
     // an `href="#"` dropdown toggle, which resolves to `/#` — capture that and
     // finance_offers is screenshotting the homepage again.
-    .filter((candidate) => !isSameLocation(candidate, site.url))
-    .slice(0, MAX_DISCOVERY_CANDIDATES);
+    .filter((candidate) => !isSameLocation(candidate, site.url));
 
   // Every surviving candidate is already justified — it is either a path the
   // platform publishes or a link the dealer's own nav labels as specials — so

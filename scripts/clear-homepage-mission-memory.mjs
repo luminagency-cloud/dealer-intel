@@ -19,10 +19,14 @@ import { neon } from "@neondatabase/serverless";
 const apply = process.argv.includes("--apply");
 const sql = neon(process.env.DATABASE_URL);
 
-/** `https://www.example.com/path/` -> `example.com/path` */
+/** `https://www.example.com/path/` -> `example.com/path`
+ *
+ *  The backslash is doubled because this is a JS template literal: `\.` is not
+ *  a recognized escape and cooks away to a bare `.`, which would let the
+ *  pattern strip any character after `www`. */
 const SAME_PAGE = sql`
-  regexp_replace(rtrim(sm.last_known_url, '/'), '^https?://(www\.)?', '')
-  = regexp_replace(rtrim(s.url, '/'), '^https?://(www\.)?', '')
+  regexp_replace(rtrim(sm.last_known_url, '/'), '^https?://(www\\.)?', '')
+  = regexp_replace(rtrim(s.url, '/'), '^https?://(www\\.)?', '')
 `;
 
 const affected = await sql`

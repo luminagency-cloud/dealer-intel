@@ -215,14 +215,19 @@ export class CollectorSession {
     return capturePageInContext(this.context, url, explore);
   }
 
-  /** True when the URL responds without an error status. Used for URL
-   *  discovery probing — cheaper than a full capture. */
   /** Resolves to the URL actually served, or null if the probe failed.
    *
    *  Returns the final URL rather than a boolean because a 200 does not mean
    *  the page exists: most non-Dealer.com platforms answer an unknown path with
    *  200 and a silent redirect to the homepage, so the caller has to compare
-   *  where it landed against where it asked to go. */
+   *  where it landed against where it asked to go.
+   *
+   *  Reads the URL after the page settles, not at `domcontentloaded`. Plenty of
+   *  those bounces are a `<meta http-equiv="refresh">` or a `location.href` in
+   *  a head script rather than an HTTP 3xx, and at `domcontentloaded` the URL
+   *  is still the one we asked for — so the landing check would wave the
+   *  homepage through. Cheaper than a full capture but not free: it fetches the
+   *  settled DOM. */
   async probeUrl(url: string): Promise<{ url: string; html: string } | null> {
     const page = await this.context.newPage();
     try {
@@ -231,6 +236,10 @@ export class CollectorSession {
         timeout: 20_000,
       });
       if (response === null || !response.ok()) return null;
+      // Give a meta-refresh or scripted redirect its chance to fire. Both are
+      // best-effort: a page that simply loads slowly still resolves here.
+      await page.waitForLoadState("load", { timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(750);
       return { url: page.url(), html: await page.content() };
     } catch {
       return null;

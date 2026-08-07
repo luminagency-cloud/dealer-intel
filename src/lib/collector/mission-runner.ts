@@ -98,11 +98,22 @@ function configuredUrls(
   siteMission: SiteMission | null,
   site: Site
 ): string[] {
+  // A memorized URL is only trusted if it points somewhere a non-homepage
+  // mission could plausibly belong — the same read-side guard the Chrome
+  // collector applies in resolveCollectionUrls. Without it a row whose
+  // lastKnownUrl drifted to the dealer homepage pins finance/service to the
+  // front page forever, since urls.length > 0 means discovery never runs.
+  const usable = (value: string | null | undefined): string | null => {
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+    if (missionTargetsHomepage(mission.missionType)) return trimmed;
+    return isSameLocation(trimmed, site.url) ? null : trimmed;
+  };
   const urls = [
     siteMission?.lastKnownUrl,
     ...(siteMission?.alternateUrls ?? []),
   ]
-    .map((u) => u?.trim())
+    .map(usable)
     .filter((u): u is string => Boolean(u));
   if (urls.length === 0 && missionTargetsHomepage(mission.missionType)) {
     urls.push(site.url);
@@ -144,11 +155,17 @@ async function discoverUrl(
       if (match && !navMatches.includes(match.href)) navMatches.push(match.href);
     }
   }
-  const candidates = [...new Set([...navMatches, ...defaultPaths])]
+  // The cap applies to nav matches only — see MAX_DISCOVERY_CANDIDATES. The
+  // default paths are a short fixed list and always get probed.
+  const candidates = [
+    ...new Set([
+      ...navMatches.slice(0, MAX_DISCOVERY_CANDIDATES),
+      ...defaultPaths,
+    ]),
+  ]
     // A candidate that resolves back to the homepage is the bug discovery
     // exists to stop — an `href="#"` toggle resolves to `/#`.
-    .filter((candidate) => !isSameLocation(candidate, site.url))
-    .slice(0, MAX_DISCOVERY_CANDIDATES);
+    .filter((candidate) => !isSameLocation(candidate, site.url));
 
   // First candidate that loads wins. Every candidate here is already justified
   // as a specials location, so there is nothing to rank — and nothing to settle
@@ -172,10 +189,11 @@ async function discoverUrl(
 /** Site memory: remember what worked for this dealer+mission. Creates the
  *  site_missions row when collection succeeded purely via discovery.
  *
- *  `discoveredUrl` non-null means discovery ran this visit, which only happens
- *  when nothing was configured — so it fills the empty slot. When the record
- *  already listed URLs, `discoveredUrl` is null and the existing memory is left
- *  untouched: discovery never overwrites what the operator configured. */
+ *  `discoveredUrl` non-null means discovery ran this visit — either nothing was
+ *  configured, or everything configured captured nothing at all and the
+ *  dead-link fallback found a live page. Both are worth memorizing, so it
+ *  overwrites `lastKnownUrl`. When every configured URL worked, `discoveredUrl`
+ *  is null and the existing memory is left untouched. */
 async function recordSuccess(
   site: Site,
   mission: Mission,
@@ -325,14 +343,39 @@ export async function runMissionInSession(
     }
   }
 
-  // No rediscovery fallback. When the dealer record lists URLs for this
-  // mission, those URLs are the answer: if they all fail, the mission fails and
-  // the operator fixes the record. Discovery used to re-run here whenever a
-  // memorized URL captured nothing *or* showed no pricing, and swap in whatever
-  // it found — which meant a specials page that was simply empty (normal early
-  // in the month) got silently replaced by some other page that happened to
-  // have a price on it. A configured page with no specials on it is a correct,
-  // reportable result, not a reason to go looking.
+  // Dead-link self-heal, and only that. Discovery used to re-run here whenever
+  // a memorized URL captured nothing *or* showed no pricing, and swap in
+  // whatever it found — which meant a specials page that was simply empty
+  // (normal early in the month) got silently replaced by some other page that
+  // happened to have a price on it. A configured page with no specials on it is
+  // a correct, reportable result, not a reason to go looking.
+  //
+  // Capturing NOTHING is different: the page is gone. Most of these URLs were
+  // never typed by an operator — recordSuccess memorizes whatever discovery
+  // found, and configuredUrls then treats it as configured — so "the operator
+  // fixes the record" is not an available outcome for a URL nobody knows
+  // exists. Without this, a discovered page that the dealer's CMS later renames
+  // fails the mission on every run from then on.
+  if (pagesCaptured === 0 && discoveredUrl === null) {
+    const freshUrl = await discoverUrl(session, mission, site);
+    if (freshUrl && !urls.includes(freshUrl)) {
+      try {
+        const cacheKey = `${freshUrl}|${sig}`;
+        let capture = captureCache.get(cacheKey);
+        if (!capture) {
+          capture = await session.capturePage(freshUrl, explore);
+          captureCache.set(cacheKey, capture);
+        }
+        evidence.push(...(await uploadCaptureEvidence(base, capture)));
+        pagesCaptured++;
+        successfulUrl ??= freshUrl;
+        // Promoted, so the next run goes straight here.
+        discoveredUrl = freshUrl;
+      } catch (err) {
+        firstError ??= cleanErrorMessage(err);
+      }
+    }
+  }
 
   if (pagesCaptured > 0) {
     await recordSuccess(site, mission, discoveredUrl);

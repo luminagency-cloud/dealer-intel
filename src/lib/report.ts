@@ -42,6 +42,14 @@ export function fmtMoney(n: number | null): string {
   return `$${Math.round(n).toLocaleString()}`;
 }
 
+/** Money exactly as parsed, unrounded. For the admin offer tables, where the
+ *  whole point is spotting a bad extraction — `$2,499.5` has to look wrong
+ *  rather than get tidied to `$2,500`. Reports use fmtMoney. */
+export function fmtMoneyExact(n: number | null): string {
+  if (n === null) return "—";
+  return `$${n.toLocaleString()}`;
+}
+
 export function fmtApr(n: number | null): string {
   if (n === null) return "—";
   const s = n % 1 === 0 ? `${n}` : n.toFixed(1).replace(/\.0$/, "");

@@ -568,7 +568,6 @@ export async function setUserRunGroups(
   }
 }
 
-/** Client-visible snapshots for a set of run groups, newest first. */
 /** Toggle client visibility on a snapshot. */
 export async function setSnapshotClientVisible(
   id: string,

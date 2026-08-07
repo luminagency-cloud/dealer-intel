@@ -727,8 +727,12 @@ async function insertImageExtractedOffer(input: {
   let aiAssisted = input.aiAssisted ?? false;
 
   if (offer.confidence < 0.3) return false;
-  // Cheap exact-duplicate exit before spending anything on recovery.
-  if (seen.has(offerSignature(siteId, offer))) return false;
+  // Cheap exact-duplicate exit before spending anything on recovery. Recorded
+  // alongside the resolved signature below, otherwise a second copy of the same
+  // model-less ad misses this exit and re-pays for enrichment only to be
+  // deduped afterwards.
+  const rawSig = offerSignature(siteId, offer);
+  if (seen.has(rawSig)) return false;
 
   // Model recovery, which this path used to have none of. A priced offer with
   // no model is discarded outright (isUnmodeledPricedOffer), and the DOM pass
@@ -745,7 +749,16 @@ async function insertImageExtractedOffer(input: {
     if (hint && !offer.vehicleModel) {
       offer = { ...offer, vehicleModel: hint };
     }
-    if (enricher && isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel)) {
+    // Same gate as the DOM pass: still unmodeled after the hint, OR simply
+    // under-confident. Gating on isUnmodeledPricedOffer alone made the
+    // confidence half of `needsModel` unreachable, so a low-confidence offer
+    // that already carried a model never got enriched here and sank below the
+    // publish floor — the very divergence this block was added to close.
+    if (
+      enricher &&
+      (isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel) ||
+        offer.confidence < aiThreshold)
+    ) {
       const enrichment = await enricher.enrich({
         pageText: adText ?? offer.rawText ?? "",
         brand,
@@ -765,6 +778,7 @@ async function insertImageExtractedOffer(input: {
   const sig = offerSignature(siteId, offer);
   if (seen.has(sig)) return false;
   seen.add(sig);
+  seen.add(rawSig);
   if (isUnmodeledPricedOffer(offer.offerType, offer.vehicleModel)) return false;
 
   const mileageAllowance =

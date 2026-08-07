@@ -133,7 +133,16 @@ export function navLinkIsExcluded(
   missionType: MissionType
 ): boolean {
   if (BANNED_PATTERNS.some((p) => p.test(href) || p.test(text))) return true;
-  return DISCOVERY_EXCLUSIONS[missionType].some((term) => text.includes(term));
+  // Whole-word, like navTextMatchesKeyword — a substring test fires inside
+  // longer words and silently drops good links: "used" hits "customer-focused
+  // offers" and "unused inventory specials". A trailing plural is still
+  // tolerated so "lease return" catches "Subaru Lease Returns".
+  return DISCOVERY_EXCLUSIONS[missionType].some((term) =>
+    new RegExp(
+      `(?:^|[^a-z0-9])${escapeRegExp(term)}s?(?:[^a-z0-9]|$)`,
+      "i"
+    ).test(text)
+  );
 }
 
 /** True when a URL is a banned manufacturer program. Applied to platform
@@ -172,16 +181,23 @@ export function pageIsBannedProgram(html: string): boolean {
 export function navTextMatchesKeyword(text: string, keyword: string): boolean {
   const words = keyword.split(/\s+/).filter(Boolean);
   if (words.length === 0) return false;
-  // Number is ignored on every word: the keyword list mixes singular and plural
-  // ("service special" but "new specials") and dealer nav does too, so each
-  // word is stemmed of a trailing "s" and then allowed an optional one. Without
-  // this, "new specials" missed "New Volvo Special Offers".
+  // Number is ignored on the nouns the dealer actually pluralizes: the trailing
+  // word of every keyword, plus any word already written plural in the list
+  // ("offers & incentives"). Those are stemmed of a trailing "s" and allowed an
+  // optional one, which is what lets "new specials" match "New Volvo Special
+  // Offers". Every other word must match exactly — granting a blanket optional
+  // "s" turned "new" into /new s?/, which matches "News", so a dealer's
+  // "News & Specials" nav group was picked as its finance offers page.
   // Between words, allow at most MAX_INSERTED_WORDS of the dealer's own naming
   // ("new **subaru** specials"). Unbounded would let "new specials" match a
   // sentence that merely contains both words.
   const gap = `[^a-z0-9]+(?:[a-z0-9]+[^a-z0-9]+){0,${MAX_INSERTED_WORDS}}`;
   const body = words
-    .map((word) => `${escapeRegExp(word.replace(/s$/, ""))}s?`)
+    .map((word, index) =>
+      index === words.length - 1 || /s$/.test(word)
+        ? `${escapeRegExp(word.replace(/s$/, ""))}s?`
+        : escapeRegExp(word)
+    )
     .join(gap);
   return new RegExp(`(?:^|[^a-z0-9])${body}(?:[^a-z0-9]|$)`, "i").test(text);
 }
@@ -190,10 +206,17 @@ export function navTextMatchesKeyword(text: string, keyword: string): boolean {
  *  Two covers brand + store ("Exclusive Colonial Subaru Specials"). */
 const MAX_INSERTED_WORDS = 2;
 
-/** Ceiling on candidate pages probed per mission. Discovery keeps every nav
- *  link a keyword matches, and a broad keyword like "incentives" hits several
- *  on a big store — without this the Playwright collector would load all of
- *  them. Shared so both collectors probe the same amount. */
+/** Ceiling on *nav-discovered* candidate pages probed per mission. Discovery
+ *  keeps every nav link a keyword matches, and a broad keyword like
+ *  "incentives" hits several on a big store — without this the Playwright
+ *  collector would load all of them. Shared so both collectors probe the same
+ *  amount.
+ *
+ *  Deliberately NOT a cap on the combined list. The platform default paths are
+ *  a short fixed list that always gets its turn: capping nav + defaults
+ *  together silently dropped every default path on a store whose nav matched
+ *  six keywords, and truncated service_specials (seven paths) even on a store
+ *  with no nav matches at all. */
 export const MAX_DISCOVERY_CANDIDATES = 6;
 
 /** True when two URLs point at the same page, ignoring a trailing slash and a

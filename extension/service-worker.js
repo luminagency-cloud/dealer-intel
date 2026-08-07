@@ -121,6 +121,12 @@ async function ensureSiteSession(item, landingUrl, lifetimeMs) {
   if (activeSession?.siteId === item.siteId) {
     try {
       const tab = await chrome.tabs.get(activeSession.tabId);
+      // The reused window belongs to THIS caller now, so it gets this caller's
+      // budget. Returning without re-arming left an inventory batch running
+      // under whatever the previous caller set — usually nothing at all, since
+      // evidence collection passes no lifetime — so the reclaim watchdog the
+      // argument exists to arm was silently never set.
+      armSessionWatchdog(lifetimeMs);
       // Deliberately does NOT re-focus the collection window. A dealer batch
       // calls this once per dealer, and grabbing focus each time made the
       // browser unusable — the operator could not stay in another tab or
@@ -175,15 +181,24 @@ async function ensureSiteSession(item, landingUrl, lifetimeMs) {
   await chrome.storage.local.set({
     [ACTIVE_INVENTORY_SESSION_KEY]: activeSession,
   });
-  // Derived from the caller's own collection budget, so the window can never be
-  // reclaimed out from under a collection that is still legitimately running.
-  if (lifetimeMs) {
-    activeSessionTimeout = setTimeout(() => {
-      closeActiveSession().catch(() => {});
-    }, lifetimeMs);
-  }
+  armSessionWatchdog(lifetimeMs);
   await waitForTabComplete(tabId);
   return activeSession;
+}
+
+/** Replaces any pending reclaim timer with one derived from the current
+ *  caller's collection budget, so the window can never be reclaimed out from
+ *  under a collection that is still legitimately running. A falsy `lifetimeMs`
+ *  means "no watchdog" (evidence capture) and clears whatever was armed. */
+function armSessionWatchdog(lifetimeMs) {
+  if (activeSessionTimeout !== null) {
+    clearTimeout(activeSessionTimeout);
+    activeSessionTimeout = null;
+  }
+  if (!lifetimeMs) return;
+  activeSessionTimeout = setTimeout(() => {
+    closeActiveSession().catch(() => {});
+  }, lifetimeMs);
 }
 
 /** Best-effort consent suppression inside every accessible frame. */

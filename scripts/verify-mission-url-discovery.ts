@@ -117,6 +117,13 @@ assert.equal(
 // ...and words match whole, not as fragments.
 assert.equal(navTextMatchesKeyword("servicer specialist", "service special"), false);
 assert.equal(navTextMatchesKeyword("renew specials", "new specials"), false);
+// ...and a plural is only tolerated where the dealer actually pluralizes. A
+// blanket optional "s" made "new" match "News", so a dealer's "News & Specials"
+// nav group was picked as its finance offers page.
+assert.equal(navTextMatchesKeyword("news & specials", "new specials"), false);
+assert.equal(navTextMatchesKeyword("news, events & specials", "new specials"), false);
+// The keyword's own plural still matches either way.
+assert.equal(navTextMatchesKeyword("offer & incentive", "offers & incentives"), true);
 
 // Exclusions: pages that match a keyword but are not the dealer's own
 // advertised specials.
@@ -174,6 +181,10 @@ assert.equal(X("current incentives", "/current-incentives.htm", "finance_offers"
 assert.equal(X("new subaru incentives", "/new-subaru-incentives.htm", "finance_offers"), false);
 // Service discovery has no label exclusions; a service coupon page is the target.
 assert.equal(X("used car service coupons", "/service-coupons.htm", "service_specials"), false);
+// Exclusion terms are whole words. Substring matching dropped good links on
+// "used" hiding inside another word.
+assert.equal(X("customer-focused offers", "/specials.htm", "finance_offers"), false);
+assert.equal(X("unused inventory specials", "/specials.htm", "finance_offers"), false);
 
 // Only homepage missions may legitimately collect the homepage.
 assert.equal(missionTargetsHomepage("homepage_offers"), true);

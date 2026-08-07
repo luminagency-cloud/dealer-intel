@@ -1,6 +1,6 @@
 {
   "name": "dealer-intel",
-  "version": "3.7.12",
+  "version": "3.7.13",
   "description": "Chrome ext. for local scrapes",
   "private": true,
   "scripts": {

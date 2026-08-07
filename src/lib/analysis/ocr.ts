@@ -150,9 +150,10 @@ export function looksMisread(text: string): boolean {
   if (!text.trim()) return true;
   // Nothing but segmentation placeholders, stray digits and punctuation: no
   // text was actually transcribed, whatever the character count says. One
-  // three-letter run is the bar, and every real ad clears it ("MO", "APR" and
-  // "$319" alone would not, but no ad consists solely of those). A bare-digit
-  // read like Tasca's `1 | 1 | 1 | ...` is a failed read, not a terse ad.
+  // run of three letters anywhere is the bar, which is low enough that every
+  // real ad clears it — "$319/MO APR" already does, on "APR". What it rejects
+  // is a read with no word in it at all: a bare-digit read like Tasca's
+  // `1 | 1 | 1 | ...`, or "$319/MO" on its own, is a failed read.
   if (!/[a-z]{3}/i.test(text.replace(OCR_PLACEHOLDER_TOKEN, " "))) return true;
   // The lookahead spares finance disclosures, where a few dollars and cents
   // per month is legitimate: "$8.10 per month per $1,000 financed".

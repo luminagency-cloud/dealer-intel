@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { OFFER_TYPE_LABELS, type ComplianceGrade, type Offer, type Site } from "@/lib/db";
 import { ComplianceGradeBadge } from "@/components/compliance-grade-badge";
-import { fmtMileage, fmtMoney as money } from "@/lib/report";
+import { fmtMileage, fmtMoneyExact as money } from "@/lib/report";
 import { fmtDateTime as fmtTime, totalMin } from "@/lib/fmt-date";
 
 /** Confidence value styling. Anything BELOW the publish floor (it won't reach a
