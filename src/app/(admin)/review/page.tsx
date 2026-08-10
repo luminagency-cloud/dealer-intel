@@ -13,7 +13,7 @@ import {
 import { MissionStatusBadge } from "@/components/mission-status-badge";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
-import { resolveContentRemoved, retryResult } from "../runs/actions";
+import { resolveContentRemoved } from "../runs/actions";
 import { deleteSelectedResults } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -167,14 +167,14 @@ export default async function ReviewPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3 text-sm">
-                      <form action={retryResult.bind(null, "/review", result.id)}>
-                        <button
-                          type="submit"
-                          className="text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
-                        >
-                          Retry
-                        </button>
-                      </form>
+                      {/* Re-collecting means driving the operator's Chrome, so
+                          it lives on the run page's row control, not here. */}
+                      <Link
+                        href={`/runs/${run.id}`}
+                        className="text-zinc-900 underline hover:text-zinc-600 dark:text-zinc-100 dark:hover:text-zinc-200"
+                      >
+                        Re-collect
+                      </Link>
                       <Link
                         href={`/dealers/${site.id}/edit`}
                         className="text-zinc-600 hover:underline dark:text-zinc-200 dark:hover:text-zinc-200"

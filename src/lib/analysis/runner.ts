@@ -22,6 +22,7 @@ import {
 } from "@/lib/collector/ad-images";
 import { getEvidenceBody, getEvidenceText, uploadEvidence } from "@/lib/evidence";
 import {
+  applyCouponVerdict,
   extractOffers,
   extractOffersFromDisclosure,
   extractOffersFromOcrImage,
@@ -36,9 +37,36 @@ import { runOcr, type OcrArtifact } from "./ocr";
 import { parseMileage, deriveAnnualMileage } from "@/lib/report";
 import {
   aiConfidenceThreshold,
+  getCouponVerifier,
   getOfferEnricher,
   type OfferEnricher,
+  type OfferEnrichment,
 } from "./ai-enrich";
+import { reportMinConfidence } from "@/lib/snapshot";
+
+/** Applies an AI enrichment's FIELDS while keeping the rule-based confidence.
+ *
+ *  The enricher reports its own 0..1 self-assessment, which used to be spread
+ *  straight onto the offer and stored in `offers.confidence`. That put two
+ *  incompatible scales in one column: a deterministic completeness score for
+ *  rows the rules handled, and a language model's opinion for rows they didn't.
+ *  Two identical ads could then read 68% and 90% purely because one had a
+ *  garbled character that sent it down the AI path. The rule score now always
+ *  describes what the rules could verify; the model's number is kept alongside
+ *  it (normalized_json.aiConfidence) for anyone auditing the AI pass.
+ *
+ *  The accept test is unchanged: a correction is only taken when the model is at
+ *  least as confident as the guess it would replace. */
+function applyEnrichment<T extends ExtractedOffer>(
+  offer: T,
+  enrichment: OfferEnrichment | null
+): { offer: T; aiConfidence: number | null } {
+  if (!enrichment || enrichment.confidence < offer.confidence) {
+    return { offer, aiConfidence: null };
+  }
+  const { confidence, ...fields } = enrichment;
+  return { offer: { ...offer, ...fields }, aiConfidence: confidence };
+}
 
 /**
  * Phase 9 analysis runner. Independent, re-runnable passes over a run's stored
@@ -725,6 +753,7 @@ async function insertImageExtractedOffer(input: {
 
   let offer = input.offer;
   let aiAssisted = input.aiAssisted ?? false;
+  let aiConfidence: number | null = null;
 
   if (offer.confidence < 0.3) return false;
   // Cheap exact-duplicate exit before spending anything on recovery. Recorded
@@ -765,9 +794,11 @@ async function insertImageExtractedOffer(input: {
         current: offer,
         ocrModelHint: hint,
       });
-      if (enrichment && enrichment.confidence >= offer.confidence) {
-        offer = { ...offer, ...enrichment };
+      const applied = applyEnrichment(offer, enrichment);
+      offer = applied.offer;
+      if (applied.aiConfidence !== null) {
         aiAssisted = true;
+        aiConfidence = applied.aiConfidence;
       }
     }
   }
@@ -802,7 +833,7 @@ async function insertImageExtractedOffer(input: {
     dueAtSigning: offer.dueAtSigning,
     mileageAllowance,
     rawText: offer.rawText,
-    normalizedJson: { matches: offer.matches, aiAssisted, source },
+    normalizedJson: { matches: offer.matches, aiAssisted, aiConfidence, source },
     disclaimerText: offer.disclaimerText,
     confidence: offer.confidence,
   });
@@ -841,7 +872,9 @@ const MAX_DOM_OFFERS_FOR_IMAGE_PASS = 2;
  *  Dealer.com), OCR each coupon image (primary — it's what customers see) and
  *  reconcile it against the image's alt text (cross-check). Returns reconciled
  *  offers, each carrying a `verify` marker (corroborated / mismatch / ocr_only /
- *  alt_only) and a confidence set by that agreement. Called only when the DOM
+ *  alt_only) and a confidence set by that agreement. A `mismatch` is then
+ *  adjudicated by the service-shaped coupon verifier (confirm the OCR read or
+ *  drop the row) so it doesn't sit unpublishable at 0.50. Called only when the DOM
  *  pass found nothing, so DOM-text coupons keep their trusted extraction and
  *  never pay for OCR. Degrades gracefully: if Mistral is off or an image fails,
  *  the alt cross-check alone still yields an (alt_only) offer. */
@@ -859,6 +892,7 @@ async function serviceCouponOffers(
   if (coupons.length === 0) return [];
   const hints = { missionType: "service_specials" as const, brand };
   const mistralOn = isMistralConfigured();
+  const verifier = getCouponVerifier();
   const out: ExtractedOffer[] = [];
   let tried = 0;
   for (const coupon of coupons) {
@@ -880,7 +914,23 @@ async function serviceCouponOffers(
       }
     }
     const offer = reconcileServiceCoupon(ocrText, coupon.alt, hints);
-    if (offer) out.push(offer);
+    if (!offer) continue;
+    // A coupon whose two reads disagree scores 0.50 — under the publish floor,
+    // and out of reach of both AI routing conditions (the vehicle enricher is
+    // deliberately kept away from service offers). Adjudicate it here, where
+    // both readings are still in hand: confirm the OCR read or drop the row.
+    if (offer.matches.verify === "mismatch") {
+      const verdict = await verifier.verify({
+        brand,
+        label: offer.rawText,
+        ocrValue: offer.matches.ocrValue ?? "",
+        altValue: offer.matches.altValue ?? "",
+        ocrText,
+        altText: coupon.alt,
+      });
+      if (verdict) applyCouponVerdict(offer, verdict, reportMinConfidence());
+    }
+    out.push(offer);
   }
   return out;
 }
@@ -1069,6 +1119,7 @@ async function processAnalysis(
 
         let effective = offer;
         let aiAssisted = false;
+        let aiConfidence: number | null = null;
         if (offer.confidence < aiThreshold || (effective.vehicleModel === null && effective.offerType !== "service")) {
           let ocrModelHint: string | null = null;
           if (effective.vehicleModel === null && screenshotRow) {
@@ -1085,9 +1136,11 @@ async function processAnalysis(
           // the rule-based guess it's replacing — a low-confidence AI answer
           // ("I don't know either") shouldn't silently overwrite offer fields
           // just because it was asked to look.
-          if (enrichment && enrichment.confidence >= effective.confidence) {
-            effective = { ...effective, ...enrichment };
+          const applied = applyEnrichment(effective, enrichment);
+          effective = applied.offer;
+          if (applied.aiConfidence !== null) {
             aiAssisted = true;
+            aiConfidence = applied.aiConfidence;
           }
         }
 
@@ -1130,7 +1183,14 @@ async function processAnalysis(
           dueAtSigning: effective.dueAtSigning,
           mileageAllowance,
           rawText: effective.rawText,
-          normalizedJson: { matches: offer.matches, aiAssisted },
+          // aiVerified is present only when a verifier ruled on the row (today:
+          // an adjudicated coupon mismatch); the run page badges it.
+          normalizedJson: {
+            matches: offer.matches,
+            aiAssisted,
+            aiConfidence,
+            ...(offer.aiVerified ? { aiVerified: offer.aiVerified } : {}),
+          },
           disclaimerText,
           confidence: effective.confidence,
         });
@@ -1239,6 +1299,7 @@ async function processAnalysis(
         seen.add(signature);
 
         let aiAssisted = false;
+        let aiConfidence: number | null = null;
         if (effective.confidence < aiThreshold || effective.vehicleModel === null) {
           let ocrModelHint: string | null = null;
           if (effective.vehicleModel === null) {
@@ -1251,9 +1312,11 @@ async function processAnalysis(
             current: effective,
             ocrModelHint,
           });
-          if (enrichment && enrichment.confidence >= effective.confidence) {
-            effective = { ...effective, ...enrichment };
+          const applied = applyEnrichment(effective, enrichment);
+          effective = applied.offer;
+          if (applied.aiConfidence !== null) {
             aiAssisted = true;
+            aiConfidence = applied.aiConfidence;
           }
         }
 
@@ -1290,7 +1353,14 @@ async function processAnalysis(
           dueAtSigning: effective.dueAtSigning,
           mileageAllowance,
           rawText: effective.rawText,
-          normalizedJson: { matches: offer.matches, aiAssisted },
+          // aiVerified is present only when a verifier ruled on the row (today:
+          // an adjudicated coupon mismatch); the run page badges it.
+          normalizedJson: {
+            matches: offer.matches,
+            aiAssisted,
+            aiConfidence,
+            ...(offer.aiVerified ? { aiVerified: offer.aiVerified } : {}),
+          },
           disclaimerText,
           confidence: effective.confidence,
         });
@@ -1746,6 +1816,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           seen.add(sig);
           let effective = offer;
           let aiAssisted = false;
+          let aiConfidence: number | null = null;
           if (offer.confidence < aiThreshold || (effective.vehicleModel === null && effective.offerType !== "service")) {
             let ocrModelHint: string | null = null;
             if (effective.vehicleModel === null && screenshotRow) {
@@ -1753,14 +1824,16 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
               if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
             }
             const enrichment = await enricher.enrich({ pageText, brand: site.brand, current: effective, ocrModelHint });
-            if (enrichment && enrichment.confidence >= effective.confidence) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
+            const applied = applyEnrichment(effective, enrichment);
+            effective = applied.offer;
+            if (applied.aiConfidence !== null) { aiAssisted = true; aiConfidence = applied.aiConfidence; }
           }
           const matched = matchCapturedDisclaimer(effective, row.siteId, capturedDisclaimers);
           const disclaimerText = effective.disclaimerText ?? matched?.text ?? null;
           const vehicleModel = matched?.model ?? effective.vehicleModel;
           const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(effective.rawText) ?? deriveAnnualMileage(disclaimerText, effective.termMonths) ?? deriveAnnualMileage(effective.rawText, effective.termMonths) : null;
           if (isUnmodeledPricedOffer(effective.offerType, vehicleModel)) continue;
-          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted, aiConfidence, ...(offer.aiVerified ? { aiVerified: offer.aiVerified } : {}) }, disclaimerText, confidence: effective.confidence });
           domOffersByEvidence.set(row.id, (domOffersByEvidence.get(row.id) ?? 0) + 1);
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
@@ -1796,6 +1869,7 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
           if (seen.has(sig)) continue;
           seen.add(sig);
           let aiAssisted = false;
+          let aiConfidence: number | null = null;
           if (effective.confidence < aiThreshold || effective.vehicleModel === null) {
             let ocrModelHint: string | null = null;
             if (effective.vehicleModel === null) {
@@ -1803,12 +1877,14 @@ if (htmlRows.length === 0 && disclaimerRows.length === 0) return "no_evidence";
               if (artifact) ocrModelHint = findKnownModel(artifact.imageText);
             }
             const enrichment = await enricher.enrich({ pageText: text, brand: site.brand, current: effective, ocrModelHint });
-            if (enrichment && enrichment.confidence >= effective.confidence) { effective = { ...effective, ...enrichment }; aiAssisted = true; }
+            const applied = applyEnrichment(effective, enrichment);
+            effective = applied.offer;
+            if (applied.aiConfidence !== null) { aiAssisted = true; aiConfidence = applied.aiConfidence; }
           }
           const disclaimerText = disclaimerPortion(text).slice(0, 1000);
           const mileageAllowance = effective.offerType === "lease" ? effective.mileageAllowance ?? parseMileage(disclaimerText) ?? parseMileage(text) ?? deriveAnnualMileage(disclaimerText, effective.termMonths) ?? deriveAnnualMileage(text, effective.termMonths) : null;
           if (isUnmodeledPricedOffer(effective.offerType, effective.vehicleModel)) continue;
-          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted }, disclaimerText, confidence: effective.confidence });
+          await db.insert(offers).values({ collectionRunId: runId, siteId: row.siteId, sourceEvidenceId: row.id, offerType: effective.offerType, vehicleMake: effective.vehicleMake, vehicleModel: effective.vehicleModel, vehicleTrim: effective.vehicleTrim, monthlyPayment: effective.monthlyPayment, apr: effective.apr, cashIncentive: effective.cashIncentive, salePrice: effective.salePrice, termMonths: effective.termMonths, dueAtSigning: effective.dueAtSigning, mileageAllowance, rawText: effective.rawText, normalizedJson: { matches: offer.matches, aiAssisted, aiConfidence }, disclaimerText, confidence: effective.confidence });
           const COMPLIANCE_TYPES: typeof effective.offerType[] = ["lease", "finance", "cash"];
           const result = COMPLIANCE_TYPES.includes(effective.offerType)
             ? await grader.grade({ evidenceId: row.id, offerType: effective.offerType, disclaimerText, adText: effective.rawText, dealerName: site.name, marketStates, screenshotBuffer })

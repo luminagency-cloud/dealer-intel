@@ -2,7 +2,7 @@
 
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 const MIN_EXTENSION_VERSION = "1.4.3";
 
 class ChromeCollectorTimeoutError extends Error {

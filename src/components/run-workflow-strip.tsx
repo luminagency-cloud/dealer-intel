@@ -8,18 +8,11 @@ export function RunWorkflowStrip({
   offerCount,
   snapshots,
   executing,
-  paused,
-  stalled,
-  canCollect,
   analyzing,
   canAnalyze,
   canPublish,
   runAnalysisAction,
   publishSnapshotAction,
-  executeAllAction,
-  pauseAction,
-  resumePausedRunAction,
-  resumeAction,
   defaultSnapshotLabel,
 }: {
   runResults: MissionResult[];
@@ -27,18 +20,11 @@ export function RunWorkflowStrip({
   offerCount: number;
   snapshots: ReportSnapshot[];
   executing: boolean;
-  paused: boolean;
-  stalled: boolean;
-  canCollect: boolean;
   analyzing: boolean;
   canAnalyze: boolean;
   canPublish: boolean;
   runAnalysisAction: () => Promise<void>;
   publishSnapshotAction: (formData: FormData) => Promise<void>;
-  executeAllAction: () => Promise<void>;
-  pauseAction?: () => Promise<void>;
-  resumePausedRunAction?: () => Promise<void>;
-  resumeAction: () => Promise<void>;
   defaultSnapshotLabel?: string;
 }) {
   const succeeded = runResults.filter((r) => r.status === "success").length;
@@ -68,54 +54,10 @@ export function RunWorkflowStrip({
           <span className="text-sm text-zinc-700 dark:text-zinc-200">
             {executing
               ? `${settled}/${totalWorkItems} running`
-              : paused
-                ? "paused"
-                : stalled
-                  ? "stalled"
-                  : settled === 0
-                    ? totalWorkItems > 0 ? "not started" : "no scope"
-                    : `${succeeded}/${totalWorkItems}${failed > 0 ? ` · ${failed} failed` : ""}`}
+              : settled === 0
+                ? totalWorkItems > 0 ? "not started" : "no scope"
+                : `${succeeded}/${totalWorkItems}${failed > 0 ? ` · ${failed} failed` : ""}`}
           </span>
-          {canCollect && executing && pauseAction && (
-            <form action={pauseAction} onClick={(e) => e.stopPropagation()}>
-              <button
-                type="submit"
-                className="ml-1 rounded bg-yellow-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-yellow-600"
-              >
-                Pause
-              </button>
-            </form>
-          )}
-          {canCollect && !executing && paused && resumePausedRunAction && (
-            <form action={resumePausedRunAction} onClick={(e) => e.stopPropagation()}>
-              <button
-                type="submit"
-                className="ml-1 rounded bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700"
-              >
-                Resume
-              </button>
-            </form>
-          )}
-          {canCollect && !executing && !paused && stalled && (
-            <form action={resumeAction} onClick={(e) => e.stopPropagation()}>
-              <button
-                type="submit"
-                className="ml-1 rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700"
-              >
-                Resume
-              </button>
-            </form>
-          )}
-          {canCollect && !executing && !paused && !stalled && settled === 0 && totalWorkItems > 0 && (
-            <form action={executeAllAction} onClick={(e) => e.stopPropagation()}>
-              <button
-                type="submit"
-                className="ml-1 rounded bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700"
-              >
-                Start
-              </button>
-            </form>
-          )}
         </a>
 
         <span className="px-3 text-lg text-zinc-600 dark:text-zinc-200">→</span>

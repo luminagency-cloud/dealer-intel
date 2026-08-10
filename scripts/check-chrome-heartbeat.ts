@@ -16,8 +16,7 @@ import {
 const fresh = new Date(Date.now() - 1_000);
 const stale = new Date(Date.now() - CHROME_HEARTBEAT_STALE_MS - 1_000);
 
-const chromeRunning = {
-  collectorMode: "chrome_extension",
+const chromeRunning: { status: string; chromeHeartbeatAt: Date | null } = {
   status: "running",
   chromeHeartbeatAt: fresh,
 };
@@ -42,14 +41,6 @@ assert.equal(
   isChromeRunLive({ ...chromeRunning, status: "completed" }),
   false,
   "completed run is not live"
-);
-
-// The Current collector has its own in-process registry; a stray heartbeat on
-// such a run must never make it look live.
-assert.equal(
-  isChromeRunLive({ ...chromeRunning, collectorMode: "current" }),
-  false,
-  "current-collector run is never judged by heartbeat"
 );
 
 console.log("chrome heartbeat liveness: all checks passed");

@@ -1,6 +1,14 @@
 # Chrome Extension Collector Migration Plan
 
-_Created: August 1, 2026_
+_Created: August 1, 2026 · Superseded August 9, 2026_
+
+> **Historical. The migration is finished.** The cutover happened in 3.9.0: the
+> Playwright collector, the run-page collector picker, and the "switch back to
+> the current collector" fallback were all deleted. Everything below that talks
+> about a *pilot*, a *second backend*, a *fallback*, or *proving parity* records
+> how the migration was run, not how the system works now. For current
+> behaviour see `Docs/Implementation Notes.md` and the Chrome Extension
+> Collector section of `Docs/Implementation Roadmap.md`.
 
 ## Goal
 

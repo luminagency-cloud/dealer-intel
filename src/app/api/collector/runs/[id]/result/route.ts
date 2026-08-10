@@ -87,6 +87,18 @@ export async function POST(
         throw new ChromeCollectorError("screenshot is required");
       }
       const textContent = formData.get("textContent");
+      // Ad graphics ride along as files, downloaded by the extension inside the
+      // dealer's page. Paired positionally with their source URLs — this app
+      // never requests a dealer-controlled URL, so the bytes have to arrive
+      // here rather than be fetched.
+      const adImageUrls = formData.getAll("adImageUrl");
+      const adImageFiles = formData.getAll("adImage");
+      const adImages = adImageFiles.flatMap((file, index) => {
+        const url = adImageUrls[index];
+        if (!(file instanceof File) || file.size === 0) return [];
+        if (typeof url !== "string" || !url.trim()) return [];
+        return [{ url: url.trim(), file }];
+      });
       await uploadChromeCaptureState({
         runId,
         siteId,
@@ -99,6 +111,12 @@ export async function POST(
         label: requiredString(formData, "label"),
         html: requiredString(formData, "html"),
         screenshot: new Uint8Array(await screenshot.arrayBuffer()),
+        adImages: await Promise.all(
+          adImages.map(async ({ url, file }) => ({
+            url,
+            body: Buffer.from(await file.arrayBuffer()),
+          }))
+        ),
         textContent:
           typeof textContent === "string" && textContent.trim()
             ? textContent.trim()

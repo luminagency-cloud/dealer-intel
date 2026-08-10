@@ -431,18 +431,30 @@ export function AnalysisSection({
                                 kept
                               </span>
                             )}
-                            {(
-                              offer.normalizedJson as {
+                            {(() => {
+                              const ai = offer.normalizedJson as {
                                 aiAssisted?: boolean;
-                              } | null
-                            )?.aiAssisted && (
-                              <span
-                                className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
-                                title="Corrected by the AI analysis pass"
-                              >
-                                AI
-                              </span>
-                            )}
+                                aiConfidence?: number | null;
+                              } | null;
+                              if (!ai?.aiAssisted) return null;
+                              // The percentage on the left is always the
+                              // rule-based score. The model's own number lives
+                              // here so the two scales stay distinguishable.
+                              return (
+                                <span
+                                  className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-violet-700"
+                                  title={
+                                    ai.aiConfidence != null
+                                      ? `Corrected by the AI analysis pass (model's own confidence: ${Math.round(
+                                          ai.aiConfidence * 100
+                                        )}%). The score shown is the rule-based one.`
+                                      : "Corrected by the AI analysis pass"
+                                  }
+                                >
+                                  AI
+                                </span>
+                              );
+                            })()}
                             {(() => {
                               const v = (
                                 offer.normalizedJson as {

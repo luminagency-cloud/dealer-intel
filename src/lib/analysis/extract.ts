@@ -34,6 +34,11 @@ export interface ExtractedOffer {
   confidence: number;
   /** Raw matched substrings, preserved for drill-down in normalized_json. */
   matches: Record<string, string>;
+  /** Set only when an AI verifier has adjudicated this row (today: mismatched
+   *  service coupons — see applyCouponVerdict). Confirm/drop judgment, never a
+   *  field correction; the runner stores it as normalized_json.aiVerified, the
+   *  same shape the on-demand "Verify borderline" action writes. */
+  aiVerified?: { real: boolean; reason: string; confidence: number };
 }
 
 export interface ExtractHints {
@@ -182,6 +187,32 @@ export function stripDealerTeamworkDump(html: string): string {
   }
   out += html.slice(cursor);
   return out;
+}
+
+/**
+ * True when an offer scope is priced against ONE specific unit in stock — the
+ * card prints a VIN or a stock number alongside the payment.
+ *
+ * Inventory-driven platforms attach a lease/finance figure to every car on the
+ * lot and render the result as a specials page. Toyota of Dartmouth's
+ * `/specials/` is the measured case: every offer box on it carries
+ * "VIN: 4T1DBADKXTU32C915 / Stock No: TU32C915", so the page is the dealer's
+ * new-car inventory wearing an offers label, and the run stored 12 rows that
+ * are really 12 cars. A price tied to one VIN is not the dealer's advertised
+ * offer — the unit sells and it is gone — so none of these become offer rows.
+ *
+ * Complements `stripDealerTeamworkDump`, which removes one vendor's markup by
+ * class name. This reads the text the card prints, so it holds on any platform,
+ * and it is what the AI verifier was already told to reject (per-VIN inventory
+ * auto-estimates) — now refused before an AI call is spent on it.
+ *
+ * Applied only to BOUNDED scopes (one DOM card, one anchor window, one
+ * disclosure, one OCR read). Never to whole-page text: a homepage carrying one
+ * genuine hero offer plus a featured-vehicle widget would otherwise lose the
+ * hero offer to a VIN printed a thousand characters away.
+ */
+export function isPerVehicleListing(text: string): boolean {
+  return /\b(?:vin|stock)\s*(?:no\.?|number)?\s*[:#]\s*[a-z0-9]/i.test(text);
 }
 
 function parseAmount(raw: string): number {
@@ -707,6 +738,36 @@ function missionProvenanceFactor(mission: MissionType): number {
   return MISSION_PROVENANCE_FACTOR[mission];
 }
 
+/** The fields an offer of each type is EXPECTED to state, i.e. the denominator
+ *  of its completeness score. Only fields the type can actually carry belong
+ *  here: a lease quotes a payment, a term and a due-at-signing but never an APR;
+ *  a finance ad quotes an APR and a term, and a 0%-APR ad quotes no monthly
+ *  payment at all; a cash offer is one advertised purchase price and is complete
+ *  with nothing else. `promotional` is the leftover bucket (a payment with no
+ *  term and no lease marker), so it is measured against payment+term on purpose
+ *  — a bare price with no terms is genuinely half an offer, and should score
+ *  like one.
+ *
+ *  `cashIncentive` appears in no list: it is hardcoded null for new extractions
+ *  (rebates are not offers), so scoring it would penalize every row equally.
+ *  `service` is listed for exhaustiveness only — service confidence is a flat
+ *  0.8 / the OCR-reconciliation ladder and never routes through completeness. */
+const EXPECTED_FIELDS: Record<OfferType, ExtractedFieldKey[]> = {
+  lease: ["monthlyPayment", "termMonths", "dueAtSigning"],
+  finance: ["apr", "termMonths"],
+  cash: ["salePrice"],
+  promotional: ["monthlyPayment", "termMonths"],
+  service: [],
+};
+
+type ExtractedFieldKey =
+  | "monthlyPayment"
+  | "apr"
+  | "cashIncentive"
+  | "salePrice"
+  | "termMonths"
+  | "dueAtSigning";
+
 /** Core extraction pass over an already-stripped text chunk (either a
  *  full-page text for service/fallback, or a per-offer window). Returns null
  *  when the chunk has no priced signal. */
@@ -828,34 +889,45 @@ function extractOfferFromText(
   // the AI threshold (0.5) and
   // skips the vehicle-oriented AI pass, which has no business rewriting it.
   //
-  // Vehicle confidence: completeness (how many fields parsed) TIMES a provenance
-  // prior (how trustworthy the source page is). A homepage tile is a teaser —
-  // the same field count means less there than on a dedicated finance/specials
-  // page where the real advertised terms live. The prior only ever discounts a
-  // weak source, never inflates a strong one, so it cannot launder a thin or
-  // wrong extraction into a confident offer (hard rule: trustworthy > complete).
-  // A priced vehicle offer (lease/finance/cash) whose model we couldn't pin down
-  // is inherently less trustworthy — the ad names a vehicle we failed to
-  // identify, so it must never read as fully confident no matter how many other
-  // fields parsed (hard rule: trustworthy > complete). Penalize-only, like the
-  // provenance prior. Finance offers with no model are dropped outright
-  // downstream; this keeps a make-only lease/cash offer from posing as certain.
+  // Vehicle confidence: completeness RELATIVE TO THE OFFER TYPE times a
+  // provenance prior (how trustworthy the source page is). Completeness is
+  // measured against the fields the type can actually carry — see
+  // EXPECTED_FIELDS. Counting raw non-null fields out of a fixed six made every
+  // type that structurally lacks some of them (a lease has no APR; a 0%-APR
+  // finance ad has no monthly payment or due-at-signing) score low no matter how
+  // complete the ad was, which is what put fully-parsed offers at the publish
+  // floor.
+  //
+  // A homepage tile is a teaser — the same completeness means less there than on
+  // a dedicated finance/specials page where the real advertised terms live. The
+  // prior only ever discounts a weak source, never inflates a strong one, so it
+  // cannot launder a thin or wrong extraction into a confident offer (hard rule:
+  // trustworthy > complete). A priced vehicle offer (lease/finance/cash) whose
+  // model we couldn't pin down is inherently less trustworthy — the ad names a
+  // vehicle we failed to identify, so it must never read as fully confident no
+  // matter how many other fields parsed. Penalize-only, like the provenance
+  // prior. Finance offers with no model are dropped outright downstream; this
+  // keeps a make-only lease/cash offer from posing as certain.
+  //
+  // Disclaimer presence is deliberately NOT scored. Whether an ad carries fine
+  // print is a fact we already store (disclaimer_text) and already act on in the
+  // compliance grade — it is binary, not evidence that the extraction is right.
+  // As a +0.1 bonus it mostly rewarded whatever text happened to land in the
+  // disclaimer window, including mid-sentence OCR slices.
   const PRICED_VEHICLE_TYPES: OfferType[] = ["lease", "finance", "cash"];
   const missingModelPenalty =
     !isService && PRICED_VEHICLE_TYPES.includes(offerType) && !vehicle.model
       ? 0.75
       : 1;
+  const expected = EXPECTED_FIELDS[offerType];
+  const completeness = expected.length
+    ? expected.filter((k) => fields[k] !== null).length / expected.length
+    : 0;
   const confidence = isService
     ? (hasServiceSignal && serviceLabel ? 0.8 : 0)
     : Math.min(
         1,
-        (0.2 * signalCount +
-          // An explicit advertised purchase price is itself the complete core
-          // term of a cash-purchase offer, so score it more strongly than one
-          // supplemental lease/finance field.
-          (fields.salePrice !== null ? 0.3 : 0) +
-          (vehicle.make ? 0.1 : 0) +
-          (disclaimer ? 0.1 : 0)) *
+        (0.9 * completeness + (vehicle.make ? 0.1 : 0)) *
           missionProvenanceFactor(hints.missionType) *
           missingModelPenalty
       );
@@ -976,7 +1048,9 @@ function fuzzyOfferMatch(a: ExtractedOffer, b: ExtractedOffer): boolean {
  *  customers see) against its alt text (cross-check — accessibility metadata
  *  that can drift). Sets confidence and a `verify` marker consumed by the UI:
  *   - corroborated: OCR + alt agree            → 0.85, trusted
- *   - mismatch:     they disagree              → 0.50, keep OCR, flag for a look
+ *   - mismatch:     they disagree              → 0.50, keep OCR, adjudicated by
+ *                   the coupon verifier when a key is configured (see
+ *                   applyCouponVerdict), else flagged for a manual look
  *   - ocr_only:     OCR read it, no usable alt → 0.60
  *   - alt_only:     OCR blank, alt had it      → 0.50, weakest (stale-prone)
  *  Returns null when neither read yields an offer. */
@@ -1009,6 +1083,37 @@ export function reconcileServiceCoupon(
   altOffer!.confidence = 0.5;
   altOffer!.matches.verify = "alt_only";
   return altOffer!;
+}
+
+/** Applies a coupon verifier's confirm/drop verdict to a `mismatch` coupon.
+ *  Pure: it moves the confidence and records the ruling, and never touches an
+ *  offer field — the OCR read stands exactly as extracted either way, because
+ *  the verifier judges that read rather than replacing it.
+ *
+ *   - confirmed: the model's calibrated number becomes the confidence, so a
+ *     confirmed coupon publishes on the same floor as everything else (and a
+ *     lukewarm "probably right" still doesn't).
+ *   - dropped:   forced under the floor, so the drop holds regardless of the
+ *     model's own number. Same rule as verifyBorderlineOffers().
+ *
+ *  The `verify` marker moves off "mismatch" so the run page stops flagging the
+ *  row for a manual look — it has been adjudicated. */
+export function applyCouponVerdict(
+  offer: ExtractedOffer,
+  verdict: { real: boolean; calibratedConfidence: number; reason: string },
+  floor: number
+): ExtractedOffer {
+  const calibrated = Math.max(0, Math.min(1, verdict.calibratedConfidence));
+  offer.confidence = verdict.real
+    ? calibrated
+    : Math.min(calibrated, Math.max(0, floor - 0.05));
+  offer.matches.verify = verdict.real ? "mismatch_confirmed" : "mismatch_dropped";
+  offer.aiVerified = {
+    real: verdict.real,
+    reason: verdict.reason,
+    confidence: calibrated,
+  };
+  return offer;
 }
 
 /** Find every priced-offer anchor position in page text — monthly payment
@@ -1297,6 +1402,7 @@ function extractVehicleOffersFromCard(
   text: string,
   hints: ExtractHints
 ): ExtractedOffer[] {
+  if (isPerVehicleListing(text)) return [];
   const offer = extractOfferFromText(text, hints);
   return offer ? splitComboOffer(offer, text) : [];
 }
@@ -1349,6 +1455,7 @@ function extractVehicleOffersFromText(
       Math.max(0, pos - WINDOW_BEFORE),
       Math.min(text.length, pos + WINDOW_AFTER)
     );
+    if (isPerVehicleListing(chunk)) continue;
     const offer = extractOfferFromText(chunk, hints);
     if (!offer) continue;
     for (const split of splitComboOffer(offer, chunk)) {

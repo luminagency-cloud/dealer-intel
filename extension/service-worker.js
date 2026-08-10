@@ -15,7 +15,7 @@ importScripts(
   "inventory.js"
 );
 
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const CAPTURE_ACK_TIMEOUT_MS = 120_000;
 const CAROUSEL_SAFETY_LIMIT = 30;
@@ -601,11 +601,104 @@ async function captureFullPage(tabId) {
   }
 }
 
+/** Offer-card graphics, downloaded inside the dealer's own page.
+ *
+ *  The app never requests a dealer-controlled URL — that is what anti-bot
+ *  protection blocks, and it is why collection lives in this browser. Doing it
+ *  here also means the real rendered pixel size decides what counts as ad
+ *  creative, instead of guessing from the filename, and the bytes usually come
+ *  straight from the browser cache with the page's own cookies and referer.
+ *
+ *  `alreadyStored` is the set of image URLs this run has already sent up. The
+ *  same hero graphic appears on the homepage, the specials page, and every
+ *  carousel state of both; the server dedupes on capture key anyway, so
+ *  re-uploading it is pure payload. */
+async function collectAdImages(tabId, rules, alreadyStored) {
+  if (!rules) return [];
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    args: [rules, [...alreadyStored]],
+    func: async (adRules, seen) => {
+      const skipPath = new RegExp(adRules.skipPathPattern, "i");
+      const tileHost = new RegExp(adRules.tileHostPattern, "i");
+      const done = new Set(seen);
+      const picked = [];
+      for (const img of document.querySelectorAll("img")) {
+        if (picked.length >= adRules.max) break;
+        // Structural chrome carries the dealer's logos and social icons, never
+        // the offer of the day.
+        if (img.closest("header, footer, nav")) continue;
+        const src = img.currentSrc || img.src;
+        if (!src || src.startsWith("data:")) continue;
+        if (!/^https?:/i.test(src)) continue;
+        if (/\.(svg|ico|gif)(\?|#|$)/i.test(src)) continue;
+        if (skipPath.test(src)) continue;
+        try {
+          if (tileHost.test(new URL(src).hostname)) continue;
+        } catch {
+          continue;
+        }
+        // Real decoded pixels, which is the whole advantage of running in the
+        // page: no filename or query-param guessing about how big this is.
+        if (
+          img.naturalWidth < adRules.minWidth ||
+          img.naturalHeight < adRules.minHeight
+        ) {
+          continue;
+        }
+        if (done.has(src)) continue;
+        done.add(src);
+        picked.push(src);
+      }
+      const read = async (url) => {
+        try {
+          const response = await fetch(url, { credentials: "include" });
+          if (!response.ok) return null;
+          const blob = await response.blob();
+          const dataUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+          return dataUrl ? { url, dataUrl } : null;
+        } catch {
+          return null;
+        }
+      };
+      const results = await Promise.all(picked.map(read));
+      return results.filter(Boolean);
+    },
+  });
+  const images = result || [];
+  for (const image of images) alreadyStored.add(image.url);
+  return images;
+}
+
+/** Ad-image rules and the per-run set of URLs already uploaded. Module state
+ *  rather than a `captureState` argument because collection is strictly
+ *  sequential — one COLLECT_ITEM at a time — and the dedupe has to span every
+ *  mission of the run, not just one page. */
+let adImageContext = { collectionRequestId: null, rules: null, stored: new Set() };
+
+function beginAdImageContext(collectionRequestId, rules) {
+  if (adImageContext.collectionRequestId !== collectionRequestId) {
+    adImageContext = { collectionRequestId, rules, stored: new Set() };
+  } else {
+    adImageContext.rules = rules;
+  }
+}
+
 async function captureState(tabId, windowId, options) {
   const metadata = await pageMetadata(tabId);
   const screenshotDataUrl = options.fullPage
     ? await captureFullPage(tabId)
     : await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+  const adImages = await collectAdImages(
+    tabId,
+    adImageContext.rules,
+    adImageContext.stored
+  );
   return {
     stateId: options.stateId,
     stateKind: options.stateKind,
@@ -615,6 +708,7 @@ async function captureState(tabId, windowId, options) {
     label: options.label,
     html: metadata.html,
     screenshotDataUrl,
+    adImages,
     ...(options.textContent ? { textContent: options.textContent } : {}),
   };
 }
@@ -713,12 +807,24 @@ async function clickNextTab(tabId) {
  * own class contains `btn-carousel`, so `closest('[class*="carousel"]')` matched
  * the BUTTON, which holds no slides: every DDC homepage captured its base state
  * and nothing else. Judge the control by whether it drives a real slide
- * container, and the container by whether IT is on screen. */
+ * container, and the container by whether IT is on screen.
+ *
+ * PROMOTIONAL is a real condition, not a description: the container has to hold
+ * an ad-sized image. Without that test this took the first slider on the page,
+ * and on Tasca Nissan East Providence (Aug 9 2026) that was the customer-reviews
+ * swiper — 15 slides, zero images — so the run walked fifteen states of review
+ * quotes and every one of them re-ran ad capture over the page, which is how a
+ * "Shop by Model" stock photo ended up stored as ad creative. Testimonial,
+ * staff, and brand-tile sliders all fail the same test. A text-only promotional
+ * carousel is skipped too, and that is the accepted cost: its slides are already
+ * in the base state's HTML, so walking it buys screenshots of text we captured
+ * anyway. */
 async function readPrimaryCarouselState(tabId, pauseRotation = false) {
+  const rules = adImageContext.rules;
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
-    args: [pauseRotation],
-    func: (shouldPause) => {
+    args: [pauseRotation, rules?.minWidth ?? 500, rules?.minHeight ?? 300],
+    func: (shouldPause, minAdWidth, minAdHeight) => {
       const nextSelectors = [
         'button[aria-label*="next picture" i]',
         'button[data-slide="next"]',
@@ -748,18 +854,33 @@ async function readPrimaryCarouselState(tabId, pauseRotation = false) {
       ];
       const holdsSlides = (element) =>
         slideSelectors.some((selector) => element.querySelector(selector));
+      // Ad creative is the point of walking a carousel, so a container that
+      // holds no image big enough to carry an offer is not the one we want.
+      // Rendered size counts as well as decoded size: a hero occupies its box
+      // before it finishes decoding, and the caller polls for 8s, so a slow
+      // image resolves on a later pass rather than being judged too small.
+      const holdsAdImage = (element) =>
+        Array.from(element.querySelectorAll("img")).some((image) => {
+          const rect = image.getBoundingClientRect();
+          return (
+            (image.naturalWidth >= minAdWidth &&
+              image.naturalHeight >= minAdHeight) ||
+            (rect.width >= minAdWidth && rect.height >= minAdHeight)
+          );
+        });
+      const qualifies = (element) =>
+        holdsSlides(element) && isVisible(element) && holdsAdImage(element);
       // A slide container qualifies only if it is a carousel root that actually
-      // holds slides and is on screen. Ancestors are walked from the control's
-      // PARENT, never `closest` from the control itself, whose own class may
-      // contain "carousel"/"slider" (Dealer.com's `btn-carousel`).
+      // holds slides, is on screen, and carries ad creative. Ancestors are
+      // walked from the control's PARENT, never `closest` from the control
+      // itself, whose own class may contain "carousel"/"slider" (Dealer.com's
+      // `btn-carousel`).
       const resolveContainer = (next) => {
         for (const attribute of ["aria-controls", "data-target"]) {
           const raw = next.getAttribute(attribute);
           if (!raw) continue;
           const controlled = document.getElementById(raw.replace(/^#/, ""));
-          if (controlled && holdsSlides(controlled) && isVisible(controlled)) {
-            return controlled;
-          }
+          if (controlled && qualifies(controlled)) return controlled;
         }
         let node = next.parentElement;
         for (let depth = 0; depth < 8 && node; depth += 1) {
@@ -767,8 +888,7 @@ async function readPrimaryCarouselState(tabId, pauseRotation = false) {
             node.matches(
               '[role="region"], .carousel, .slick-slider, .swiper, [class*="carousel" i], [class*="slider" i]'
             ) &&
-            holdsSlides(node) &&
-            isVisible(node)
+            qualifies(node)
           ) {
             return node;
           }
@@ -1175,6 +1295,17 @@ async function openNextDisclaimer(tabId) {
   return null;
 }
 
+/** Chrome kills an injection when its target document goes away mid-call. A
+ *  disclaimer trigger is often a real link, so the click that was supposed to
+ *  open a modal navigates instead and every later read throws this. It means
+ *  "the page moved", not "the capture is broken". */
+function isFrameGoneError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /frame (?:with id .*)?was removed|no frame with id|no tab with id|frame was removed|document was unloaded/i.test(
+    message
+  );
+}
+
 function hasOfferTerms(text) {
   return (
     /\$\s?[\d,]+(?:\.\d{2})?/i.test(text) ||
@@ -1292,8 +1423,182 @@ async function closeDisclaimer(tabId, frameId = 0) {
   await sleep(300);
 }
 
+/** True when two URLs address the same page, ignoring a trailing slash and a
+ *  leading `www.` — the extension's copy of the server's isSameLocation. */
+function isSameLocation(left, right) {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return (
+      a.host.replace(/^www\./i, "") === b.host.replace(/^www\./i, "") &&
+      a.pathname.replace(/\/$/, "") === b.pathname.replace(/\/$/, "")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** True when a URL points at a front page — a root path, whoever owns the
+ *  host. Mirrors the server's isHomepageUrl. */
+function isHomepageUrl(url) {
+  try {
+    return new URL(url).pathname.replace(/\/+$/, "") === "";
+  } catch {
+    return false;
+  }
+}
+
+const MISSING_PAGE_PATTERN =
+  /\b(404|page not found|page cannot be found|page can'?t be found|not found|no longer available)\b/i;
+
+async function navigateTo(tabId, url) {
+  await chrome.tabs.update(tabId, { url });
+  await waitForTabComplete(tabId);
+  await sleep(500);
+}
+
+/** Whether the tab is standing on a page this mission may collect. Read in the
+ *  browser rather than over `fetch`, which is the whole point: 16 of 62 dealers
+ *  — Speedcraft, the Tasca and Nucar groups, Mastria — answer server-side
+ *  requests with a Cloudflare 403 and load normally here. */
+async function missionPageVerdict(tabId, item) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => ({
+      url: window.location.href,
+      title: document.title || "",
+      h1: document.querySelector("h1")?.textContent || "",
+    }),
+  });
+  if (!result?.url) return { ok: false, url: "" };
+  const banned = (item.discovery?.bannedPatterns || []).some((source) => {
+    const pattern = new RegExp(source, "i");
+    return pattern.test(result.url) || pattern.test(`${result.title} ${result.h1}`);
+  });
+  const ok =
+    !isHomepageUrl(result.url) &&
+    !isSameLocation(result.url, item.homeUrl || item.url) &&
+    !MISSING_PAGE_PATTERN.test(`${result.title} ${result.h1}`) &&
+    !banned;
+  return { ok, url: result.url };
+}
+
+/** Pages the dealer's own menu points at for this mission, best first.
+ *
+ *  Read off the rendered DOM, so submenu entries count even while collapsed —
+ *  Speedcraft Nissan's service page is only reachable as "Service & Parts
+ *  Specials" under the "Service Specials" menu. The matching rules arrive with
+ *  the job as regex sources so there is one copy of them, on the server. */
+async function menuCandidates(tabId, item) {
+  const discovery = item.discovery;
+  const [{ result: links }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () =>
+      Array.from(document.querySelectorAll("a[href]"))
+        .map((anchor) => ({
+          text: (anchor.textContent || "").replace(/\s+/g, " ").trim().toLowerCase(),
+          href: anchor.href,
+          // A dropdown group header is not a destination — its href is the
+          // department, not the specials page nested underneath it.
+          toggle:
+            anchor.getAttribute("data-toggle") === "dropdown" ||
+            /\bnav-with-children\b/.test(anchor.getAttribute("class") || ""),
+        }))
+        .filter((link) => link.text && /^https?:/i.test(link.href) && !link.toggle),
+  });
+
+  const host = (() => {
+    try {
+      return new URL(item.homeUrl).host;
+    } catch {
+      return "";
+    }
+  })();
+  const sameHost = (links || []).filter((link) => {
+    try {
+      return new URL(link.href).host === host;
+    } catch {
+      return false;
+    }
+  });
+
+  const excluded = (link) =>
+    discovery.bannedPatterns.some((source) => {
+      const pattern = new RegExp(source, "i");
+      return pattern.test(link.href) || pattern.test(link.text);
+    }) ||
+    discovery.exclusionPatterns.some((source) =>
+      new RegExp(source, "i").test(link.text)
+    );
+
+  // First usable match per keyword, in keyword order — most specific first.
+  const candidates = [];
+  for (const source of discovery.keywordPatterns) {
+    const pattern = new RegExp(source, "i");
+    const match = sameHost.find(
+      (link) =>
+        pattern.test(link.text) &&
+        !excluded(link) &&
+        !isSameLocation(link.href, item.homeUrl) &&
+        !candidates.includes(link.href)
+    );
+    if (match) candidates.push(match.href);
+    if (candidates.length >= discovery.maxCandidates) break;
+  }
+
+  // Platform paths last: a link the dealer's own menu labels as specials is
+  // stronger evidence than any path convention.
+  const base = item.homeUrl.replace(/\/+$/, "");
+  for (const path of discovery.defaultPaths) {
+    const url = `${base}/${path}`;
+    if (!candidates.includes(url)) candidates.push(url);
+  }
+  return candidates;
+}
+
+/** Puts the tab on the page this mission should collect, or throws.
+ *
+ *  The saved URL gets first refusal, then the dealer's menu. Dealer platforms
+ *  rename these pages between months (Speedcraft's service coupons live at
+ *  `/providence-nissan-service-parts-coupons/`), and a stale saved path either
+ *  404s or bounces to the homepage — at which point the menu, read live, is the
+ *  way through. */
+async function openMissionPage(tabId, item) {
+  const current = await chrome.tabs.get(tabId);
+  if (!isSameLocation(current.url || "", item.url)) {
+    await navigateTo(tabId, item.url);
+  }
+  if (!item.discovery) return;
+  if ((await missionPageVerdict(tabId, item)).ok) return;
+
+  // Any other saved path gets its turn before the menu walk — the operator can
+  // park a spare there, and a stale one costs a single load.
+  for (const saved of item.savedUrls || []) {
+    if (isSameLocation(saved, item.url)) continue;
+    await navigateTo(tabId, saved);
+    if ((await missionPageVerdict(tabId, item)).ok) return;
+  }
+
+  await navigateTo(tabId, item.homeUrl);
+  for (const candidate of await menuCandidates(tabId, item)) {
+    await navigateTo(tabId, candidate);
+    if ((await missionPageVerdict(tabId, item)).ok) return;
+  }
+  throw new Error(
+    `No saved URL or menu link led to this dealer's ${item.missionName} page`
+  );
+}
+
 async function collectItem(item, dealerIntelTabId, collectionRequestId) {
+  beginAdImageContext(collectionRequestId, item.adImageRules || null);
   const { windowId, tabId } = await ensureSiteSession(item);
+  // Every mission for a dealer shares one session tab, and ensureSiteSession
+  // only re-navigates when the ORIGIN differs — same dealer, same origin, so it
+  // never did. Missions after the first inherited whatever page the previous one
+  // left up: homepage_offers runs first, so finance_offers and service_specials
+  // captured the homepage and were recorded as "redirected to the homepage"
+  // when the browser had simply never been sent to their page.
+  await openMissionPage(tabId, item);
   let order = 0;
   let stateCount = 0;
   let baseUrl = item.url;
@@ -1427,13 +1732,21 @@ async function collectItem(item, dealerIntelTabId, collectionRequestId) {
         const trigger = await openNextDisclaimer(tabId);
         if (!trigger) break;
         await waitAfterInteraction(tabId, 1_000);
-        const afterOpen = await pageMetadata(tabId);
-        if (new URL(afterOpen.finalUrl).pathname !== trigger.pathBefore) {
+        let modal;
+        try {
+          const afterOpen = await pageMetadata(tabId);
+          if (new URL(afterOpen.finalUrl).pathname !== trigger.pathBefore) {
+            await chrome.tabs.goBack(tabId).catch(() => {});
+            await waitForTabComplete(tabId).catch(() => {});
+            continue;
+          }
+          modal = await readDisclaimer(tabId, trigger.frameId);
+        } catch (error) {
+          if (!isFrameGoneError(error)) throw error;
           await chrome.tabs.goBack(tabId).catch(() => {});
           await waitForTabComplete(tabId).catch(() => {});
           continue;
         }
-        const modal = await readDisclaimer(tabId, trigger.frameId);
         if (!hasOfferTerms(modal.text)) {
           await closeDisclaimer(tabId, trigger.frameId);
           continue;

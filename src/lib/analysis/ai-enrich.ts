@@ -280,6 +280,92 @@ export function getOfferVerifier(): OfferVerifier {
     : new NoopOfferVerifier();
 }
 
+// --- Service-coupon verifier (confirm/drop) ------------------------------
+//
+// The service-shaped sibling of ClaudeOfferVerifier, and for the same reason:
+// judge a borderline row rather than rewrite it. It exists because an image
+// coupon whose OCR read disagrees with its alt text scores 0.50 (`mismatch`),
+// under the publish floor, and neither routing condition in runner.ts reaches
+// it — the null-model condition is deliberately guarded off for service (a
+// service offer's model is always null by construction) and the enricher's
+// prompt is entirely lease/finance/vehicle, so it would rewrite a coupon into
+// a vehicle offer. This verifier only ever answers "is the kept OCR read the
+// offer this coupon advertises?" and returns the same OfferVerdict.
+
+export interface CouponVerifyInput {
+  brand: string | null;
+  /** Service label the extractor gave the coupon ("Brake Service"). */
+  label: string | null;
+  /** The offer value read off the graphic — the one the stored offer keeps. */
+  ocrValue: string;
+  /** The same coupon's alt-text value, which disagreed. */
+  altValue: string;
+  /** The full reads those two values came from, for context. */
+  ocrText: string | null;
+  altText: string | null;
+}
+
+export interface CouponVerifier {
+  /** Returns a verdict on the OCR read, or null if the pass is disabled or
+   *  errored (caller leaves the coupon's rule-based 0.50 alone). */
+  verify(input: CouponVerifyInput): Promise<OfferVerdict | null>;
+}
+
+export class NoopCouponVerifier implements CouponVerifier {
+  async verify(): Promise<OfferVerdict | null> { return null; }
+}
+
+const COUPON_VERIFY_SYSTEM_PROMPT = `You AUDIT one automotive dealer SERVICE COUPON that was read two ways that disagree. The coupon is a graphic: OCR of that graphic produced one offer value, and the image's alt text produced a different one. The stored offer keeps the OCR read, because the graphic is what a customer actually sees, while alt text is accessibility metadata that goes stale or gets copied from another coupon.
+
+JUDGE the OCR read. Do not rewrite it, do not propose a third value, and do not merge the two readings.
+
+Return:
+- real: true if the OCR read is the offer this coupon actually advertises; false if the coupon's own text does not support it — the value was misread from the graphic, stitched together from two coupons sharing one image, or is some other number on the graphic (a price, a phone number, an expiry) while the alt text carries the real offer.
+- calibratedConfidence: your probability (0..1) that the OCR read is correct. Be honestly calibrated — 0.9 means you'd expect 9 of 10 like this to be correct. Reserve >0.85 for clear-cut cases and <0.3 for clear rejects.
+- reason: one short line an operator can read, saying which read you trusted and why.
+
+Disagreement alone does not make the OCR read wrong: a generic or stale alt text ("Service Special", last month's price) against a coherent OCR read is a CONFIRM.`;
+
+/** How much of each read is sent — a coupon graphic's text is short, and the
+ *  cap keeps one bad OCR blob from blowing up cost. */
+const COUPON_TEXT_CHARS = 2000;
+
+export class ClaudeCouponVerifier implements CouponVerifier {
+  private client = new Anthropic();
+  private model = process.env.ANALYSIS_AI_MODEL ?? "claude-opus-4-8";
+
+  async verify(input: CouponVerifyInput): Promise<OfferVerdict | null> {
+    const textContent =
+      `Dealer brand: ${input.brand ?? "unknown"}\n` +
+      `Service: ${input.label ?? "unknown"}\n\n` +
+      `OCR read (kept): ${input.ocrValue}\n` +
+      `Alt-text read (disagrees): ${input.altValue}\n\n` +
+      `Full OCR text of the coupon graphic:\n${(input.ocrText ?? "").slice(0, COUPON_TEXT_CHARS)}\n\n` +
+      `Full alt text:\n${(input.altText ?? "").slice(0, COUPON_TEXT_CHARS)}`;
+
+    try {
+      const response = await this.client.messages.parse({
+        model: this.model,
+        max_tokens: 512,
+        system: COUPON_VERIFY_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: textContent }],
+        output_config: { format: zodOutputFormat(VerdictSchema) },
+      });
+      return response.parsed_output ?? null;
+    } catch (err) {
+      console.error("AI coupon verification failed:", err);
+      return null;
+    }
+  }
+}
+
+/** Claude coupon verifier when a key is configured, else the no-op. */
+export function getCouponVerifier(): CouponVerifier {
+  return process.env.ANTHROPIC_API_KEY
+    ? new ClaudeCouponVerifier()
+    : new NoopCouponVerifier();
+}
+
 /** The decision band [lo, hi) the on-demand verifier operates on — offers whose
  *  rule-based confidence straddles the publish floor. Offers below `lo` are left
  *  as dropped (no rescue) and offers at/above `hi` are left as trusted. */

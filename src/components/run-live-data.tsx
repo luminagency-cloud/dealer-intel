@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { CollectorMode, MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
+import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
 import { fmtDateTime } from "@/lib/fmt-date";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
 import { RunWorkflowStrip } from "@/components/run-workflow-strip";
@@ -13,8 +13,6 @@ interface LiveStatus {
   analyzing: boolean;
   /** Stop requested — the loop finishes its current page and exits. */
   analysisStopping: boolean;
-  paused: boolean;
-  stalled: boolean;
   progress: { processed: number; total: number } | null;
   partialAnalysisKeys: string[];
   results: Pick<
@@ -33,8 +31,6 @@ export function RunLiveData({
   runId,
   initialExecuting,
   initialAnalyzing,
-  initialPaused,
-  initialStalled,
   initialProgress,
   initialPartialAnalysisKeys,
   items,
@@ -52,14 +48,7 @@ export function RunLiveData({
   analysisStartedAt,
   analysisCompletedAt,
   evidencePageCount,
-  executeItemAction,
-  executeAllAction,
-  retryAction,
-  forceReCollectAction,
   reAnalyzeSiteMissionAction,
-  pauseAction,
-  resumePausedRunAction,
-  resumeAction,
   runAnalysisAction,
   resumeAnalysisAction,
   stopAnalysisAction,
@@ -76,15 +65,11 @@ export function RunLiveData({
   runIdShort,
   createdLabel,
   error,
-  collectorMode,
   needsChromeRecovery,
-  switchToCurrentCollectorAction,
 }: {
   runId: string;
   initialExecuting: boolean;
   initialAnalyzing: boolean;
-  initialPaused: boolean;
-  initialStalled: boolean;
   initialProgress: { processed: number; total: number } | null;
   initialPartialAnalysisKeys: string[];
   items: PanelWorkItem[];
@@ -102,14 +87,7 @@ export function RunLiveData({
   analysisStartedAt?: Date | null;
   analysisCompletedAt?: Date | null;
   evidencePageCount: number;
-  executeItemAction: (siteId: string, missionId: string) => Promise<void>;
-  executeAllAction: () => Promise<void>;
-  retryAction: (resultId: string) => Promise<void>;
-  forceReCollectAction?: (siteId: string, missionId: string) => Promise<void>;
   reAnalyzeSiteMissionAction?: (siteId: string, missionType: string) => Promise<void>;
-  pauseAction?: () => Promise<void>;
-  resumePausedRunAction?: () => Promise<void>;
-  resumeAction?: () => Promise<void>;
   runAnalysisAction: () => Promise<void>;
   resumeAnalysisAction?: () => Promise<void>;
   stopAnalysisAction?: () => Promise<void>;
@@ -125,16 +103,12 @@ export function RunLiveData({
   runIdShort: string;
   createdLabel: string;
   error?: string;
-  collectorMode: CollectorMode;
   needsChromeRecovery: boolean;
-  switchToCurrentCollectorAction: () => Promise<void>;
 }) {
   const [live, setLive] = useState<LiveStatus>({
     executing: initialExecuting,
     analyzing: initialAnalyzing,
     analysisStopping: false,
-    paused: initialPaused,
-    stalled: initialStalled,
     progress: initialProgress,
     partialAnalysisKeys: initialPartialAnalysisKeys,
     results: initialResults,
@@ -154,14 +128,11 @@ export function RunLiveData({
   // ever turn it back on was the poll it had just switched off, and the page
   // stayed frozen until a manual reload.
   //
-  // Chrome runs hit that on every single run. Their `executing` flag is an
-  // extension heartbeat that stops the instant collection ends, so the page
-  // went idle exactly at the collection -> analysis handoff and never saw the
-  // offers arrive. (The Current collector masked it: `isRunExecuting` stays
-  // true through collection, so the poll was already alive when `analyzing`
-  // took over.) Opening a finished run, or a stale heartbeat mid-collection,
-  // wedged it the same way — even Run Analysis couldn't wake it, since
-  // `analyzing` is only read from props at mount.
+  // Every run hits that. `executing` is an extension heartbeat that stops the
+  // instant collection ends, so the page went idle exactly at the collection ->
+  // analysis handoff and never saw the offers arrive. Opening a finished run, or
+  // a stale heartbeat mid-collection, wedged it the same way — even Run Analysis
+  // couldn't wake it, since `analyzing` is only read from props at mount.
   //
   // A hidden tab polls nothing at all — see the visibility gate below. That is
   // safe against the latch described above precisely because `visibilitychange`
@@ -287,18 +258,11 @@ export function RunLiveData({
         offerCount={live.offers.length}
         snapshots={snapshots}
         executing={live.executing}
-        paused={live.paused}
-        stalled={live.stalled}
-        canCollect={canCollect && collectorMode === "current"}
         analyzing={live.analyzing}
         canAnalyze={canAnalyze}
         canPublish={canPublish}
         runAnalysisAction={runAnalysisAction}
         publishSnapshotAction={publishSnapshotAction}
-        executeAllAction={executeAllAction}
-        pauseAction={pauseAction}
-        resumePausedRunAction={resumePausedRunAction}
-        resumeAction={resumeAction ?? (async () => {})}
         defaultSnapshotLabel={defaultSnapshotLabel}
       />
 
@@ -317,20 +281,12 @@ export function RunLiveData({
           results={mergedResults}
           executing={live.executing}
           canCollect={canCollect}
-          stalled={live.stalled}
           collectionStartedAt={collectionStartedAt}
           collectionCompletedAt={collectionCompletedAt}
-          executeItemAction={executeItemAction}
-          executeAllAction={executeAllAction}
-          retryAction={retryAction}
-          forceReCollectAction={forceReCollectAction}
           reAnalyzeSiteMissionAction={reAnalyzeSiteMissionAction}
           partialAnalysisKeys={new Set(live.partialAnalysisKeys)}
-          resumeAction={resumeAction}
           error={error}
-          collectorMode={collectorMode}
           needsChromeRecovery={needsChromeRecovery}
-          switchToCurrentCollectorAction={switchToCurrentCollectorAction}
         />
       </div>
 

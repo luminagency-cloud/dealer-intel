@@ -3,7 +3,7 @@ import { requireApiSession } from "@/lib/session";
 import { eq } from "drizzle-orm";
 import { getDb, missionResults, collectionRuns } from "@/lib/db";
 import { listOffersForRun, listComplianceGradesForRun } from "@/lib/db/repository";
-import { computeRunLiveState } from "@/lib/chrome-collector";
+import { isChromeRunLive } from "@/lib/chrome-collector";
 import {
   isAnalysisRunning,
   isAnalysisStopping,
@@ -39,7 +39,6 @@ export async function GET(
     Promise.resolve(getPartialAnalysisKeys(id)),
     db
       .select({
-        collectorMode: collectionRuns.collectorMode,
         status: collectionRuns.status,
         chromeHeartbeatAt: collectionRuns.chromeHeartbeatAt,
         startedAt: collectionRuns.startedAt,
@@ -56,14 +55,12 @@ export async function GET(
   ]);
 
   const run = runRecord[0];
-  const { executing, paused, stalled } = computeRunLiveState(id, run, results);
+  const executing = run ? isChromeRunLive(run) : false;
 
   return NextResponse.json({
     executing,
     analyzing,
     analysisStopping: isAnalysisStopping(id),
-    paused,
-    stalled,
     progress,
     partialAnalysisKeys: [...partialKeys],
     results,

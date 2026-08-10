@@ -219,11 +219,11 @@ export const collectionRuns = pgTable("collection_runs", {
   /** ISO week label for the reporting cycle this run belongs to (e.g. "2026-W31").
    *  Defaults to the current ISO week at creation time; operator can override. */
   cycle: text("cycle"),
-  /** Collection backend selected for this run. Kept run-scoped so matched
-   *  current/Chrome runs can be compared without mixing evidence. */
+  /** Which collector produced this run. Every new run is Chrome; the enum keeps
+   *  its `current` value so pre-retirement runs still read correctly. */
   collectorMode: collectorModeEnum("collector_mode")
     .notNull()
-    .default("current"),
+    .default("chrome_extension"),
   status: runStatusEnum("status").notNull().default("pending"),
   /** Last contact from the Chrome extension's driving tab. Chrome collection
    *  runs in the browser, so the server can't observe it directly — this is

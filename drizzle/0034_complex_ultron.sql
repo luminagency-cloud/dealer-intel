@@ -1,0 +1,1 @@
+ALTER TABLE "collection_runs" ALTER COLUMN "collector_mode" SET DEFAULT 'chrome_extension';

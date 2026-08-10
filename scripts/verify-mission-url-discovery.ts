@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 
-import { isMenuToggle, isSameLocation, pageLinks } from "../src/lib/chrome-collector";
+import { isSameLocation } from "../src/lib/chrome-collector";
 import {
+  BANNED_PATTERN_SOURCES,
+  DISCOVERY_EXCLUSIONS,
   DISCOVERY_KEYWORDS,
+  exclusionPattern,
+  isHomepageUrl,
+  keywordPattern,
   missionTargetsHomepage,
   navLinkIsExcluded,
   navTextMatchesKeyword,
@@ -16,64 +21,19 @@ import {
 
 const HOME = "https://www.anchor-nissan.com/";
 
-// Real Dealer.com nav shape: relative hrefs, markup inside the anchor text,
-// off-site social links, and a javascript: href that must not throw.
-const NAV = `
-  <nav>
-    <a href="/new-inventory/index.htm">New <span>Inventory</span></a>
-    <a href="/promotions/service/index.htm">Service &amp; Parts Specials</a>
-    <a href="http://www.anchor-nissan.com/global-incentives-search/index.htm">
-      Current <em>Offers</em>
-    </a>
-    <a href="https://www.facebook.com/anchornissan">Facebook</a>
-    <a href="javascript:void(0)">Menu</a>
-    <a href="/about.htm"></a>
-  </nav>
-`;
+// Anchor Nissan's real nav, as the extension reads it off the rendered page:
+// link text already flattened and lowercased, hrefs already absolute. The app
+// never fetches this itself — see the note above the pattern-parity block.
+const links = [
+  { text: "new inventory", href: `${HOME}new-inventory/index.htm` },
+  { text: "service & parts specials", href: `${HOME}promotions/service/index.htm` },
+  {
+    text: "current offers",
+    href: `${HOME}global-incentives-search/index.htm`,
+  },
+];
 
-const links = pageLinks(NAV, HOME);
-
-// Same-host only, absolute hrefs, lowercased text, empty text dropped.
-assert.deepEqual(
-  links.map((link) => link.text),
-  ["new inventory", "service & parts specials", "current offers"]
-);
-assert.equal(
-  links[1].href,
-  "https://www.anchor-nissan.com/promotions/service/index.htm"
-);
-
-// A dropdown group header is not a destination. This is Gengras Subaru's real
-// markup: the "Finance & Specials" menu opens a submenu but its own href is the
-// finance department, so reading it as a link sent finance_offers to
-// /financing/index.htm instead of the specials page nested underneath.
-const MENU = `
-  <li class="dropdown">
-    <a data-toggle="dropdown" href="/financing/index.htm"
-       class="nav-with-children">Finance &amp; Specials</a>
-    <ul class="dropdown-menu">
-      <li><a href="/promotions/new/index.htm">New Subaru Specials</a></li>
-      <li><a href="/apply-for-financing.htm">Get Approved Now</a></li>
-    </ul>
-  </li>
-`;
-assert.deepEqual(
-  pageLinks(MENU, HOME).map((link) => link.text),
-  ["new subaru specials", "get approved now"] // the toggle itself is dropped
-);
-// Both marker forms are recognized independently.
-assert.equal(isMenuToggle(` data-toggle="dropdown" href="/x"`), true);
-assert.equal(isMenuToggle(` class="nav-with-children" href="/x"`), true);
-assert.equal(isMenuToggle(` class="child" href="/x"`), false);
-
-// Numeric entity references decode too — some platforms emit `&#38;`.
-assert.deepEqual(
-  pageLinks(`<a href="/x">Offers &#38; Incentives</a>`, HOME).map((l) => l.text),
-  ["offers & incentives"]
-);
-
-// The keyword match that the homepage fallback used to bypass entirely.
-// Mirrors production: keyword match, then exclusions.
+// Keyword match, then exclusions — the order the extension applies them in.
 function firstMatch(missionType: "service_specials" | "finance_offers") {
   for (const keyword of DISCOVERY_KEYWORDS[missionType]) {
     const hit = links.find(
@@ -186,6 +146,19 @@ assert.equal(X("used car service coupons", "/service-coupons.htm", "service_spec
 assert.equal(X("customer-focused offers", "/specials.htm", "finance_offers"), false);
 assert.equal(X("unused inventory specials", "/specials.htm", "finance_offers"), false);
 
+// A site root is never a specials page, whoever owns the host. The old check
+// compared against the dealer's own url only, which misses a front page served
+// from another host — legitimate after a sale (Station Buick GMC answers as
+// checkvachonbuickgmc.com), and still not a specials page. Measured Aug 7 2026:
+// 14 of 21 dealers had finance and service resolve to a path that redirected to
+// a homepage in Chrome and recorded as success.
+assert.equal(isHomepageUrl("https://www.anchor-nissan.com/"), true);
+assert.equal(isHomepageUrl("https://www.anchor-nissan.com"), true);
+assert.equal(isHomepageUrl("https://www.checkvachonbuickgmc.com/"), true);
+assert.equal(isHomepageUrl("https://www.balisenissanri.com/service-specials/"), false);
+assert.equal(isHomepageUrl("https://www.mastria.com/promotions/"), false);
+assert.equal(isHomepageUrl("not-a-url"), false);
+
 // Only homepage missions may legitimately collect the homepage.
 assert.equal(missionTargetsHomepage("homepage_offers"), true);
 assert.equal(missionTargetsHomepage("promotional_banners"), true);
@@ -214,6 +187,65 @@ assert.equal(isSameLocation("https://www.tascakia.com/", "https://www.tascacdjrf
 assert.equal(
   isSameLocation("https://balisenissanri.com/service-specials/", "https://www.balisenissanri.com"),
   false
+);
+
+// The Chrome extension runs this same discovery inside the operator's browser —
+// it has to, because 16 of 62 dealers (Speedcraft, the Tasca and Nucar groups,
+// Mastria) answer server-side fetch with a Cloudflare 403 and load normally in
+// Chrome. It gets the rules as regex SOURCES rather than a second copy of the
+// logic, so those sources must decide exactly what the functions here decide.
+const applies = (source: string | null, text: string) =>
+  source !== null && new RegExp(source, "i").test(text);
+for (const keyword of [
+  ...DISCOVERY_KEYWORDS.service_specials,
+  ...DISCOVERY_KEYWORDS.finance_offers,
+]) {
+  for (const label of [
+    "service specials",
+    "service & parts specials",
+    "nissan service & parts coupons near providence",
+    "news & specials",
+    "new subaru specials",
+    "servicer specialist",
+    "current offers",
+  ]) {
+    assert.equal(
+      applies(keywordPattern(keyword), label),
+      navTextMatchesKeyword(label, keyword),
+      `keywordPattern disagrees for "${keyword}" on "${label}"`
+    );
+  }
+}
+for (const term of DISCOVERY_EXCLUSIONS.finance_offers) {
+  for (const label of ["pre-owned specials", "customer-focused offers", "apply now"]) {
+    assert.equal(
+      applies(exclusionPattern(term), label),
+      navLinkIsExcluded(label, "/x.htm", "finance_offers") &&
+        new RegExp(exclusionPattern(term), "i").test(label),
+      `exclusionPattern disagrees for "${term}" on "${label}"`
+    );
+  }
+}
+// Speedcraft Nissan renamed its service page to
+// /providence-nissan-service-parts-coupons/ and hides it in a submenu, so the
+// menu label is the only stable handle on it.
+assert.equal(
+  navTextMatchesKeyword("service & parts specials", "service special"),
+  true
+);
+assert.equal(
+  navTextMatchesKeyword(
+    "nissan service & parts coupons near providence",
+    "service coupon"
+  ),
+  true
+);
+assert.equal(BANNED_PATTERN_SOURCES.length > 0, true);
+assert.equal(
+  BANNED_PATTERN_SOURCES.some((source) =>
+    new RegExp(source, "i").test("/global-incentives-search/index.htm")
+  ),
+  true
 );
 
 console.log("Mission URL discovery regression checks passed.");

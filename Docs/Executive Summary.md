@@ -27,8 +27,8 @@ Frontend:
 Backend:
 
 * TypeScript
-* Playwright
 * Node.js
+* Chrome extension (collection)
 
 Database:
 

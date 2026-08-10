@@ -19,13 +19,19 @@ import type { MissionType } from "@/lib/db";
  * date. Analysis now reads these rows out of R2 and never leaves the building.
  */
 
-/** Below this, an image can't plausibly hold legible offer text — franchise
- *  badges (e.g. "franchise-logos/.../117x80.png") and nav/UI icons are well
- *  under this, real ad cards and coupon graphics are well over it. Shared by
- *  the URL-hint fast path and the post-fetch real-pixel check so both agree on
- *  what counts as "too small". */
-const MIN_AD_IMAGE_WIDTH = 150;
-const MIN_AD_IMAGE_HEIGHT = 100;
+/** Below this, an image can't plausibly hold legible offer text. Shared by the
+ *  URL-hint fast path and the post-fetch real-pixel check so both agree on what
+ *  counts as "too small".
+ *
+ *  Measured Aug 8 2026 over the 155 stored ad_image rows: the smallest graphic
+ *  that ever yielded an offer is 520x390 (a Dealer.com offer card), and the
+ *  smallest of any other real ad creative is 600x400. The previous 150x100 was
+ *  set to clear franchise badges and nav icons, and left a wide band of model
+ *  thumbnails, staff photos, and brand tiles that are fetched, stored, and OCR'd
+ *  every run and have never produced an offer. 500x300 sits under the observed
+ *  minimum with margin while dropping 42 of those 155. */
+const MIN_AD_IMAGE_WIDTH = 500;
+const MIN_AD_IMAGE_HEIGHT = 300;
 /** Below this many bytes an image is a tracking pixel, spacer, or trivial
  *  icon — not worth decoding just to measure it. */
 const MIN_AD_IMAGE_BYTES = 1024;
@@ -48,6 +54,26 @@ export function isThirdPartyTile(url: string): boolean {
     return false;
   }
 }
+
+/** Path segments that mark an image as chrome rather than ad creative. Matches
+ *  a keyword as a whole path/filename segment (delimited by /, _, -, or .)
+ *  rather than requiring it to start right after a "/" — the old pattern missed
+ *  "franchise-logos/.../117x80.png" because "logos" isn't preceded by a
+ *  slash. */
+const SKIP_IMAGE_PATH =
+  /(?:^|[/_-])(icons?|logos?|sprites?|badges?|avatars?|favicons?|placeholders?|spacers?|swatch(?:es)?|arrow|btn|button|nav|menu|header|footer|social|share|fb|twitter|instagram|linkedin|youtube|track|pixel|beacon)(?:[/_.-]|$)/i;
+
+/** Ad-graphic selection rules, as plain values the Chrome extension can apply
+ *  in the dealer's own page. The extension does the downloading — the app never
+ *  requests a dealer-controlled URL — so these have to travel with the job
+ *  rather than stay compiled in here. */
+export const AD_IMAGE_RULES = {
+  minWidth: MIN_AD_IMAGE_WIDTH,
+  minHeight: MIN_AD_IMAGE_HEIGHT,
+  max: MAX_AD_IMAGES,
+  skipPathPattern: SKIP_IMAGE_PATH.source,
+  tileHostPattern: TILE_HOSTS.source,
+};
 
 /** Removes credentials from a URL before it is logged or persisted. Dealer
  *  pages embed their own API keys in image URLs; those are their secrets and
@@ -124,11 +150,7 @@ export function extractAdImageUrls(html: string, pageUrl?: string): string[] {
     }
     if (!src || src.startsWith("data:")) continue;
     if (/\.(svg|ico|gif)(\?|#|$)/i.test(src)) continue;
-    // Matches a keyword as a whole path/filename segment (delimited by /, _,
-    // -, or .) rather than requiring it to start right after a "/" — the old
-    // pattern missed "franchise-logos/.../117x80.png" because "logos" isn't
-    // preceded by a slash.
-    if (/(?:^|[/_-])(icons?|logos?|sprites?|badges?|avatars?|favicons?|placeholders?|spacers?|swatch(?:es)?|arrow|btn|button|nav|menu|header|footer|social|share|fb|twitter|instagram|linkedin|youtube|track|pixel|beacon)(?:[/_.-]|$)/i.test(src)) continue;
+    if (SKIP_IMAGE_PATH.test(src)) continue;
 
     src = decodeHtmlAttribute(src);
 
@@ -157,66 +179,49 @@ export async function isAdSizedImage(buf: Buffer | null): Promise<boolean> {
   }
 }
 
-async function fetchImage(url: string): Promise<Buffer | null> {
-  try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!resp.ok) return null;
-    return Buffer.from(await resp.arrayBuffer());
-  } catch {
-    return null;
-  }
-}
-
-/** Downloads a captured page's offer-card graphics and stores each as its own
- *  evidence row. Never throws: a dealer's slow CDN must not fail a collection
- *  that already captured the page itself. Returns how many were stored.
+/** Stores already-downloaded offer-card graphics, one evidence row each. Never
+ *  throws: a bad image must not fail a collection that already captured the
+ *  page itself. Returns how many were stored.
+ *
+ *  On the Chrome path the bytes arrive from the extension, which downloaded
+ *  them inside the dealer's own page — the app never requests a
+ *  dealer-controlled URL. The size gate still runs here: it is the only check
+ *  that sees real pixels, and it doubles as a guard against empty or corrupt
+ *  bodies.
  *
  *  `captureKey` is per run + image URL, so the same hero graphic appearing on
  *  the homepage, the specials page, and every carousel state of both is stored
  *  (and later OCR'd) exactly once per run. */
-export async function captureAdImages(input: {
+export async function storeAdImages(input: {
   collectionRunId: string;
   siteId: string;
   missionType: MissionType;
-  html: string;
-  pageUrl?: string;
+  images: { url: string; body: Buffer }[];
   /** Ties the ad graphics back to the page state they were rendered on. */
   captureStateId?: string | null;
 }): Promise<number> {
-  try {
-    const urls = extractAdImageUrls(input.html, input.pageUrl).slice(0, MAX_AD_IMAGES);
-    // Concurrently: this runs inline in both collectors, and on the Chrome path
-    // it sits inside the request the driving tab is waiting on. Sequentially,
-    // fifteen slow CDN responses would stall every capture state of every
-    // mission. The list is already capped, so this is bounded fan-out, not a
-    // stampede.
-    const results = await Promise.all(
-      urls.map(async (url) => {
-        const body = await fetchImage(url);
-        if (!(await isAdSizedImage(body))) return false;
-        try {
-          await uploadEvidence({
-            collectionRunId: input.collectionRunId,
-            siteId: input.siteId,
-            missionType: input.missionType,
-            evidenceType: "ad_image",
-            fileName: new URL(url).pathname.split("/").pop() || "ad.jpg",
-            body: body!,
-            label: `Ad graphic — ${redactUrl(url)}`,
-            sourceUrl: redactUrl(url),
-            captureKey: `${input.collectionRunId}:ad-image:${url}`,
-            captureStateId: input.captureStateId ?? null,
-          });
-          return true;
-        } catch (err) {
-          console.error(`[collector] ad image store failed url=${redactUrl(url)}:`, err);
-          return false;
-        }
-      })
-    );
-    return results.filter(Boolean).length;
-  } catch (err) {
-    console.error("[collector] ad image capture failed:", err);
-    return 0;
-  }
+  const results = await Promise.all(
+    input.images.slice(0, MAX_AD_IMAGES).map(async ({ url, body }) => {
+      if (!(await isAdSizedImage(body))) return false;
+      try {
+        await uploadEvidence({
+          collectionRunId: input.collectionRunId,
+          siteId: input.siteId,
+          missionType: input.missionType,
+          evidenceType: "ad_image",
+          fileName: new URL(url).pathname.split("/").pop() || "ad.jpg",
+          body,
+          label: `Ad graphic — ${redactUrl(url)}`,
+          sourceUrl: redactUrl(url),
+          captureKey: `${input.collectionRunId}:ad-image:${url}`,
+          captureStateId: input.captureStateId ?? null,
+        });
+        return true;
+      } catch (err) {
+        console.error(`[collector] ad image store failed url=${redactUrl(url)}:`, err);
+        return false;
+      }
+    })
+  );
+  return results.filter(Boolean).length;
 }

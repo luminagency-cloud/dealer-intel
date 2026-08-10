@@ -31,6 +31,17 @@ Collection is dealer/site-scoped. In a normal run, selected missions for one
 dealer run in one browser session with a shared capture cache. Missions are
 targeting buckets, not separate browser jobs.
 
+**Inventory is never an offer source.** Offer missions do not walk, scroll, or
+harvest vehicle inventory listings, and a price attached to one specific unit in
+stock — a card printing a VIN or stock number — is never an offer row. Many
+platforms generate a payment for every car on the lot and publish the result as
+a specials page (Toyota of Dartmouth's `/specials/`, Dealer Teamwork's MPOP
+widget); that is the dealer's inventory wearing an offers label, not its
+advertised offers. Enforced in `src/lib/analysis/extract.ts`
+(`isPerVehicleListing`, `stripDealerTeamworkDump`). Counting inventory is a
+separate feature with its own collector (`extension/inventory/`) — that one does
+walk the SRP, and it produces counts, never offers.
+
 ## Current Verified Status
 
 As of July 1, 2026:
@@ -56,9 +67,9 @@ Never print secret values.
 - **Database:** schema changes go through Drizzle. Edit
   `src/lib/db/schema.ts`, then run `npm run db:generate` and
   `npm run db:migrate`. Never hand-write migrations.
-- **Runtime:** the admin app requires a persistent Node server. Playwright runs
-  in-process, and background run execution lives in server memory. Do not
-  target serverless for the admin app.
+- **Runtime:** the admin app requires a persistent Node server. Background run
+  execution and analysis live in server memory. Do not target serverless for
+  the admin app.
 - **Local dev server:** the app is ALWAYS already running on
   `http://localhost:3000` (the operator keeps it up). Do NOT start your own
   (`npm run dev` / preview) — use the running one. Only start a server if you

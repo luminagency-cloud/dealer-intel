@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
+  applyCouponVerdict,
   extractOffers,
   extractOffersFromDisclosure,
   extractOffersFromOcrImage,
@@ -9,6 +10,8 @@ import {
 } from "../src/lib/analysis/extract";
 import { looksMisread, normalizeOcrText } from "../src/lib/analysis/ocr";
 import {
+  AD_IMAGE_RULES,
+  MAX_AD_IMAGES,
   extractAdImageUrls,
   isThirdPartyTile,
   redactUrl,
@@ -183,6 +186,63 @@ assert.deepEqual(
   { label: "Brake Service", value: "$25.00 OFF" }
 );
 
+// A coupon whose OCR read disagrees with its alt text: both readings survive on
+// the offer so the coupon verifier can be shown each one, and the row sits under
+// the publish floor until it is adjudicated.
+const mismatchedCoupon = reconcileServiceCoupon(
+  "Brake Special $25.00 OFF",
+  "Brake Special $49.95",
+  serviceHints
+)!;
+assert.equal(mismatchedCoupon.matches.verify, "mismatch");
+assert.equal(mismatchedCoupon.matches.ocrValue, "$25.00 OFF");
+assert.equal(mismatchedCoupon.matches.altValue, "$49.95");
+assert.ok(
+  mismatchedCoupon.confidence < 0.6,
+  `expected an unadjudicated mismatch below the floor, got ${mismatchedCoupon.confidence}`
+);
+
+// Confirm: the OCR read publishes on the model's calibrated number, and NOT ONE
+// FIELD moves — the verifier judges the read, it never rewrites it.
+const confirmed = applyCouponVerdict(
+  reconcileServiceCoupon("Brake Special $25.00 OFF", "Brake Special $49.95", serviceHints)!,
+  { real: true, calibratedConfidence: 0.88, reason: "graphic reads $25 off" },
+  0.6
+);
+assert.equal(confirmed.confidence, 0.88);
+assert.equal(confirmed.matches.serviceOffer, "$25.00 OFF");
+assert.equal(confirmed.rawText, "Brake Service");
+assert.equal(confirmed.matches.verify, "mismatch_confirmed");
+assert.deepEqual(confirmed.aiVerified, {
+  real: true,
+  reason: "graphic reads $25 off",
+  confidence: 0.88,
+});
+
+// Drop: forced under the floor even when the model's own number is high, so the
+// drop holds; the kept OCR read is still not rewritten.
+const droppedCoupon = applyCouponVerdict(
+  reconcileServiceCoupon("Brake Special $25.00 OFF", "Brake Special $49.95", serviceHints)!,
+  { real: false, calibratedConfidence: 0.91, reason: "$25 is the alt of another coupon" },
+  0.6
+);
+assert.ok(
+  droppedCoupon.confidence < 0.6,
+  `expected a dropped coupon below the floor, got ${droppedCoupon.confidence}`
+);
+assert.equal(droppedCoupon.matches.serviceOffer, "$25.00 OFF");
+assert.equal(droppedCoupon.matches.verify, "mismatch_dropped");
+assert.equal(droppedCoupon.aiVerified?.real, false);
+
+// A lukewarm confirm is still under the floor — "probably right" doesn't publish.
+assert.ok(
+  applyCouponVerdict(
+    reconcileServiceCoupon("Brake Special $25.00 OFF", "Brake Special $49.95", serviceHints)!,
+    { real: true, calibratedConfidence: 0.55, reason: "unclear" },
+    0.6
+  ).confidence < 0.6
+);
+
 const mistralMarkdown = `
 # IMPRIZIA Sport
 
@@ -274,6 +334,23 @@ assert.deepEqual(extractAdImageUrls(pageMarkup, "https://www.anchor-nissan.com/"
   "https://pictures.dealer.com/a/anchornissan/1234/murano.jpg?impolicy=downsize_bkpt&w=1600",
   "https://pictures.dealer.com/a/anchornissan/1234/rogue.jpg?impolicy=downsize_bkpt&w=1600",
 ]);
+
+// The Chrome collector downloads ad graphics inside the dealer's page — this
+// app never requests a dealer-controlled URL, because anti-bot protection is
+// what pushed collection into the operator's browser in the first place. So
+// the extension gets these rules as plain values with its job, and they must
+// decide what the functions above decide.
+const skipPath = new RegExp(AD_IMAGE_RULES.skipPathPattern, "i");
+const tileHost = new RegExp(AD_IMAGE_RULES.tileHostPattern, "i");
+assert.equal(skipPath.test("/static/franchise-logos/nissan/white/117x80.png"), true);
+assert.equal(skipPath.test("/spacer.png"), true);
+assert.equal(skipPath.test("/a/anchornissan/1234/murano.jpg"), false);
+assert.equal(tileHost.test(new URL(mapTile).hostname), true);
+assert.equal(tileHost.test("pictures.dealer.com"), false);
+// The extension gates on real decoded pixels, so the thresholds have to travel
+// with it rather than stay compiled in here.
+assert.equal(AD_IMAGE_RULES.minWidth > 0 && AD_IMAGE_RULES.minHeight > 0, true);
+assert.equal(AD_IMAGE_RULES.max, MAX_AD_IMAGES);
 
 // --- Hero-ad OCR text (Aug 5 2026) ---------------------------------------
 // Three real hero ads whose data the pipeline dropped. Mistral read all the
@@ -372,4 +449,88 @@ assert.deepEqual(
   ]
 );
 
+// A per-VIN inventory card is not an advertised offer. Toyota of Dartmouth's
+// `/specials/` prints a payment on every unit on the lot, each card carrying its
+// own VIN and stock number, and a run stored 12 rows that were really 12 cars.
+// The whole page must yield nothing, and a genuine model-level card sitting
+// beside them must still survive.
+const perVinCards = `
+  <div class="specials">
+    <div class="offer-box">
+      <h3>New 2026 Toyota Camry LE AWD</h3>
+      <div>Lease for $256 Per month for 36 Months</div>
+      <div>Plus tax. $4763 Down Payment</div>
+      <div>Model #: 2552 VIN: 4T1DBADKXTU32C915 Stock No: TU32C915</div>
+    </div>
+    <div class="offer-box">
+      <h3>New 2026 Toyota RAV4 LE AWD</h3>
+      <div>Lease for $363 Per month for 36 Months</div>
+      <div>Plus tax. $3999 Down Payment</div>
+      <div>Model #: 4430 VIN: JTMAAAAD4TJ016404 Stock No: N62176</div>
+    </div>
+    <div class="offer-box">
+      <h3>New 2026 Toyota Tacoma SR5</h3>
+      <div>Lease for $321 Per month for 36 Months</div>
+      <div>Plus tax. $3999 Down Payment. Offer ends 08/31/2026.</div>
+    </div>
+  </div>`;
+const dartmouth = extractOffers(perVinCards, {
+  missionType: "finance_offers",
+  brand: "Toyota",
+});
+assert.deepEqual(
+  dartmouth.map((offer) => [offer.vehicleModel, offer.monthlyPayment]),
+  [["Tacoma", 321]]
+);
+
 console.log("Offer extraction regression checks passed.");
+
+// --- Confidence: completeness is measured per offer type -------------------
+//
+// Real Anchor Subaru homepage ad graphics (run 228ee00f). Under the old
+// score — non-null fields out of a fixed six — a fully-parsed lease could not
+// exceed 0.8 before provenance, because a lease structurally has no APR and no
+// sale price. A 0%-APR finance ad scored worse still (0.6, exactly the publish
+// floor) for lacking a monthly payment and a due-at-signing it can never have.
+const leaseAd =
+  "2026 SUBARU OUTBACK PREMIUM Stk# S21820 Lease for only $239/MONTH 36 months, " +
+  "22,500 miles, $5,500 Due at Signing, $0 Security Deposit";
+const [leaseOffer] = extractOffersFromOcrImage(leaseAd, {
+  missionType: "homepage_offers",
+  brand: "Subaru",
+});
+assert.equal(leaseOffer.offerType, "lease");
+// payment + term + due = 3/3 complete, + make, × 0.85 homepage provenance.
+assert.equal(leaseOffer.confidence, 0.85);
+
+// Fine print must not move the score. Whether an ad carries a disclaimer is
+// recorded in disclaimer_text and acted on by the compliance grade; as a
+// confidence bonus it just rewarded whatever text landed in the window.
+const [leaseNoDisclaimer] = extractOffersFromOcrImage(leaseAd, {
+  missionType: "homepage_offers",
+  brand: "Subaru",
+});
+const [leaseWithDisclaimer] = extractOffersFromOcrImage(
+  `${leaseAd} *Lessee responsible for excess wear and mileage. See dealer for details.`,
+  { missionType: "homepage_offers", brand: "Subaru" }
+);
+assert.equal(leaseWithDisclaimer.confidence, leaseNoDisclaimer.confidence);
+
+// A 0% APR finance ad states everything it has: rate and term.
+const [zeroApr] = extractOffersFromOcrImage(
+  "NEW 2026 SUBARU FORESTER 0% APR for 36 months",
+  { missionType: "finance_offers", brand: "Subaru" }
+);
+assert.equal(zeroApr.offerType, "finance");
+assert.equal(zeroApr.apr, 0);
+assert.equal(zeroApr.confidence, 1);
+
+// A payment with no term is genuinely half an offer and still scores like one.
+const [bare] = extractOffersFromOcrImage("Drive home for $199/mo", {
+  missionType: "homepage_offers",
+  brand: "Subaru",
+});
+assert.equal(bare.offerType, "promotional");
+assert.ok(bare.confidence < 0.6, `expected bare payment below floor, got ${bare.confidence}`);
+
+console.log("Confidence scoring checks passed.");

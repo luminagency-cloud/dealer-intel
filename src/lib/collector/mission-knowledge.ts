@@ -1,11 +1,18 @@
 import type { MissionType } from "@/lib/db";
-import type { ExploreOptions } from "./engine";
 
 /**
  * Per-mission-type collection knowledge (Phase 6): likely URL paths,
  * navigation-discovery keywords, and exploration behavior. This is the only
- * place mission types influence collection — the engine stays generic.
+ * place mission types influence collection — the extension stays generic.
  */
+
+/** Which alternate page states a mission asks the extension to open. */
+export interface ExploreOptions {
+  carousels?: boolean;
+  tabs?: boolean;
+  accordions?: boolean;
+  disclaimers?: boolean;
+}
 
 /** Paths tried after the dealer's own nav has had a turn.
  *
@@ -126,28 +133,44 @@ const BANNED_PATTERNS = [
   /\bac[-\s]?delco\b/i,
 ];
 
-/** True when a nav link is disqualified for this mission, by label or target. */
+/** Regex source for one exclusion term. Whole-word, like keywordPattern — a
+ *  substring test fires inside longer words and silently drops good links:
+ *  "used" hits "customer-focused offers" and "unused inventory specials". A
+ *  trailing plural is still tolerated so "lease return" catches "Subaru Lease
+ *  Returns". */
+export function exclusionPattern(term: string): string {
+  return `(?:^|[^a-z0-9])${escapeRegExp(term)}s?(?:[^a-z0-9]|$)`;
+}
+
+/** Banned-program patterns as plain sources, for consumers that cannot share
+ *  this module's compiled regexes — the Chrome extension runs the same
+ *  discovery in the operator's browser and is handed these with its job. */
+export const BANNED_PATTERN_SOURCES = BANNED_PATTERNS.map((p) => p.source);
+
+/* The three predicates below have no server-side caller since the Playwright
+ * collector was deleted in 3.9.0 — the extension applies these rules itself,
+ * from the regex sources above, inside the dealer's page. They are kept as the
+ * executable spec for those rules: `scripts/verify-mission-url-discovery.ts`
+ * asserts against them, and that is the only regression guard the extension's
+ * discovery has. Do not delete them as unused. */
+
+/** True when a nav link is disqualified for this mission, by label or target.
+ *  Mirrored by `excluded()` in `extension/service-worker.js`. */
 export function navLinkIsExcluded(
   text: string,
   href: string,
   missionType: MissionType
 ): boolean {
   if (BANNED_PATTERNS.some((p) => p.test(href) || p.test(text))) return true;
-  // Whole-word, like navTextMatchesKeyword — a substring test fires inside
-  // longer words and silently drops good links: "used" hits "customer-focused
-  // offers" and "unused inventory specials". A trailing plural is still
-  // tolerated so "lease return" catches "Subaru Lease Returns".
   return DISCOVERY_EXCLUSIONS[missionType].some((term) =>
-    new RegExp(
-      `(?:^|[^a-z0-9])${escapeRegExp(term)}s?(?:[^a-z0-9]|$)`,
-      "i"
-    ).test(text)
+    new RegExp(exclusionPattern(term), "i").test(text)
   );
 }
 
 /** True when a URL is a banned manufacturer program. Applied to platform
  *  default paths and to the URL a candidate actually landed on, so the ban
- *  cannot be walked around by a redirect or a lucky path guess. */
+ *  cannot be walked around by a redirect or a lucky path guess. Mirrored by
+ *  `missionPageVerdict` in `extension/service-worker.js`. */
 export function urlIsBannedProgram(url: string): boolean {
   return BANNED_PATTERNS.some((p) => p.test(url));
 }
@@ -160,7 +183,10 @@ export function urlIsBannedProgram(url: string): boolean {
  *  URL-or-label rule can catch, while its own "Service Specials" page sits at
  *  `/promotions/service/index.htm`. Deliberately limited to the title and h1 —
  *  a dealer's genuine service specials page may well *mention* Mopar parts in
- *  the body copy, and that is not the same as being the OEM's coupon program. */
+ *  the body copy, and that is not the same as being the OEM's coupon program.
+ *
+ *  Mirrored by `missionPageVerdict` in `extension/service-worker.js`, which
+ *  reads `document.title` and the first h1 rather than parsing markup. */
 export function pageIsBannedProgram(html: string): boolean {
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
   const headings = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)]
@@ -179,8 +205,16 @@ export function pageIsBannedProgram(html: string): boolean {
  *  as an unordered bag) is what keeps "service special" from matching a
  *  "Special Financing on Service Contracts" link. */
 export function navTextMatchesKeyword(text: string, keyword: string): boolean {
+  const pattern = keywordPattern(keyword);
+  return pattern !== null && new RegExp(pattern, "i").test(text);
+}
+
+/** Regex source behind `navTextMatchesKeyword`, or null for an empty keyword.
+ *  Exported so the Chrome extension can run the same match in the operator's
+ *  browser without carrying a second copy of the rules. */
+export function keywordPattern(keyword: string): string | null {
   const words = keyword.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return false;
+  if (words.length === 0) return null;
   // Number is ignored on the nouns the dealer actually pluralizes: the trailing
   // word of every keyword, plus any word already written plural in the list
   // ("offers & incentives"). Those are stemmed of a trailing "s" and allowed an
@@ -199,7 +233,7 @@ export function navTextMatchesKeyword(text: string, keyword: string): boolean {
         : escapeRegExp(word)
     )
     .join(gap);
-  return new RegExp(`(?:^|[^a-z0-9])${body}(?:[^a-z0-9]|$)`, "i").test(text);
+  return `(?:^|[^a-z0-9])${body}(?:[^a-z0-9]|$)`;
 }
 
 /** How many of the dealer's own words may sit between two keyword words.
@@ -239,6 +273,26 @@ export function isSameLocation(left: string, right: string): boolean {
       a.host.replace(/^www\./i, "") === b.host.replace(/^www\./i, "") &&
       a.pathname.replace(/\/$/, "") === b.pathname.replace(/\/$/, "")
     );
+  } catch {
+    return false;
+  }
+}
+
+/** True when a URL points at a front page — a root path, whoever owns the host.
+ *
+ *  The test is the PATH, not the host. No dealer publishes its specials at a
+ *  site root, so a non-homepage mission that lands on one has not found its
+ *  page, and that holds whether the root belongs to the dealer or to somewhere
+ *  it was redirected.
+ *
+ *  Broader than `isSameLocation(url, site.url)` on purpose, because a front page
+ *  can legitimately be served from a host that is not `site.url` — a store that
+ *  was bought redirects to the buyer's domain (Station Buick GMC now answers as
+ *  `checkvachonbuickgmc.com`). Comparing hosts calls that a perfectly good
+ *  different page. It is still a front page. */
+export function isHomepageUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.replace(/\/+$/, "") === "";
   } catch {
     return false;
   }

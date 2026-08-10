@@ -16,7 +16,7 @@ import {
   listWorkItemsForRun,
   resolveRunGroups,
 } from "@/lib/db/repository";
-import { computeRunLiveState } from "@/lib/chrome-collector";
+import { isChromeRunLive } from "@/lib/chrome-collector";
 import { isAnalysisRunning, getAnalysisProgress, getPartialAnalysisKeys } from "@/lib/analysis";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { reportMinConfidence } from "@/lib/snapshot";
@@ -27,16 +27,8 @@ import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
   deleteRun,
   deleteOffer,
-  executeAllMissions,
-  executeWorkItem,
-  forceReCollect,
   passOffer,
-  pauseRun,
   publishSnapshot,
-  resumePausedRun,
-  resumeRun,
-  retryResult,
-  switchToCurrentCollector,
   runAnalysis,
   resumeAnalysis,
   stopAnalysis,
@@ -102,7 +94,7 @@ export default async function RunDetailPage({
   );
 
   const canCollect = run.status === "pending" || run.status === "running" || run.status === "paused";
-  const { executing, paused, stalled } = computeRunLiveState(run.id, run, runResults);
+  const executing = isChromeRunLive(run);
   const evidencePageCount = runResults.reduce(
     (sum, r) => sum + (r.pagesCaptured ?? 0),
     0
@@ -110,7 +102,6 @@ export default async function RunDetailPage({
   // Chrome run left mid-flight with no live tab behind it — the heartbeat is
   // what distinguishes this from a run that is collecting right now.
   const needsChromeRecovery =
-    run.collectorMode === "chrome_extension" &&
     run.status === "running" &&
     !executing &&
     runResults.some((r) => r.status === "pending" || r.status === "running");
@@ -171,8 +162,6 @@ export default async function RunDetailPage({
         runId={run.id}
         initialExecuting={executing}
         initialAnalyzing={analyzing}
-        initialPaused={paused}
-        initialStalled={stalled}
         initialProgress={analysisProgressData}
         initialPartialAnalysisKeys={[...partialAnalysisKeys]}
         items={missionRows}
@@ -190,14 +179,7 @@ export default async function RunDetailPage({
         analysisStartedAt={run.analysisStartedAt}
         analysisCompletedAt={run.analysisCompletedAt}
         evidencePageCount={analysisProgressData?.total ?? evidencePageCount}
-        executeItemAction={executeWorkItem.bind(null, run.id)}
-        executeAllAction={executeAllMissions.bind(null, run.id)}
-        retryAction={retryResult.bind(null, `/runs/${run.id}`)}
-        forceReCollectAction={forceReCollect.bind(null, run.id)}
         reAnalyzeSiteMissionAction={runAnalysisForSiteMission.bind(null, run.id)}
-        pauseAction={pauseRun.bind(null, run.id)}
-        resumePausedRunAction={resumePausedRun.bind(null, run.id)}
-        resumeAction={resumeRun.bind(null, run.id)}
         runAnalysisAction={runAnalysis.bind(null, run.id)}
         resumeAnalysisAction={resumeAnalysis.bind(null, run.id)}
         stopAnalysisAction={stopAnalysis.bind(null, run.id)}
@@ -217,9 +199,7 @@ export default async function RunDetailPage({
         runIdShort={run.id}
         createdLabel={fmtDateTime(run.createdAt)}
         error={error}
-        collectorMode={run.collectorMode}
         needsChromeRecovery={needsChromeRecovery}
-        switchToCurrentCollectorAction={switchToCurrentCollector.bind(null, run.id)}
       />
 
       {/* Snapshot section — static, only changes after a publish action */}

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
 const EVENT_TYPE = "DEALER_INTEL_EXTENSION_EVENT";
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 const MIN_EXTENSION_VERSION = "0.4.0";
 
 function compareVersions(left: string, right: string): number {
@@ -28,6 +28,8 @@ interface ChromeCaptureState {
   label: string;
   html: string;
   screenshotDataUrl: string;
+  /** Offer graphics the extension downloaded inside the dealer's page. */
+  adImages?: { url: string; dataUrl: string }[];
   textContent?: string;
 }
 
@@ -170,6 +172,14 @@ async function uploadCaptureState(
     await screenshotResponse.blob(),
     `${state.stateId}.png`
   );
+  // Ad graphics the extension already downloaded inside the dealer's page.
+  // Appended in pairs so the server can match each file to its source URL.
+  for (const image of state.adImages || []) {
+    const imageResponse = await fetch(image.dataUrl);
+    if (!imageResponse.ok) continue;
+    form.append("adImageUrl", image.url);
+    form.append("adImage", await imageResponse.blob(), "ad");
+  }
 
   const response = await fetch(`/api/collector/runs/${runId}/result`, {
     method: "POST",
@@ -182,31 +192,35 @@ export function ChromeCollectorControl({
   runId,
   canStart,
   needsRecovery,
-  switchToCurrentAction,
+  only,
+  compact,
 }: {
   runId: string;
   canStart: boolean;
   needsRecovery: boolean;
-  switchToCurrentAction: () => Promise<void>;
+  /** Scope the job to one dealer+mission instead of the whole run — the
+   *  row-level "Re-collect" after the operator fixed a saved URL. */
+  only?: { siteId: string; missionId: string };
+  /** Inline button sized for a table row. */
+  compact?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const [fallbackAvailable, setFallbackAvailable] = useState(false);
   const autoStarted = useRef(false);
 
   async function startChromeCollection() {
     if (busy) return;
     setBusy(true);
     setFailed(false);
-    setFallbackAvailable(false);
     setMessage("Checking Chrome Collector…");
 
     let job:
       | {
           items: ChromeJobItem[];
+          unresolved?: number;
         }
       | undefined;
     let successCount = 0;
@@ -232,15 +246,33 @@ export function ChromeCollectorControl({
       setMessage(`Chrome Collector ${ping.version ?? ""} detected. Preparing run…`);
       const startResponse = await fetch(`/api/collector/runs/${runId}/start`, {
         method: "POST",
+        ...(only
+          ? {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(only),
+            }
+          : {}),
       });
       if (!startResponse.ok) throw new Error(await responseError(startResponse));
       const preparedJob = (await startResponse.json()) as {
         items: ChromeJobItem[];
+        unresolved?: number;
       };
       job = preparedJob;
+      // Missions the server already failed for want of a URL. They never enter
+      // the loop below, so counting only what the loop sees under-reported the
+      // run: "53 succeeded, 1 failed" against 10 failures on the run page.
+      failureCount = preparedJob.unresolved ?? 0;
 
       if (preparedJob.items.length === 0) {
-        setMessage("Chrome collection is already complete. Refreshing saved results…");
+        if (failureCount > 0) {
+          setFailed(true);
+          setMessage(
+            `Nothing to collect: ${failureCount} mission${failureCount === 1 ? " has" : "s have"} no URL. Set one on the site's mission config.`
+          );
+        } else {
+          setMessage("Chrome collection is already complete. Refreshing saved results…");
+        }
         router.refresh();
         return;
       }
@@ -303,7 +335,6 @@ export function ChromeCollectorControl({
 
       if (failureCount > 0) {
         setFailed(true);
-        setFallbackAvailable(successCount === 0);
         setMessage(
           `Chrome collection finished: ${successCount} succeeded, ${failureCount} failed.`
         );
@@ -315,7 +346,6 @@ export function ChromeCollectorControl({
       router.refresh();
     } catch (error) {
       setFailed(true);
-      setFallbackAvailable(!job || successCount === 0);
       setMessage(error instanceof Error ? error.message : "Chrome collection failed");
       router.refresh();
     } finally {
@@ -347,6 +377,8 @@ export function ChromeCollectorControl({
   // An interrupted run is left alone — resuming stays a deliberate choice.
   useEffect(() => {
     if (autoStarted.current) return;
+    // Row-level buttons never autostart — that flag means "start this run".
+    if (only) return;
     if (searchParams.get("autostart") !== "1") return;
     if (!canStart || needsRecovery) return;
     autoStarted.current = true;
@@ -354,6 +386,34 @@ export function ChromeCollectorControl({
     // Fires once on arrival; claimChromeRun holds a browser lock until done.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Row-level re-collect: one button, and the failure reason inline if the
+  // extension refuses. Shares the run's browser lock, so it can't run beside a
+  // whole-run collection.
+  if (compact) {
+    return (
+      <span className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={claimChromeRun}
+          disabled={busy || !canStart}
+          className="rounded-md border border-zinc-300 px-2.5 py-1 text-sm text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          {busy ? "Collecting…" : "Re-collect"}
+        </button>
+        {message && (
+          <span
+            className={`max-w-xs truncate text-xs ${
+              failed ? "text-red-700 dark:text-red-400" : "text-blue-700 dark:text-blue-300"
+            }`}
+            title={message}
+          >
+            {message}
+          </span>
+        )}
+      </span>
+    );
+  }
 
   return (
     <div className="flex max-w-xl flex-col items-end gap-2">
@@ -390,16 +450,6 @@ export function ChromeCollectorControl({
         >
           {message}
         </p>
-      )}
-      {fallbackAvailable && (
-        <form action={switchToCurrentAction}>
-          <button
-            type="submit"
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            Use Current Collector
-          </button>
-        </form>
       )}
     </div>
   );

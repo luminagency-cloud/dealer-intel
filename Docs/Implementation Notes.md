@@ -31,30 +31,26 @@ A run selects:
 - sites: all, group, or ad-hoc checkbox selection,
 - missions: all active missions or selected missions.
 
-For each site, the run executor groups selected missions together and calls
-`collectSite`.
-
-`collectSite` opens one browser session for that site, runs the selected
-missions inside it, and shares a capture cache by URL + exploration signature.
-If a mission captures zero pages, it gets one fresh-session retry.
+The server seeds the run's whole scope, then hands the extension a job list
+grouped by dealer. The extension works through it sequentially in the operator's
+own Chrome, reusing one visible window per dealer, and uploads each labeled
+capture state as it goes.
 
 Run progress is persisted to `mission_results` and exposed through
 `src/app/api/runs/[id]/status/route.ts`. The run page polls that narrow status
 endpoint through `src/components/run-live-data.tsx`.
 
-Each run now records a collection backend. `current` uses the existing
-server-side collector. `chrome_extension` is the incremental visible-browser
-pilot documented in `Docs/Chrome Extension Collector Plan.md`. Both paths must
-write the same mission-result and evidence model; analysis has no
-collector-specific branch. The Chrome pilot performs extension preflight before
-starting and can switch an evidence-free attempt back to the Current collector.
-The suite pilot seeds the whole selected scope, processes work sequentially,
-and reuses one visible Chrome window for all selected missions on a dealer.
-Chrome progress is database-backed. Because the collection loop lives in the
-operator's browser, the server cannot observe it the way it observes the
-in-process Current collector: `isRunExecuting` knows nothing about a Chrome run.
-`collection_runs.chrome_heartbeat_at`, stamped on every result POST, is the
-substitute. A heartbeat newer than `CHROME_HEARTBEAT_STALE_MS` means the run is
+Each run records which collector produced it. Every run since 3.9.0 is
+`chrome_extension`, documented in `Docs/Chrome Extension Collector Plan.md`; the
+`current` value is retained only so pre-3.9.0 runs still read correctly. The
+extension is preflighted (present, enabled, new enough) before the run's state
+is touched, so a missing extension leaves the run exactly as it was.
+The server seeds the whole selected scope; the extension processes work
+sequentially, reusing one visible Chrome window for all selected missions on a
+dealer. Progress is database-backed. Because the collection loop lives in the
+operator's browser, the server cannot observe it directly at all —
+`collection_runs.chrome_heartbeat_at`, stamped on every result POST, is the only
+signal it has. A heartbeat newer than `CHROME_HEARTBEAT_STALE_MS` means the run is
 live, which is what the run page's status polling keys off; an older one means
 the driving tab died. Reopening an interrupted run offers a Resume button rather
 than resuming on mount, and re-queues only its unfinished items. A browser lock
@@ -251,14 +247,18 @@ local auto-spawn helper were removed in 3.7.1 once every dealer platform passed
 in Chrome; `scripts/compare-inventory-batches.mjs` only applies to batch pairs
 collected before that.
 
+The Playwright collector was retired in 3.9.0. Its in-process Chromium engine,
+explorers, overlay handling, mission runner, and background run drainer are
+deleted, along with the `playwright` dependency and its Chromium postinstall.
+`collection_runs.collector_mode` survives so pre-3.9.0 runs still read as
+`current`; every new run is `chrome_extension`.
+
 Key files:
 
-- `src/lib/run-executor.ts`
-- `src/lib/collector/mission-runner.ts`
-- `src/lib/collector/engine.ts`
+- `src/lib/chrome-collector.ts`
 - `src/lib/collector/mission-knowledge.ts`
-- `src/lib/collector/explorers.ts`
-- `src/lib/collector/overlays.ts`
+- `src/lib/collector/ad-images.ts`
+- `src/lib/run-executor.ts` (run settling only)
 
 ## Missions
 
@@ -276,8 +276,26 @@ Homepage offers and promotional banners can remain separate mission types
 without double-fetching because the capture cache dedupes shared pages.
 
 A mission with no memorized URL discovers one: nav links the dealer's own menu
-offers, then the platform default paths. Both collectors share that logic in
-`mission-knowledge.ts` so they agree on where a mission goes.
+offers, then the platform default paths. `mission-knowledge.ts` owns that logic
+so every collector agrees on where a mission goes.
+
+**Discovery happens in the extension's browser, never in the app.** The app
+does not request dealer pages at all — it hands the extension the saved URLs,
+the discovery rules (as regex sources), and the dealer's homepage, and the
+extension does every load in the operator's real Chrome. This is not a
+preference: measured Aug 8 2026, 16 of 62 active dealers answer a request from
+the app with a Cloudflare 403 — Speedcraft, all five Tasca stores, all three
+Nucar stores, Mastria, Grieco, Crowley, Executive, Ira Volvo, Kia of Old
+Saybrook — while loading normally in a browser. Anti-bot blocking is the whole
+reason collection moved to desktop Chrome, so anything reading a dealer site
+from Node is blind on exactly the stores that need discovery most.
+
+The extension tries the saved URLs in order, then walks the dealer's menu read
+off the rendered DOM — which is what reaches submenu entries, the only handle
+on pages the platform renames between months (Speedcraft's service coupons live
+at `/providence-nissan-service-parts-coupons/`). Each candidate is verified
+where it landed: not the homepage, not a 404, not an OEM program. If nothing
+verifies, the mission fails and asks for a URL.
 
 `PLATFORM_DEFAULT_PATHS` leads with Dealer.com's canonical
 `/promotions/new/index.htm` and `/promotions/service/index.htm`. Measured
@@ -296,8 +314,7 @@ merely empty with some other page that happened to have a price on it.
 
 **Discovery never settles.** Every candidate has to be justified — a path the
 platform publishes, or a link the dealer's own nav labels as specials — and if
-none of them is really there the mission fails with `NO_MISSION_URL_ERROR` and
-asks for a URL. It does not fall back to the nearest page that looks like it
+none of them is really there the mission fails and asks for a URL. It does not fall back to the nearest page that looks like it
 might carry an offer. That is why the bare `offers` / `incentives` /
 `promotions` / `specials` guess paths were removed: they land on a nav hub or a
 section index, and a mission that lands on one has not found the specials page,
@@ -315,8 +332,8 @@ Five rules here are load-bearing, each of them a bug that reached production:
   an unknown path with 200 and a silent redirect to the homepage — verified with
   a deliberately nonsensical path on Toyota of Dartmouth. So discovery compares
   where it *landed* against where it asked to go and rejects a homepage landing,
-  and both `fetchPageHtml` and `probeUrl` return the final URL to make that
-  possible. Without it the collector memorized `/promotions/service/index.htm`
+  and both the extension's landing check and `probeUrl` read the final URL to
+  make that possible. Without it the collector memorized `/promotions/service/index.htm`
   for stores whose served page was the front page — the original bug, rebuilt.
 - **Manufacturer programs are banned outright.** Two families: the OEM's
   national incentive search (`/global-incentives-search/`), and OEM parts and
@@ -361,9 +378,16 @@ discovery, so one bad capture pins the mission there on every later run.
 `scripts/clear-homepage-mission-memory.mjs` repairs rows already poisoned that
 way; `scripts/verify-mission-url-discovery.ts` is the regression guard.
 
-Discovery runs over plain `fetch`, not a browser, which is cheap but means a
-dealer that answers a bare GET with 403 is undiscoverable — five stores in the
-current list. Those need a URL set by hand on the site's mission config.
+Ad graphics are downloaded the same way, inside the dealer's page, and ride up
+with the capture state as bytes. `AD_IMAGE_RULES` travels with the job so the
+extension applies the same thresholds and skip patterns the app would have.
+Running in the page also means the **real decoded pixel size** decides what is
+ad creative — `naturalWidth`/`naturalHeight`, not a guess from the filename or
+a `w=` query param — and the bytes usually come from the browser cache with the
+page's own cookies and referer. The app no longer fetches ad graphics at all
+during collection; `extractAdImageUrls` survives only so analysis can match
+stored graphics to the page they appeared on, plus the legacy live-fetch branch
+for runs captured before ad-image capture shipped.
 
 `pageHasOfferSignal` is deliberately absent from all of this. Besides rejecting
 legitimately empty specials pages, it cannot do the job it was given:
@@ -371,8 +395,9 @@ it returns **false on every Dealer.com specials page**, because DDC renders
 offers as JPEGs and the markup carries no price text (the same fact the analysis
 OCR path exists for). On the majority platform it never fired at all, while on
 the others it happily promoted whatever page had incidental pricing. It is still
-used elsewhere in `mission-runner.ts` to decide whether a *memorized* URL has
-gone stale, which is a different question.
+removed with the Playwright collector in 3.9.0 — the extension decides whether
+a memorized URL is still the mission's page by where the browser actually lands
+(`missionPageVerdict`), which is the check that survived scrutiny.
 
 Platform paths sit behind nav, not in front of it. Leading with them was tried
 and reverted: it overrode 43 correct dealer-authored pages, including Westerly's
@@ -501,6 +526,65 @@ AdScore compliance is implemented through `AdScoreComplianceGrader` and is used
 when all `ADGRADER_*` variables are configured. Otherwise the system falls back
 to the deterministic stub grader.
 
+### Offer confidence
+
+`offers.confidence` answers one question: how much of this offer did the
+deterministic extractor actually verify? It is not a probability that the offer
+is real, and it is not a quality grade.
+
+For a vehicle offer it is completeness times two penalties:
+
+    (0.9 * completeness + 0.1 if a make was found) * provenance * missing-model
+
+Completeness is measured against the fields that offer type can actually carry
+(`EXPECTED_FIELDS` in `extract.ts`) — a lease is payment + term + due-at-signing,
+a finance offer is APR + term, a cash offer is one advertised price. Measuring
+instead against a fixed list of every field meant a type that structurally lacks
+some of them could never score well: a fully-parsed 0%-APR finance ad landed at
+0.60, exactly the publish floor, for want of a monthly payment it can never have.
+
+`provenance` discounts weak sources (homepage tile 0.85, promo banner 0.8;
+dedicated finance/specials pages 1.0) and `missing-model` (0.75) applies to a
+priced offer whose vehicle the rules could not identify. Both are penalize-only,
+so neither can inflate a thin extraction into a confident one.
+
+Disclaimer presence is deliberately not scored. It is already stored
+(`disclaimer_text`), already feeds mileage derivation, and is already judged by
+the compliance grade; as a confidence bonus it mostly rewarded whatever text
+landed in the disclaimer window, including mid-sentence OCR fragments.
+
+Service confidence does not use completeness. A DOM-text coupon with a monetary
+signal and a recognized service label is 0.8. An image coupon is scored by
+whether its OCR read and its alt text agree: corroborated 0.85, `ocr_only` 0.60,
+`mismatch` / `alt_only` 0.50.
+
+The AI pass never writes this column. `applyEnrichment` in `runner.ts` takes the
+model's corrected fields and drops its self-reported confidence into
+`normalized_json.aiConfidence`, surfaced in the AI chip's tooltip. Letting it
+overwrite the score put two incompatible scales in one column — two identical
+Anchor Subaru lease ads read 68% and 90% purely because OCR turned the T in
+ASCENT into `®`, which nulled the model, which routed that row alone to Claude.
+The rule score now always describes what the rules could verify.
+
+Service coupons still reach neither enricher condition, and that is intended:
+the null-model condition is guarded off (a service offer's model is always null
+by construction, so without the guard every coupon would hit the vehicle-shaped
+enricher), and the lowest service score is 0.50 while the routing gate is
+`< 0.5`. A `mismatch` coupon is adjudicated instead by its own service-shaped
+verifier — `ClaudeCouponVerifier` (`ai-enrich.ts`), the sibling of the on-demand
+`ClaudeOfferVerifier`. `serviceCouponOffers()` calls it at reconciliation time,
+where both readings are still in hand, and shows it the OCR value, the alt
+value, and the full text each came from. It answers one question — is the kept
+OCR read the offer this coupon advertises — and never edits a field.
+`applyCouponVerdict()` (`extract.ts`) then moves the confidence only: a confirm
+takes the model's calibrated number (a lukewarm confirm still does not publish),
+a drop is forced under the floor. The marker becomes `mismatch_confirmed` /
+`mismatch_dropped`, which stops the run page's "check" flag and shows the
+existing ✓/✕ verdict badge instead. With no `ANTHROPIC_API_KEY` the verifier is
+a no-op and the coupon keeps its 0.50 and its manual flag. The on-demand
+"Verify borderline" action skips rows already carrying those markers, so the
+vehicle-shaped prompt cannot overturn a coupon-shaped judgment.
+
 Key files:
 
 - `src/lib/analysis/runner.ts`
@@ -547,8 +631,8 @@ The weekly operator flow is:
 6. Publish snapshot.
 7. Share report through the viewer.
 
-The admin app needs a persistent Node process because Playwright and background
-run execution live in-process. Do not target serverless for the admin app.
+The admin app needs a persistent Node process because background run execution
+and analysis live in-process. Do not target serverless for the admin app.
 
 The viewer app is separate and can run on Vercel because it only reads
 published report data.
