@@ -43,6 +43,26 @@ assert.equal(canonicalModelName("Hyundai", "SANTA FE CALLIG"), "SANTA FE");
 assert.equal(canonicalModelName("GMC", "Sierra 2500HD"), "Sierra 2500 HD");
 assert.equal(canonicalModelName("GMC", "Sierra  3500HD"), "Sierra 3500 HD");
 
+// One body, three spellings across platforms. CC is the one that survives.
+assert.equal(canonicalModelName("GMC", "Sierra 3500 HD Chassis Cab"), "Sierra 3500 HD CC");
+assert.equal(canonicalModelName("GMC", "Sierra 3500HD CC"), "Sierra 3500 HD CC");
+assert.equal(canonicalModelName("Ram", "Ram 5500 Chassis Cab"), "Ram 5500 CC");
+assert.equal(canonicalModelName("Ram", "Ram 5500 Chassis"), "Ram 5500 CC");
+assert.equal(canonicalModelName("Chrysler", "3500 Chassis Cab"), "3500 CC");
+
+// The chassis-cab truck stays separate from the pickup of the same weight.
+{
+  const merged = normalizeModelRows([
+    row("Ram", "Ram 5500", 2, 0),
+    row("Ram", "Ram 5500 Chassis Cab", 3, 0),
+    row("Ram", "Ram 5500 CC", 1, 0),
+  ]);
+  assert.deepEqual(
+    merged.map((r) => `${r.model}=${r.inStock}`),
+    ["Ram 5500=2", "Ram 5500 CC=4"]
+  );
+}
+
 // Powertrain and body variants are different cars and must survive untouched.
 for (const model of [
   "Corolla",
@@ -55,6 +75,30 @@ for (const model of [
   "Tacoma i-FORCE MAX",
 ]) {
   assert.equal(canonicalModelName("Toyota", model), model);
+}
+
+// The number in a truck name is the model, not a trim. Nothing here may ever
+// collapse a 1500 into a 2500: they are different trucks at different prices,
+// and a merged row would look like a plausible count.
+{
+  const merged = normalizeModelRows([
+    row("GMC", "Sierra 1500", 4, 0),
+    row("GMC", "Sierra 1500 Limited", 1, 0),
+    row("GMC", "Sierra 2500HD", 3, 0),
+    row("GMC", "Sierra 3500 HD", 2, 0),
+    row("Ram", "Ram 3500", 5, 0),
+    row("Ram", "Ram 5500HD", 1, 0),
+  ]);
+  assert.deepEqual(
+    merged.map((r) => `${r.model}=${r.inStock}`),
+    [
+      "Sierra 1500=5",
+      "Sierra 2500 HD=3",
+      "Sierra 3500 HD=2",
+      "Ram 3500=5",
+      "Ram 5500 HD=1",
+    ]
+  );
 }
 
 // Names that merely look like trims are separate models, so they stay.

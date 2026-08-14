@@ -34,11 +34,18 @@ const TRIM_SUFFIXES = [
   "se",
 ];
 
-/** Collapse the spacing dealers disagree about: `2500HD` vs `2500 HD`. */
+/**
+ * Collapse the spellings dealers disagree about for one body:
+ * `2500HD` vs `2500 HD`, and `Chassis Cab` / `Chassis` vs `CC`.
+ *
+ * `CC` wins because it is the shortest of the three and reporting is width-
+ * constrained; which one wins does not matter as long as one does.
+ */
 function normalizeSpacing(value: string): string {
   return value
     .replace(/\s+/g, " ")
     .replace(/\b(\d{3,4})(HD|CC)\b/gi, "$1 $2")
+    .replace(/\bchassis(?:\s+cab)?\b/gi, "CC")
     .trim();
 }
 
