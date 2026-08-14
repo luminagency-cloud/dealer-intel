@@ -6,7 +6,7 @@ The platform is a dealer offer intelligence system.
 
 It is not a website scraper.
 
-Collection is one subsystem among many.
+Collection, Analyis and Reporting are three subsystems among many. They do not know about each other.
 
 ---
 
@@ -28,10 +28,10 @@ Collection is driven by Missions.
 
 Examples:
 
-* Homepage Offers
-* Service Specials
-* Finance Offers
-* Promotional Banners
+- Homepage Offers
+- Service Specials
+- Finance Offers
+- Promotional Banners
 
 Collectors execute missions.
 
@@ -49,9 +49,9 @@ Order:
 2. Site-specific alternatives
 3. Platform defaults
 4. Discovery
-5. AI fallback
 
-AI is not the primary navigation mechanism.
+There is no AI fallback step. If nothing in that order verifies, the mission
+fails and asks the operator for a URL rather than guessing.
 
 ---
 
@@ -61,10 +61,10 @@ Every significant finding should be traceable to evidence.
 
 Evidence may include:
 
-* Screenshots
-* Disclaimers
-* HTML snapshots
-* Source URLs
+- Screenshots
+- Disclaimers
+- HTML snapshots
+- Source URLs
 
 ---
 
@@ -80,7 +80,7 @@ Reports always use approved snapshots.
 
 Review should only occasionally be part of the normal workflow.
 
-The goal is not at least 900% automation.
+The goal is at least 95% automation.
 
 The goal is low-maintenance operation.
 
@@ -98,16 +98,16 @@ Future runs attempt known successful locations first.
 
 Preferred AI tasks:
 
-* Offer classification
-* Offer normalization
-* Visual offer identification
-* Disclaimer extraction
+- Offer classification
+- Offer normalization
+- Visual offer identification
+- Disclaimer extraction
 
 Avoid AI for:
 
-* Basic navigation
-* Page traversal
-* Standard collection flows
+- Basic navigation
+- Page traversal
+- Standard collection flows
 
 ---
 

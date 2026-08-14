@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { storedAdSources } from "../src/lib/analysis/runner";
+import { storedAdSources } from "../src/lib/analysis/pipeline";
 import type { Evidence } from "../src/lib/db";
 
 /**

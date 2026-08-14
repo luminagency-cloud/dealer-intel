@@ -11,7 +11,7 @@ import { RunOfferBreakdown } from "@/components/run-offer-breakdown";
 interface LiveStatus {
   executing: boolean;
   analyzing: boolean;
-  /** Stop requested — the loop finishes its current page and exits. */
+  /** Pause requested — the loop finishes its current site+mission and exits. */
   analysisStopping: boolean;
   progress: { processed: number; total: number } | null;
   partialAnalysisKeys: string[];

@@ -22,7 +22,6 @@ Frontend:
 
 * Next.js
 * TypeScript
-* Vercel
 
 Backend:
 
@@ -40,7 +39,11 @@ Storage:
 
 Deployment:
 
-* Render
+* The admin app runs locally on the operator's own machine (needs a
+  persistent Node process, and collection needs the operator's own Chrome
+  plus the extension — nothing to remote into).
+* The report viewer is a separate, thin Next.js app deployed on Vercel. It
+  only reads published snapshots.
 
 ## Core Workflow
 

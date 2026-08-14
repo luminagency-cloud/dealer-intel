@@ -83,7 +83,7 @@ export function AnalysisSection({
   siteNames: Record<string, string>;
   siteOptions: Pick<Site, "id" | "name">[];
   analyzing: boolean;
-  /** Stop requested but the current page hasn't finished yet. */
+  /** Pause requested but the current site+mission hasn't finished yet. */
   analysisStopping?: boolean;
   analysisStartedAt?: Date | null;
   analysisCompletedAt?: Date | null;
@@ -250,9 +250,9 @@ export function AnalysisSection({
                   type="submit"
                   disabled={analysisStopping}
                   className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:bg-zinc-800 dark:text-red-300 dark:hover:bg-zinc-700"
-                  title="Stop after the page being analyzed right now. Offers already extracted are kept, and Resume Analysis picks up from there."
+                  title="Pause after the site+mission being analyzed right now. Offers already extracted are kept, and Resume Analysis picks up from there."
                 >
-                  {analysisStopping ? "Stopping…" : "Stop Analysis"}
+                  {analysisStopping ? "Pausing — waiting for mission to finish" : "Pause Analysis"}
                 </button>
               </form>
             )}

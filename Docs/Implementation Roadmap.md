@@ -122,6 +122,24 @@ Status: **implemented**
 
 ## Actually Open
 
+### Analysis Pipeline Redesign
+
+Status: **design settled, not started**. See `Docs/Analysis Pipeline Redesign.md`.
+
+- `src/lib/analysis/runner.ts` collapses two duplicated pipeline entry points
+  (`processAnalysis` / `startAnalysisForSiteMission`) into one job queue plus
+  one atomic per-site-mission pipeline function.
+- Fixes a live dedup bug: DOM/disclaimer passes silently omit `vehicleTrim`
+  from their dedup key while the image pass doesn't, undercounting the
+  client-facing offer set.
+- Platform-specific extraction (Scene7) and widget extraction (Dealer
+  Teamwork/MPOP) split into their own files, mirroring the
+  `extension/inventory/adapters/` pattern.
+- Stop -> Pause rename for analysis; collection gets a Pause control it
+  doesn't have today.
+
+Done when: see the checklist in `Docs/Analysis Pipeline Redesign.md`.
+
 ### Service Coupon Adjudication
 
 Status: **implemented (3.7.16); not yet seen on a live mismatched coupon**
@@ -156,7 +174,6 @@ Done when:
 ### Chrome Extension Collector
 
 Status: **the only collector**. The Playwright collector was deleted in 3.9.0.
-See `Docs/Chrome Extension Collector Plan.md`.
 
 - The extension processes a selected suite sequentially, reusing one visible
   Chrome window for each dealer's missions and storing evidence through the

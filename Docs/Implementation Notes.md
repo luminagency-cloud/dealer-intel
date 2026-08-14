@@ -41,8 +41,8 @@ Run progress is persisted to `mission_results` and exposed through
 endpoint through `src/components/run-live-data.tsx`.
 
 Each run records which collector produced it. Every run since 3.9.0 is
-`chrome_extension`, documented in `Docs/Chrome Extension Collector Plan.md`; the
-`current` value is retained only so pre-3.9.0 runs still read correctly. The
+`chrome_extension`; the `current` value is retained only so pre-3.9.0 runs
+still read correctly. The
 extension is preflighted (present, enabled, new enough) before the run's state
 is touched, so a missing extension leaves the run exactly as it was.
 The server seeds the whole selected scope; the extension processes work
