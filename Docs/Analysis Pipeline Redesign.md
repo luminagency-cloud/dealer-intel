@@ -1,6 +1,6 @@
 # Analysis Pipeline Redesign
 
-_Created: August 13, 2026 · Design settled, not yet implemented._
+_Created: August 13, 2026 · Implemented August 14, 2026 (see "Done when" below); collection Pause/Resume remains a separate follow-up._
 
 Grew out of an architecture review (see the "Top recommendation" below) and a
 grilling session that widened it into a full redesign of `src/lib/analysis/runner.ts`.
@@ -169,29 +169,46 @@ path; this just needs to stay true under the new shape.
 
 ## Done when
 
-- [ ] `runner.ts` contains only job-queue logic (enqueue, `activeAnalyses`,
+- [x] `runner.ts` contains only job-queue logic (enqueue, `activeAnalyses`,
       progress, pause signal) — no extraction code.
-- [ ] One atomic pipeline function replaces `processAnalysis()` and
-      `startAnalysisForSiteMission()`.
-- [ ] `offerSignature()` is called from exactly one place in the extraction
+- [x] One atomic pipeline function replaces `processAnalysis()` and
+      `startAnalysisForSiteMission()`. (`runAnalysisForScope` in
+      `src/lib/analysis/pipeline.ts`.)
+- [x] `offerSignature()` is called from exactly one place in the extraction
       path (DOM, disclaimer, and image passes all route through it), always
       including `vehicleTrim`.
-- [ ] Dedup checks persisted offers for the site+run, not an in-memory Set
-      scoped to one call.
-- [ ] `extractDealerInspireScene7Offers` and helpers move out of `runner.ts`
-      into the new `widgets/` family.
-- [ ] `stripDealerTeamworkDump` / `isPerVehicleListing` move out of
+- [x] Dedup checks persisted offers for the site+run, not an in-memory Set
+      scoped to one call. (`loadPersistedSignatures` in `pipeline.ts`.)
+- [x] `extractDealerInspireScene7Offers` and helpers move out of `runner.ts`
+      into the new `widgets/` family. (`src/lib/analysis/widgets/scene7.ts`.)
+- [x] `stripDealerTeamworkDump` / `isPerVehicleListing` move out of
       `extract.ts` into the same `widgets/` family.
-- [ ] Full run, per-row re-analyze, re-collect catch-up, and resume-after-pause
+      (`src/lib/analysis/widgets/dealer-teamwork.ts`.)
+- [x] Full run, per-row re-analyze, re-collect catch-up, and resume-after-pause
       all call the same atomic function with different scope lists.
-- [ ] "Stop Analysis" relabeled "Pause Analysis"; status string during the
+- [x] "Stop Analysis" relabeled "Pause Analysis"; status string during the
       wait reads "Pausing — waiting for mission to finish" or similar.
 - [ ] Collection gets an equivalent Pause/Resume control (separate follow-up
       item, not blocking this refactor).
-- [ ] `npx tsc --noEmit`, `npm run lint`, `npm run build` pass.
-- [ ] Verified against a real run in the running app: full analysis, one
+- [x] `npx tsc --noEmit`, `npm run lint`, `npm run build` pass.
+- [x] Verified against a real run in the running app: full analysis, one
       manual per-row re-analyze, and a pause/resume cycle all produce correct,
       non-duplicated offers.
+
+### Bonus: `platforms/` dispatcher (added during implementation)
+
+Not in the original "Target shape" checklist scope as written, but built after
+review: `extract.ts` and the old `runner.ts` had zero `sites.platform`
+dispatch — every pass was a generic DOM-shape heuristic, confirmed by grep and
+by the file's own comments ("deliberately NOT keyed on any platform-specific
+token"). Collection already has real platform-specific code
+(`extension/inventory/adapters/`, dispatched off `sites.platform`: ddc,
+dealer-inspire, dealer-alchemist, dealer-on, apollo, sokal, dealer-masters).
+`src/lib/analysis/platforms/index.ts` now mirrors that same registry pattern
+for analysis — `{ id, platforms: string[], extractOffers }`, dispatched via
+`extractOffersForPlatform()` — with an empty registry (no adapters registered
+yet, so no behavior change today) as the seam for the first platform that
+needs its own DOM handling.
 
 ## Other architecture-review candidates (not started)
 

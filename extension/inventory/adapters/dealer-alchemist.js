@@ -213,14 +213,17 @@
       );
       const state = await readSettledSearchState(tabId, runtime);
 
-      const makeApplied =
-        state.makes.length <= 1 ||
-        state.makes.some(
-          (row) =>
-            row.checked &&
-            inventoryTally.normalizeKey(row.name) === inventoryTally.normalizeKey(make)
-        );
-      if (!makeApplied) return { applied: false, reason: "make refinement did not apply" };
+      // Same guard every facet-walking adapter uses: a checked make in the
+      // markup, or model counts small enough to be this make alone. The store
+      // facet read before any refinement is what they are held against.
+      const models = modelRowsFrom(state);
+      const scope = inventoryTally.checkMakeScope({
+        make,
+        modelTotal: models.reduce((sum, row) => sum + row.count, 0),
+        storeMakes: availableMakes,
+        selectedMakes: state.makes.filter((row) => row.checked).map((row) => row.name),
+      });
+      if (!scope.scoped) return { applied: false, reason: scope.reason };
 
       // The status refinement's own checkbox does not reliably render as
       // checked after a cold load, but status facets are disjunctive: their
@@ -237,7 +240,7 @@
         }
       }
 
-      return { applied: true, models: modelRowsFrom(state), total: state.total };
+      return { applied: true, models, total: state.total };
     };
 
     for (const make of makes) {

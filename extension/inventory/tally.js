@@ -33,29 +33,127 @@
     return cleaned;
   }
 
+  /** Words a nameplate never carries, but a scraped label often does. */
+  const FURNITURE_WORDS =
+    /\b(?:sales|service|parts|directions|contact|compare|call|hours|appointment|results?|matches|vehicles?|inventory|stock|specials?|window\s+sticker)\b/i;
+
+  /** Street types, for the address rule below. Bare, so `4dr` and `CT5` miss. */
+  const STREET_WORD =
+    /\b(?:road|rd|street|st|avenue|ave|lane|ln|boulevard|blvd|drive|dr|highway|hwy|route|rt|turnpike|pike|circle|cir|court|ct|place|pl|parkway|pkwy|way|terrace|trail)\b\.?/i;
+
+  /** A number standing on its own: `Camry 26`, not `CX-90` or `Mazda3`. */
+  const BARE_NUMBER = /(?:^|\s)\d[\d,]*(?=\s|$)/g;
+
   /**
    * Reject text that is obviously page furniture rather than a model name.
-   * Count readers scrape labels, and a dealer address or a "Results" heading
-   * that slips through becomes a permanent bogus model row in reporting.
+   *
+   * Count readers scrape labels, and a dealer address, a compare-widget caption
+   * or a whole facet panel read as one string becomes a permanent bogus model
+   * row in reporting — the stored rows are what the report compares, so nothing
+   * downstream can tell them from a real nameplate afterwards.
+   *
+   * Every rule here has to survive the real names that look like junk: `GR86`,
+   * `Mazda3`, `CX-90 PHEV`, `bZ4X`, `MX-5 Miata RF`, `IONIQ 5`, `Ram ProMaster
+   * 3500 Cutaway`, and the digits-only `300` and `911`. So the rules key on
+   * things a nameplate genuinely never has: label punctuation, a model year, a
+   * street address, or several counts strung together.
    */
   function plausibleModelName(name) {
     const normalized = normalizeName(name);
-    if (!normalized || normalized.length > 80) return false;
-    if (
-      /\b(?:sales|service|parts|directions|contact|results?|matches|vehicles?|inventory|stock:)\b/i.test(
-        normalized
-      )
-    ) {
+    if (!normalized || normalized.length > 60) return false;
+    if (!/[A-Za-z0-9]/.test(normalized)) return false;
+
+    // Label punctuation. `Compare New 2025 Kia K5 EX Stock:` came in through a
+    // keyword rule whose trailing `\b` could never match after the colon.
+    if (/[:;•|]/.test(normalized)) return false;
+
+    // A model year belongs to a listing, never to a nameplate. Ram 2500 and
+    // Sierra 3500 are outside the 19xx/20xx window on purpose.
+    if (/\b(?:19|20)\d{2}\b/.test(normalized)) return false;
+
+    if (FURNITURE_WORDS.test(normalized)) return false;
+
+    // A whole facet panel read as one label: `4Runner 7 BZ 7 C-HR 5 Camry 26`.
+    // Real names carry at most one standalone number (`IONIQ 5`, `Ram 1500`).
+    if ((normalized.match(BARE_NUMBER) || []).length >= 3) return false;
+
+    // Dealer address. Either shape is enough on its own: a house number in
+    // front (`1030 Hingham St`) or a city/state tail (`Broad St, Bristol, CT`).
+    // The earlier rule demanded the tail, so every bullet-free address stored.
+    if (STREET_WORD.test(normalized) && (/^\d{1,6}\s/.test(normalized) || /,/.test(normalized))) {
       return false;
     }
-    if (
-      /\b(?:road|rd\.?|street|st\.?|avenue|ave\.?|lane|ln\.?|boulevard|blvd\.?|drive|dr\.?|highway|hwy\.?)\b.*[,•]/i.test(
-        normalized
-      )
-    ) {
-      return false;
+
+    return true;
+  }
+
+  /**
+   * Prove a per-make facet read is that make's data and not the whole store's.
+   *
+   * A facet-reading adapter navigates to a make-filtered SRP URL and then reads
+   * whatever model facet the page rendered. When the site ignores that filter,
+   * the read still succeeds — and returns the WHOLE store's models, which are
+   * then banked under the one make we happened to be asking for. That is how a
+   * Buick row ended up holding Golf GTI and IONIQ 5, and how each make at a
+   * CDJR store ended up holding every other make's trucks.
+   *
+   * The adapters used to answer this by re-reading the query param they had
+   * just written into the URL themselves, which can only ever say yes. This
+   * asks the PAGE instead, and takes either kind of evidence:
+   *
+   *   - the make facet reports the target make as selected, or
+   *   - the model counts total no more than the store's own count for that
+   *     make (an unfiltered read totals the whole store, so it cannot).
+   *
+   * Either alone proves the page narrowed. Requiring both would fail honest
+   * stores: some themes never render the facet control as checked, and some
+   * publish no per-make counts.
+   *
+   * The guard only means anything where a store has more than one make to
+   * confuse. On a single-brand store the unfiltered read IS that make's read,
+   * so it stands down rather than inventing a failure.
+   *
+   * @param {object} options
+   * @param {string} options.make the make this read was supposed to be scoped to
+   * @param {number} options.modelTotal sum of the model rows just read
+   * @param {Array<{name?: string, value?: string, count?: number|null}>}
+   *   options.storeMakes the make facet as read BEFORE any make filter applied
+   * @param {string[]} [options.selectedMakes] makes the page's own markup
+   *   reports as selected AFTER filtering. Must be read from the DOM, never
+   *   from the URL — the URL only ever repeats what we put there.
+   * @returns {{scoped: boolean, reason: string|null}} `scoped` false means the
+   *   counts belong to the store rather than to this make and must be dropped.
+   */
+  function checkMakeScope(options = {}) {
+    const { make, modelTotal, storeMakes = [], selectedMakes = [] } = options;
+    const ok = { scoped: true, reason: null };
+
+    const offered = storeMakes.filter((row) => normalizeKey(row?.name || row?.value));
+    if (offered.length <= 1) return ok;
+    if (!(Number(modelTotal) > 0)) return ok;
+
+    const key = normalizeKey(make);
+    const matches = (row) =>
+      normalizeKey(row?.name) === key || normalizeKey(row?.value) === key;
+
+    if (selectedMakes.some((name) => normalizeKey(name) === key)) return ok;
+
+    const own = offered.find(matches);
+    const count = Number(own?.count);
+    if (!Number.isFinite(count)) {
+      return {
+        scoped: false,
+        reason: `the make facet neither reports ${make} as selected nor publishes a ${make} count, so ${modelTotal} model vehicles could not be confirmed as ${make} alone`,
+      };
     }
-    return /[A-Za-z0-9]/.test(normalized);
+    // Tolerance, not equality: a status-split pass reads legitimately FEWER
+    // vehicles than the make's all-status facet count, and counts drift a
+    // little between two page loads. Only an over-count is evidence.
+    if (Number(modelTotal) <= count + 2) return ok;
+    return {
+      scoped: false,
+      reason: `model counts total ${modelTotal} against ${count} ${make} in the store's own make facet, and the page does not report ${make} as selected; the make filter did not apply`,
+    };
   }
 
   /**
@@ -213,6 +311,7 @@
 
   globalThis.inventoryTally = {
     canonicalModel,
+    checkMakeScope,
     createInventoryTally,
     normalizeKey,
     normalizeName,

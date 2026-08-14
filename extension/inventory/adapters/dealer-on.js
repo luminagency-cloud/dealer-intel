@@ -18,6 +18,17 @@
  * adapter never navigates once per make: every card carries its own make,
  * model, and in-stock/in-transit flags. One request per 96 vehicles.
  *
+ * DealerOn DOES have a usable model facet — a "Select Model" dialog whose
+ * "N available" counts reconcile exactly to its own "View N Matches" button —
+ * and reading it instead has been considered and rejected twice. It costs a
+ * full page load per make against `ceil(vehicles / 96)` JSON calls here (one
+ * for a 67-vehicle store, four for a 356-vehicle one), it loses the
+ * in-stock/in-transit split, and on a multi-brand store it has to be read with
+ * one make already applied — for which DealerOn publishes no filter-URL
+ * contract. Guessing one re-creates the whole-store-under-one-make bug that
+ * `inventoryTally.checkMakeScope` exists to catch. The incremental-rendering
+ * note above is about the results GRID; it was never a claim about the facet.
+ *
  * The fetch is issued from the dealer's own page, so it is same-origin and
  * carries the session the visible browser already established.
  */

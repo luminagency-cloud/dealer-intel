@@ -124,21 +124,26 @@ Status: **implemented**
 
 ### Analysis Pipeline Redesign
 
-Status: **design settled, not started**. See `Docs/Analysis Pipeline Redesign.md`.
+Status: **implemented and verified against a live run (August 14, 2026)**. See
+`Docs/Analysis Pipeline Redesign.md` for the checklist.
 
-- `src/lib/analysis/runner.ts` collapses two duplicated pipeline entry points
-  (`processAnalysis` / `startAnalysisForSiteMission`) into one job queue plus
-  one atomic per-site-mission pipeline function.
-- Fixes a live dedup bug: DOM/disclaimer passes silently omit `vehicleTrim`
-  from their dedup key while the image pass doesn't, undercounting the
-  client-facing offer set.
-- Platform-specific extraction (Scene7) and widget extraction (Dealer
-  Teamwork/MPOP) split into their own files, mirroring the
-  `extension/inventory/adapters/` pattern.
-- Stop -> Pause rename for analysis; collection gets a Pause control it
-  doesn't have today.
+- `src/lib/analysis/runner.ts` is now pure job queue; the extraction/dedup/
+  insert/grade logic lives in one atomic function,
+  `runAnalysisForScope()` in `src/lib/analysis/pipeline.ts`, replacing the old
+  `processAnalysis` / `startAnalysisForSiteMission` duplication.
+- Fixed the live dedup bug: `offerSignature()` is now called from exactly one
+  place and always includes `vehicleTrim`, so two offers differing only by
+  trim no longer collide.
+- Widget extraction (Scene7, Dealer Teamwork/MPOP) split into
+  `src/lib/analysis/widgets/`. A `src/lib/analysis/platforms/` dispatcher
+  (mirroring `extension/inventory/adapters/`) was also added, keyed off
+  `sites.platform` — registry is empty for now (no platform-specific analysis
+  logic exists yet), it's the seam for the first one that needs it.
+- "Stop Analysis" relabeled "Pause Analysis".
 
-Done when: see the checklist in `Docs/Analysis Pipeline Redesign.md`.
+Remaining: **collection still has no Pause/Resume control** (a runaway
+collection can't be interrupted short of killing the process) — separate
+follow-up, not started, not blocking.
 
 ### Service Coupon Adjudication
 
@@ -254,6 +259,14 @@ Remaining before making Chrome the default or retiring Current:
   Alchemist (1), Dealer Masters (1), and Sokal (1) have adapters but no matched
   batch yet — see the platform-adapter item below. The sibling inventory
   service comes out only after every platform passes.
+- Those matrices now also have to prove per-make attribution, not just totals.
+  Stored rows on multi-brand Dealer.com and Dealer Inspire stores had the whole
+  store's model facet banked under one make, because the adapters verified the
+  make filter by re-reading the query param they had written themselves.
+  `inventoryTally.checkMakeScope` replaces that with page evidence and every
+  facet-walking adapter routes through it; see Implementation Notes and
+  `scripts/verify-inventory-make-scope.mjs`. The eight affected stored results
+  need a recollect — they are not repaired in place.
 
 ### 1. Matched Batches For The New Inventory Platforms
 

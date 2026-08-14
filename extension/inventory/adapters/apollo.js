@@ -31,9 +31,12 @@
     return execute(tabId, () => {
       const html = document.documentElement?.outerHTML || "";
       const readVar = (key) => {
-        const match = html.match(new RegExp(`var\\s+${key}\\s*=\\s*'([^']*)';`, "i"));
+        // Bounded by the character class, never greedy: these assignments can
+        // share a line, and a greedy match would run `accountId` straight
+        // through the next `var` to the last quote on it.
+        const match = html.match(new RegExp(`var\\s+${key}\\s*=\\s*(['"])([^'"]*)\\1\\s*;`, "i"));
         if (!match) return null;
-        return match[1]
+        return match[2]
           .replace(/&quot;/g, '"')
           .replace(/&#39;/g, "'")
           .replace(/&amp;/g, "&")
@@ -58,9 +61,12 @@
         campaignId,
         selectedFilters,
         isApollo: /teamvelocitymarketing|secureoffersites\.com|tvmwebsitecdn\.com/i.test(html),
-        // The filter payload is what the API call is built from. A page
-        // without it cannot be queried, whatever else it looks like.
-        hasControls: Boolean(selectedFilters && (selectedFilters.AccountID || accountId)),
+        // The account id is what the API call is built from. `selectedFilters`
+        // only refines it, and every field it carries has a default below, so
+        // requiring it here rejected pages we could have queried: Apollo
+        // stopped emitting a parseable `selectedFilters` and all three Apollo
+        // dealers failed navigation with `accountId` sitting right there.
+        hasControls: Boolean(selectedFilters?.AccountID || accountId),
       };
     });
   }
@@ -79,7 +85,10 @@
   async function fetchFilters(tabId, identity, state) {
     return execute(
       tabId,
-      async (endpoint, selectedFilters, accountId, campaignId, availability) => {
+      async (endpoint, pageFilters, accountId, campaignId, availability) => {
+        // Absent on pages that no longer publish the variable; every field it
+        // would have supplied falls back below.
+        const selectedFilters = pageFilters || {};
         const params = new URLSearchParams({
           AccountID: String(selectedFilters.AccountID ?? accountId ?? ""),
           Type: selectedFilters.Type ?? "New",
@@ -210,19 +219,28 @@
       );
     }
 
+    const transitState = { inStock: false, inTransit: true, inProduction: false };
     runtime.throwIfCancelled();
-    const inTransit = await fetchFilters(tabId, identity, {
-      inStock: false,
-      inTransit: true,
-      inProduction: false,
-    });
+    let inTransit = await fetchFilters(tabId, identity, transitState);
+    // Status 0 is a thrown fetch rather than a refused one, and it has shown up
+    // on a single store while the identical call succeeded everywhere else in
+    // the same batch. Losing transit costs more than one retry: a model that is
+    // all in-transit disappears from the breakdown entirely, so the report ends
+    // up short of rows, not just short of a column.
+    if (!inTransit?.ok) {
+      await runtime.sleep(1_000);
+      runtime.throwIfCancelled();
+      inTransit = await fetchFilters(tabId, identity, transitState);
+    }
     // In-transit is a second opinion, not the headline number. A store that
     // answers the on-lot call but not this one still has usable on-lot data,
     // so report transit as unresolved rather than failing the dealer.
     const transitKnown = Boolean(inTransit?.ok);
     if (!transitKnown) {
       warnings.push(
-        `Apollo in-transit query failed (HTTP ${inTransit?.status ?? 0}); transit left unresolved.`
+        `Apollo in-transit query failed twice (HTTP ${inTransit?.status ?? 0}${
+          inTransit?.error ? `: ${inTransit.error}` : ""
+        }); transit left unresolved and transit-only models are missing.`
       );
     }
 

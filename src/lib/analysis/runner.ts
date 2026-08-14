@@ -26,6 +26,7 @@ const globalState = globalThis as unknown as {
   __activeAnalysisRuns?: Set<string>;
   __stoppingAnalyses?: Set<string>;
   __analysisProgress?: Map<string, { processed: number; total: number }>;
+  __analysisRemaining?: Map<string, ScopePair[]>;
   __analysisQueueState?: {
     queue: AnalysisQueueTask[];
     running: number;
@@ -37,6 +38,14 @@ const analysisProgress = (globalState.__analysisProgress ??= new Map<
   string,
   { processed: number; total: number }
 >());
+/** Pairs a paused run had not reached yet, kept from pause to resume.
+ *  Authoritative because a pair that extracted zero offers leaves no DB trace
+ *  of having been analyzed — the offers-based filter alone re-does every such
+ *  pair, which is why resume behaved like a restart.
+ *  ponytail: server memory, same lifetime as the analysis engine itself; a
+ *  process restart falls back to the offers-based filter. Persist per-pair
+ *  completion in the DB if resume must survive restarts. */
+const analysisRemaining = (globalState.__analysisRemaining ??= new Map<string, ScopePair[]>());
 const ANALYSIS_CONCURRENCY = Math.max(
   1,
   parseInt(process.env.ANALYSIS_CONCURRENCY ?? "1", 10)
@@ -144,6 +153,7 @@ async function runScopePairs(runId: string, scopePairs: ScopePair[]): Promise<vo
   try {
     if (stoppingAnalyses.has(runId)) {
       console.log(`[analysis] run=${runId} stopped before it began`);
+      analysisRemaining.set(runId, scopePairs);
       return;
     }
 
@@ -155,9 +165,11 @@ async function runScopePairs(runId: string, scopePairs: ScopePair[]): Promise<vo
       adImageIndex: await loadAdImageIndex(runId),
     };
 
-    for (const { siteId, missionType } of scopePairs) {
+    for (let i = 0; i < scopePairs.length; i++) {
+      const { siteId, missionType } = scopePairs[i];
       if (stoppingAnalyses.has(runId)) {
         console.log(`[analysis] run=${runId} pausing before site=${siteId} mission=${missionType}`);
+        analysisRemaining.set(runId, scopePairs.slice(i));
         break;
       }
       await runAnalysisForScope(runId, siteId, missionType, shared);
@@ -168,8 +180,11 @@ async function runScopePairs(runId: string, scopePairs: ScopePair[]): Promise<vo
     // A paused analysis is unfinished by definition — leaving
     // analysisCompletedAt null is what surfaces "Resume Analysis".
     if (stoppingAnalyses.has(runId)) {
-      console.log(`[analysis] run=${runId} paused by operator before completion`);
+      console.log(
+        `[analysis] run=${runId} paused by operator, ${analysisRemaining.get(runId)?.length ?? 0} pairs left`
+      );
     } else {
+      analysisRemaining.delete(runId);
       await db
         .update(collectionRuns)
         .set({ analysisCompletedAt: new Date() })
@@ -187,12 +202,21 @@ export async function startAnalysis(runId: string, { resume = false }: { resume?
   try {
     let scopePairs = await loadRunScopePairs(runId);
     if (resume) {
-      // Pairs with no offers yet since the pause — a DB-backed generalization
-      // of the old site-only resume filter to site+mission granularity.
-      const done = new Set(
-        (await loadCompletedScopePairs(runId)).map((p) => `${p.siteId}:${p.missionType}`)
-      );
-      scopePairs = scopePairs.filter((p) => !done.has(`${p.siteId}:${p.missionType}`));
+      const pending = analysisRemaining.get(runId);
+      if (pending) {
+        // Exactly where the pause stopped, including pairs that yielded no
+        // offers — those leave no DB trace and the filter below re-does them.
+        scopePairs = pending;
+      } else {
+        // No in-memory pause point (server restarted): fall back to pairs with
+        // no offers yet.
+        const done = new Set(
+          (await loadCompletedScopePairs(runId)).map((p) => `${p.siteId}:${p.missionType}`)
+        );
+        scopePairs = scopePairs.filter((p) => !done.has(`${p.siteId}:${p.missionType}`));
+      }
+    } else {
+      analysisRemaining.delete(runId);
     }
     console.log(`[analysis] startAnalysis run=${runId} scope pairs=${scopePairs.length} resume=${resume}`);
     if (scopePairs.length === 0) {

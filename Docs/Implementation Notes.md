@@ -107,6 +107,25 @@ Source readers are preferred wherever a source exists, because they sidestep
 both the model-facet trap below and incremental rendering. DealerOn in
 particular renders one vehicle card on a page advertising 356.
 
+That claim is about the results GRID, not about facets. DealerOn does publish a
+usable model facet — a "Select Model" dialog listing each nameplate with an
+"N available" count, and those counts reconcile exactly to the button's own
+"View N Matches". It is not read, for two reasons, and neither is that it
+cannot be:
+
+- Cost. The vehicles API returns 96 cards per request, so a store costs
+  `ceil(vehicles / 96)` same-origin JSON calls — one for Balise Nissan's 67,
+  four for Paul Masse's 356. Reading the dialog instead costs a full page load
+  per make plus a dialog render poll, which is more work, not less.
+- Attribution. On a multi-brand store the dialog has to be read with one make
+  already applied, and DealerOn is the one platform with no known filter-URL
+  contract (see the filter list at the end of this section — it has no entry).
+  Guessing one re-creates the whole-store-under-one-make bug the scope guard
+  below exists to prevent, on dealers that are correct today.
+
+If DealerOn's make-filter URL is ever established, revisit the first point;
+until then the API is both cheaper and safer.
+
 The source readers and what they read:
 
 - DealerOn: `dealeron_tagging_data` on the SRP gives `dealerId`/`pageId`, then
@@ -143,8 +162,11 @@ into make/model buckets, hold them against the dealer's configured make
 allow-list (mapping the site's spelling onto the operator's — "RAM" becomes
 "Ram"), and reconcile subtotals. It knows nothing about selectors, URLs, or
 navigation. The Dealer.com and Dealer Inspire adapters predate it and still
-carry their own equivalent; they are verified against 52 live dealers and were
-left alone.
+build their own row merge and subtotals; they are verified against 52 live
+dealers and that part was left alone. Their name rules (`canonicalModel`,
+`plausibleModelName`) and the make-scope guard below now come from tally.js
+rather than from local copies, because divergent copies were how a dealer
+address became a model row.
 
 `sites.brand` is the per-dealer make allow-list every adapter filters on, and
 it is authoritative. When a live store disagrees with it, suspect `sites.url`
@@ -185,6 +207,32 @@ read names its own make. Apollo's model rows carry a `make` field; DealerOn and
 Dealer Masters enumerate vehicles. A row whose make is absent or unreadable is
 dropped, never attributed to a default.
 
+The rule is enforced by `inventoryTally.checkMakeScope`, which every
+facet-walking adapter routes through. It exists because the adapters used to
+answer "did the filter apply?" by re-reading the query param they had just
+written into the URL themselves — a question that can only be answered yes. A
+store that served unfiltered results while echoing the param back passed, and
+the whole store's model facet was banked under whichever make was being
+requested. Stored rows showed a Buick row holding Golf GTI and IONIQ 5, and
+every CDJR make holding every other make's trucks.
+
+The guard asks the page instead, and takes either kind of evidence:
+
+- the make facet reports the target make as selected **in the markup** — never
+  from the URL, which only repeats what we sent; or
+- the model counts total no more than the store's own facet count for that
+  make, since an unfiltered read totals the whole store.
+
+Either alone proves the page narrowed; requiring both would fail honest stores,
+because some themes never render the control as checked and some publish no
+per-make counts. On a store whose make facet offers one make the guard stands
+down — there the unfiltered read IS that make's read. A make that fails records
+zero with a warning naming the numbers, rather than banking the store.
+
+The make facet is only re-read when the counts already look wrong, so the happy
+path pays nothing. Checked by `scripts/verify-inventory-make-scope.mjs`, which
+also asserts that each facet-walking adapter still calls the guard.
+
 Navigation and filtering are URL-driven, not click-driven.
 `extension/inventory/navigate.js` resolves the SRP in tiers — page already
 loaded, stored `sites.inventory_path`, platform default, then href-ranked link
@@ -198,8 +246,14 @@ Filters are applied by navigating: Dealer.com uses `?make=<Make>&status=1-1`
 `_dFR[...]` refinements; Dealer Alchemist uses `?make=<Make>&status=In Stock`
 / `In Transit`. These are public URL contracts the dealer's own site links to,
 so they outlast the DOM churn that broke the previous menu/facet click paths.
-Each adapter verifies the filter actually applied and records zero with a
-warning rather than reporting unfiltered counts.
+Each adapter checks the store did not drop the param on load, and then holds
+the counts to the make through `checkMakeScope` above; a make that fails is
+recorded as zero with a warning rather than as unfiltered counts.
+
+There is deliberately no DealerOn entry. Its filter-URL contract has never been
+established, and it has never needed one — see the DealerOn note near the top
+of this section for why guessing one would be worse than the API it reads
+today.
 
 Dealer Alchemist needs a different proof than the others. Its status checkbox
 does not reliably render as checked after a cold load, but its status facet is

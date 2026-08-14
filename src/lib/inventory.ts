@@ -1,6 +1,7 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb, inventoryResults, sites } from "@/lib/db";
 import { getISOWeekLabel } from "@/lib/cycle";
+import { normalizeModelRows } from "@/lib/inventory-model-names";
 
 // ---------------------------------------------------------------------------
 // Result types — visible-Chrome collection is the only inventory collector.
@@ -100,6 +101,9 @@ export async function storeChromeInventoryResult(
   batchId: string,
   result: ChromeInventoryResult
 ): Promise<CollectAndStoreResult> {
+  // Every platform writes through here, so this is the one place model names
+  // have to agree across the six adapters.
+  const models = normalizeModelRows(result.models);
   const row = await upsertInventoryBatchRow({
     siteId,
     batchId,
@@ -111,7 +115,7 @@ export async function storeChromeInventoryResult(
     sourceUrl: result.sourceUrl,
     totals: result.totals,
     makeSubtotals: result.makeSubtotals,
-    models: result.models,
+    models,
     warnings: result.warnings ?? [],
     error: null,
   });
@@ -120,7 +124,7 @@ export async function storeChromeInventoryResult(
     status: "ok",
     totals: result.totals,
     makeSubtotals: result.makeSubtotals,
-    models: result.models,
+    models,
   };
 }
 

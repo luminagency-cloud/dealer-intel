@@ -1,4 +1,4 @@
-/* global inventoryNavigate */
+/* global inventoryNavigate, inventoryTally */
 
 /**
  * Dealer Inspire (LightningVRP) inventory via public SRP URLs.
@@ -81,15 +81,28 @@
       (facetKind) => {
         const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
         const normalize = (value) => clean(value).toLowerCase();
+        // Anchored at the end. A facet row reads "Camry 26" or "Camry (26)",
+        // so the count is the LAST number. Taking the first number anywhere
+        // turned a compare-widget caption ("New 2025 Kia K5 EX") into a model
+        // row carrying 2025 vehicles.
         const parseCount = (value) => {
-          const match = clean(value).match(/(\d[\d,]*)\s*(?:available|vehicles?|results?)?/i);
+          const match = clean(value).match(
+            /\(?(\d[\d,]*)\)?\s*(?:available|vehicles?|results?)?$/i
+          );
           const count = match ? Number(match[1].replace(/,/g, "")) : Number.NaN;
           return Number.isFinite(count) ? count : null;
         };
 
-        const elements = Array.from(
-          document.querySelectorAll(`[data-facet="${facetKind}"]`)
-        );
+        // Prefer the filter panel over the whole document. Desktop renders the
+        // facets in `#lvrp-filters-column` and narrow layouts in a dialog;
+        // anything matching `data-facet` out in the results grid is a vehicle
+        // card, not a refinement. Falls back to the document so a store using
+        // neither container still reads.
+        const selector = `[data-facet="${facetKind}"]`;
+        const panel = document.querySelector('#lvrp-filters-column, [role="dialog"]');
+        const scoped = panel ? Array.from(panel.querySelectorAll(selector)) : [];
+        const elements =
+          scoped.length > 0 ? scoped : Array.from(document.querySelectorAll(selector));
         if (elements.length === 0) {
           const toggle =
             document.querySelector(`#lvrp-filters-column [data-facettype="${facetKind}"]`) ||
@@ -122,15 +135,23 @@
               normalize(key).includes(facetKind) &&
               normalize(selectedValue) === normalize(value || name)
           );
-          const selected = Boolean(
-            selectedByUrl ||
-              (check instanceof HTMLInputElement && check.checked) ||
+          // Kept apart from `selected` on purpose. The URL carries whatever
+          // refinement WE navigated to, so a URL-derived selection can never
+          // be evidence that the site honoured it — only the markup can.
+          const selectedInDom = Boolean(
+            (check instanceof HTMLInputElement && check.checked) ||
               check?.getAttribute("aria-checked") === "true" ||
               element.getAttribute("aria-selected") === "true" ||
               element.getAttribute("aria-pressed") === "true" ||
               /(?:^|\s)(?:active|selected|checked|is-active|is-selected)(?:\s|$)/i.test(classText)
           );
-          rows.push({ name, value: value || name, count, selected });
+          rows.push({
+            name,
+            value: value || name,
+            count,
+            selected: Boolean(selectedByUrl || selectedInDom),
+            selectedInDom,
+          });
         }
 
         const byKey = new Map();
@@ -163,29 +184,15 @@
     return result?.rows ?? [];
   }
 
-  function plausibleModelName(name) {
-    const normalized = String(name || "").replace(/\s+/g, " ").trim();
-    if (!normalized || normalized.length > 80) return false;
-    if (
-      /\b(?:sales|service|parts|directions|contact|results?|matches|vehicles?|inventory|stock:)\b/i.test(
-        normalized
-      )
-    ) {
-      return false;
-    }
-    return /[A-Za-z0-9]/.test(normalized);
-  }
-
-  function canonicalModel(make, model) {
-    const cleaned = String(model || "").replace(/\s+/g, " ").trim();
-    if (/^ram$/i.test(make) && !/^ram\b/i.test(cleaned)) return `Ram ${cleaned}`;
-    return cleaned;
-  }
-
   async function readModelCounts(tabId, make, runtime) {
+    // Name rules live in tally.js, not here. This adapter carried its own
+    // weaker copy, which is how seven dealer addresses became model rows.
     const rows = (await readFacetRows(tabId, "model", runtime))
-      .filter((row) => Number.isFinite(row.count) && plausibleModelName(row.name))
-      .map((row) => ({ name: canonicalModel(make, row.value || row.name), count: row.count }));
+      .map((row) => ({
+        name: inventoryTally.canonicalModel(make, row.value || row.name),
+        count: row.count,
+      }))
+      .filter((row) => Number.isFinite(row.count) && inventoryTally.plausibleModelName(row.name));
 
     const byName = new Map();
     for (const row of rows) byName.set(row.name, Math.max(byName.get(row.name) || 0, row.count));
@@ -200,8 +207,14 @@
   // -------------------------------------------------------------------------
 
   /**
-   * Confirm the refinement took. Without this, a store that ignores the URL
-   * refinement would report unfiltered counts for every make.
+   * Confirm the store did not drop the refinement on load.
+   *
+   * A cheap first gate only. The `fromUrl` branch reads back the param we
+   * ourselves navigated to, and its one stronger check is dead weight:
+   * injected scripts run in the isolated world, so the page's own
+   * `LightningVRP` global is never visible here and the branch always falls
+   * through to `true`. `verifyMakeScope` below is what actually holds the
+   * counts to the make.
    */
   async function verifyRefinementApplied(tabId, facet, value) {
     return execute(
@@ -241,6 +254,22 @@
       },
       [facet, value]
     );
+  }
+
+  /**
+   * Hold a model-facet read to the make it was supposed to be scoped to.
+   *
+   * The make facet is only re-read when the counts already look wrong, so the
+   * happy path pays nothing for the guard. Selection is taken from the markup
+   * (`selectedInDom`) rather than from `selected`, which also counts the URL.
+   */
+  async function verifyMakeScope(tabId, make, modelTotal, storeMakes, runtime) {
+    const byCount = inventoryTally.checkMakeScope({ make, modelTotal, storeMakes });
+    if (byCount.scoped) return byCount;
+    const selectedMakes = (await readFacetRows(tabId, "make", runtime))
+      .filter((row) => row.selectedInDom)
+      .map((row) => row.value || row.name);
+    return inventoryTally.checkMakeScope({ make, modelTotal, storeMakes, selectedMakes });
   }
 
   // -------------------------------------------------------------------------
@@ -346,6 +375,12 @@
       }
 
       const inStock = await readModelCounts(tabId, make, runtime);
+      const scope = await verifyMakeScope(tabId, make, inStock.total, availableMakes, runtime);
+      if (!scope.scoped) {
+        warnings.push(`${make}: Dealer Inspire ${scope.reason}; recorded as zero.`);
+        makeSubtotals.push({ make, inStock: 0, inTransit: null });
+        continue;
+      }
 
       let inTransit = { models: [], total: 0 };
       if (transitKnown) {
@@ -359,6 +394,19 @@
           runtime
         );
         inTransit = await readModelCounts(tabId, make, runtime);
+        const transitScope = await verifyMakeScope(
+          tabId,
+          make,
+          inTransit.total,
+          availableMakes,
+          runtime
+        );
+        if (!transitScope.scoped) {
+          warnings.push(
+            `${make}: Dealer Inspire ${transitScope.reason}; transit recorded as zero.`
+          );
+          inTransit = { models: [], total: 0 };
+        }
       }
 
       models.push(...mergeStatusModels(make, inStock.models, inTransit.models, transitKnown));

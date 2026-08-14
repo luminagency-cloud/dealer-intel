@@ -1,4 +1,4 @@
-/* global inventoryNavigate */
+/* global inventoryNavigate, inventoryTally */
 
 /**
  * Dealer.com (DDC) inventory via public SRP URLs.
@@ -287,37 +287,15 @@
     return result?.rows ?? [];
   }
 
-  function plausibleModelName(name) {
-    const normalized = String(name || "").replace(/\s+/g, " ").trim();
-    if (!normalized || normalized.length > 80) return false;
-    if (
-      /\b(?:sales|service|parts|directions|contact|results?|matches|vehicles?|inventory|stock:)\b/i.test(
-        normalized
-      )
-    ) {
-      return false;
-    }
-    if (
-      /\b(?:road|rd\.?|street|st\.?|avenue|ave\.?|lane|ln\.?|boulevard|blvd\.?|drive|dr\.?|highway|hwy\.?)\b.*[,•]/i.test(
-        normalized
-      )
-    ) {
-      return false;
-    }
-    return /[A-Za-z0-9]/.test(normalized);
-  }
-
-  function canonicalModel(make, model) {
-    const cleaned = String(model || "").replace(/\s+/g, " ").trim();
-    if (/^ram$/i.test(make) && !/^ram\b/i.test(cleaned)) return `Ram ${cleaned}`;
-    return cleaned;
-  }
-
   /** Per-model counts for whatever filter the current URL already applies. */
   async function readModelCounts(tabId, make, runtime) {
+    // Name rules live in tally.js, so every platform rejects the same junk.
     const rows = (await readFacetRows(tabId, "model", runtime))
-      .filter((row) => Number.isFinite(row.count) && plausibleModelName(row.name))
-      .map((row) => ({ name: canonicalModel(make, row.name), count: row.count }));
+      .map((row) => ({
+        name: inventoryTally.canonicalModel(make, row.name),
+        count: row.count,
+      }))
+      .filter((row) => Number.isFinite(row.count) && inventoryTally.plausibleModelName(row.name));
 
     const byName = new Map();
     for (const row of rows) byName.set(row.name, (byName.get(row.name) || 0) + row.count);
@@ -332,10 +310,11 @@
   // -------------------------------------------------------------------------
 
   /**
-   * Confirm the make filter actually applied. A store that ignores URL params
-   * would otherwise return unfiltered counts that look plausible and silently
-   * inflate every make. Accepts either the URL keeping the param or the make
-   * facet reporting the make as selected.
+   * Confirm the store did not simply drop the make param on load. This is a
+   * cheap first gate, NOT proof the filter applied: the param is one we wrote
+   * ourselves, so a store that echoes it back while serving unfiltered results
+   * still passes. `verifyMakeScope` below is what actually holds the counts to
+   * the make.
    */
   async function verifyMakeApplied(tabId, make) {
     return execute(
@@ -354,6 +333,21 @@
       },
       [make]
     );
+  }
+
+  /**
+   * Hold a model-facet read to the make it was supposed to be scoped to.
+   *
+   * The make facet is only re-read when the counts already look wrong, so the
+   * happy path pays nothing for the guard.
+   */
+  async function verifyMakeScope(tabId, make, modelTotal, storeMakes, runtime) {
+    const byCount = inventoryTally.checkMakeScope({ make, modelTotal, storeMakes });
+    if (byCount.scoped) return byCount;
+    const selectedMakes = (await readFacetRows(tabId, "make", runtime))
+      .filter((row) => row.selected)
+      .map((row) => row.name);
+    return inventoryTally.checkMakeScope({ make, modelTotal, storeMakes, selectedMakes });
   }
 
   /** Does this store publish an on-lot / in-transit split at all? */
@@ -469,6 +463,12 @@
       }
 
       const inStock = await readModelCounts(tabId, make, runtime);
+      const scope = await verifyMakeScope(tabId, make, inStock.total, availableMakes, runtime);
+      if (!scope.scoped) {
+        warnings.push(`${make}: Dealer.com ${scope.reason}; recorded as zero.`);
+        makeSubtotals.push({ make, inStock: 0, inTransit: null });
+        continue;
+      }
       const pageTotal = (await inventoryPageState(tabId)).total;
       if (pageTotal !== null && inStock.total > 0 && Math.abs(pageTotal - inStock.total) > 2) {
         warnings.push(
@@ -485,6 +485,17 @@
           runtime
         );
         inTransit = await readModelCounts(tabId, make, runtime);
+        const transitScope = await verifyMakeScope(
+          tabId,
+          make,
+          inTransit.total,
+          availableMakes,
+          runtime
+        );
+        if (!transitScope.scoped) {
+          warnings.push(`${make}: Dealer.com ${transitScope.reason}; transit recorded as zero.`);
+          inTransit = { models: [], total: 0 };
+        }
       }
 
       models.push(...mergeStatusModels(make, inStock.models, inTransit.models, transitKnown));

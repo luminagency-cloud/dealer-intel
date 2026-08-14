@@ -69,23 +69,43 @@
     });
   }
 
+  /**
+   * Pick the adapter, and always ask the live page rather than trusting
+   * `sites.platform` on its own.
+   *
+   * The stored value used to win outright whenever it named a registered
+   * adapter, so a wrong-but-spellable entry was never questioned: Speedcraft
+   * Nissan is stored as `dealer_inspire` and is really a DealerOn store, and
+   * the Dealer Inspire reader found no `[data-facet]` rows on a page that has
+   * none, reporting the SRP as unreachable.
+   *
+   * The sniff is one `executeScript` against a session that has to be opened
+   * anyway, so it is close to free — and it is the only check that catches a
+   * misroute which does NOT fail loudly. An adapter aimed at the wrong
+   * platform can find something and report plausible-but-wrong counts, which a
+   * retry-after-failure scheme would never look at.
+   *
+   * The stored value still decides where we LAND (its inventory path, or the
+   * operator's), because facet markup is one of the strongest platform signals
+   * and it lives on the SRP. It also still wins whenever the page gives no
+   * confident answer — a 404 or a challenge page sniffs as "unknown", and
+   * nothing has been learned that beats what the operator typed.
+   */
   async function resolveAdapter(item, helpers) {
     const configured = adapterFor(item?.platform);
-    if (configured) return { adapter: configured, detected: null };
 
-    // Nothing matched the stored value — open the site and look. The platform
-    // is exactly what we do not know yet, so there is no default path to aim
-    // at, but an operator-stored `inventoryPath` still beats the homepage:
-    // facet markup is itself one of the strongest platform signals, so landing
-    // on the SRP makes the sniff below more accurate as well as cheaper.
     const { tabId } = await inventoryNavigate.openInventorySession({
       item,
-      platform: null,
+      // `platforms[0]` is each adapter's canonical key, which is what
+      // PLATFORM_INVENTORY_PATHS is keyed by. `item.platform` itself may be an
+      // alias ("dealer.com", "lightningvrp") that has no path entry.
+      platform: configured?.platforms[0] ?? null,
       helpers,
     });
     const detected = await detectPlatform(tabId).catch(() => "unknown");
     const sniffed = adapterFor(detected);
-    if (sniffed) return { adapter: sniffed, detected };
+    if (sniffed && sniffed !== configured) return { adapter: sniffed, detected };
+    if (configured) return { adapter: configured, detected: null };
 
     throw new Error(
       `Visible inventory collection has no adapter for ${
@@ -121,7 +141,7 @@
 
     if (detected && result && Array.isArray(result.warnings)) {
       result.warnings.push(
-        `Stored platform "${item.platform ?? "(blank)"}" did not match an adapter; used ${detected} detected from the live page.`
+        `Stored platform "${item.platform ?? "(blank)"}" was not used; the live page reads as ${detected}, so the ${adapter.id} adapter ran. Fix the dealer record.`
       );
     }
     return result;
