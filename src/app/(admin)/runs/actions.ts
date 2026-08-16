@@ -38,7 +38,7 @@ import {
   type RunStatus,
 } from "@/lib/db";
 import { and, eq, gte, inArray, lt } from "drizzle-orm";
-import { resolveRunGroups } from "@/lib/db/repository";
+import { deleteOffer as deleteOfferRow, getSiteIdsForRunGroups, resolveRunGroups } from "@/lib/db/repository";
 import { RUN_TRANSITIONS } from "@/lib/run-lifecycle";
 import { requireSession } from "@/lib/session";
 import { getISOWeekLabel } from "@/lib/cycle";
@@ -99,10 +99,7 @@ export async function createRun(formData?: FormData) {
     if (groupIds.length === 1) {
       resolvedRunGroupId = groupIds[0];
     } else {
-      const members = await getDb()
-        .select({ siteId: runGroupMembers.siteId })
-        .from(runGroupMembers)
-        .where(inArray(runGroupMembers.runGroupId, groupIds));
+      const members = await getSiteIdsForRunGroups(groupIds);
       siteIds = [...new Set(members.map((m) => m.siteId))];
       if (siteIds.length === 0) {
         redirect(
@@ -482,7 +479,7 @@ export async function passOffer(runId: string, offerId: string) {
 export async function deleteOffer(runId: string, offerId: string) {
   const session = await requireSession();
   await recordDisposition(offerId, "deleted", session.user?.email ?? null);
-  await getDb().delete(offers).where(eq(offers.id, offerId));
+  await deleteOfferRow(offerId);
   revalidatePath(`/runs/${runId}`);
 }
 

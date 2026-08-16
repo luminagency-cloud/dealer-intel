@@ -2,16 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   ensureShareToken,
-  getPrimarySiteIds,
-  getRunGroupSiteIds,
   getReportSnapshot,
-  listSnapshotOffers,
   listSnapshotsForGroup,
-  listLatestInventoryForSites,
   setSnapshotClientVisible,
 } from "@/lib/db/repository";
-import { ReportContent } from "@/components/report/ReportContent";
-import { getStoredNewsForReport } from "@/lib/news";
+import { CopyLinkButton } from "@/components/copy-link-button";
+import { fmtDateTime } from "@/lib/fmt-date";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +35,13 @@ function getPublicViewerOrigin(): {
   return { origin: url.origin };
 }
 
+/**
+ * Admin's own view of a report is management-only now — the offer grids,
+ * KPIs, and narrative live in the viewer app (the same rendering customers
+ * see), reached via "View Report ↗". Admin used to render its own copy of
+ * that content, which had already drifted from viewer's (see
+ * Docs/Analysis Pipeline Redesign.md's architecture-review candidate B).
+ */
 export default async function AdminReportPage({
   params,
 }: {
@@ -49,35 +52,9 @@ export default async function AdminReportPage({
   if (!snapshot) notFound();
   const snapshotId = snapshot.id;
 
-  const [offers, primarySiteIds, groupSnapshots] = await Promise.all([
-    listSnapshotOffers(snapshot.id),
-    snapshot.runGroupId
-      ? getPrimarySiteIds(snapshot.runGroupId)
-      : Promise.resolve(new Set<string>()),
-    snapshot.runGroupId
-      ? listSnapshotsForGroup(snapshot.runGroupId)
-      : Promise.resolve([snapshot]),
-  ]);
-
-  // Fetch inventory for all sites in the run group (not just those with offers),
-  // so newly-collected inventory is always reflected when the report is viewed.
-  const inventorySiteIds = snapshot.runGroupId
-    ? await getRunGroupSiteIds(snapshot.runGroupId)
-    : [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
-  const inventoryData = await listLatestInventoryForSites(inventorySiteIds);
-
-  // Infer brand from the most common vehicleMake across offers.
-  // Will be null until dealers have a brand field; news fetch gracefully
-  // returns null when brand is unknown or the API is not configured.
-  const makeCounts = new Map<string, number>();
-  for (const o of offers) {
-    if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
-  }
-  const primaryBrand = makeCounts.size > 0
-    ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    : null;
-
-  const news = await getStoredNewsForReport(primaryBrand);
+  const groupSnapshots = snapshot.runGroupId
+    ? await listSnapshotsForGroup(snapshot.runGroupId)
+    : [snapshot];
 
   // Build the public shareable link from the snapshot's token. Do not fall
   // back to the admin request origin: locally that would copy localhost, which
@@ -99,24 +76,83 @@ export default async function AdminReportPage({
     : "Share link unavailable";
 
   return (
-    <div>
+    <div className="mx-auto max-w-3xl">
       <div className="mb-4">
         <Link href="/reports" className="text-sm text-zinc-700 hover:underline dark:text-zinc-200">
           ← Reports
         </Link>
       </div>
-      <ReportContent
-        snapshot={snapshot}
-        offers={offers}
-        primarySiteIds={primarySiteIds}
-        groupSnapshots={groupSnapshots}
-        news={news}
-        inventoryData={inventoryData}
-        adminControls={true}
-        shareUrl={shareUrl}
-        shareUrlUnavailableLabel={shareUrlUnavailableLabel}
-        containerClassName="mx-auto max-w-6xl"
-      />
+
+      <div className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+          {snapshot.label || `Snapshot ${snapshot.id.slice(0, 8)}`}
+        </h1>
+        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          Published {fmtDateTime(snapshot.approvedAt)} · {snapshot.offerCount} offers ·{" "}
+          {snapshot.siteCount} sites
+        </p>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <a
+            href={shareUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-disabled={!shareUrl}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
+          >
+            View Report ↗
+          </a>
+          <CopyLinkButton shareUrl={shareUrl} unavailableLabel={shareUrlUnavailableLabel} />
+          <a
+            href={`/reports/${snapshot.id}/export`}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          >
+            Export CSV
+          </a>
+        </div>
+      </div>
+
+      {groupSnapshots.length > 1 && (
+        <section className="mt-8">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Snapshot History
+          </h2>
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  <th className="px-4 py-2">Published</th>
+                  <th className="px-4 py-2">Report</th>
+                  <th className="px-4 py-2 text-right">Offers</th>
+                  <th className="px-4 py-2 text-right">Sites</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                {groupSnapshots.map((s) => (
+                  <tr key={s.id} className={s.id === snapshot.id ? "bg-blue-50/50 dark:bg-blue-950/30" : ""}>
+                    <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-50">
+                      {fmtDateTime(s.approvedAt)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {s.id === snapshot.id ? (
+                        <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                          {s.label || "This report"} (current)
+                        </span>
+                      ) : (
+                        <Link href={`/reports/${s.id}`} className="text-blue-600 hover:underline dark:text-blue-400">
+                          {s.label || `Snapshot ${s.id.slice(0, 8)}`}
+                        </Link>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-zinc-900 dark:text-zinc-50">{s.offerCount}</td>
+                    <td className="px-4 py-2.5 text-right text-zinc-900 dark:text-zinc-50">{s.siteCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

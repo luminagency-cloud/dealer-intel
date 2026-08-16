@@ -45,6 +45,7 @@ export function MissionRunPanel({
   partialAnalysisKeys,
   error,
   needsChromeRecovery,
+  isPaused,
 }: {
   runId: string;
   items: PanelWorkItem[];
@@ -60,6 +61,7 @@ export function MissionRunPanel({
   partialAnalysisKeys?: Set<string>;
   error?: string;
   needsChromeRecovery: boolean;
+  isPaused: boolean;
 }) {
   // Auto-collapse when the run is done — but stay open if a partial re-analysis
   // is in flight so the operator can see the per-row "Analyzing…" indicator.
@@ -138,6 +140,7 @@ export function MissionRunPanel({
             runId={runId}
             canStart={canCollect && !executing}
             needsRecovery={needsChromeRecovery}
+            isPaused={isPaused}
           />
         )}
       </div>

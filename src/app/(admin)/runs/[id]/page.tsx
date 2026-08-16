@@ -200,6 +200,7 @@ export default async function RunDetailPage({
         createdLabel={fmtDateTime(run.createdAt)}
         error={error}
         needsChromeRecovery={needsChromeRecovery}
+        isPaused={run.status === "paused"}
       />
 
       {/* Snapshot section — static, only changes after a publish action */}

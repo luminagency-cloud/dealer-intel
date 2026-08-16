@@ -7,10 +7,10 @@ import {
   missionResults,
   offers,
   reportSnapshots,
-  runGroupMembers,
   runGroups,
   type RunStatus,
 } from "./schema";
+import { getSiteIdsForRunGroups } from "./repository";
 import { getISOWeekBounds } from "@/lib/cycle";
 
 export type RunSummary = {
@@ -116,10 +116,7 @@ export async function getCycleGroupStatus(weekLabel: string): Promise<GroupCycle
             .where(inArray(collectionRunSites.collectionRunId, adHocIds))
         : [];
     })(),
-    db
-      .select({ groupId: runGroupMembers.runGroupId, siteId: runGroupMembers.siteId })
-      .from(runGroupMembers)
-      .where(inArray(runGroupMembers.runGroupId, groupIds)),
+    getSiteIdsForRunGroups(groupIds),
   ]);
 
   // The hierarchy is runs -> groups -> sites -> pages/ads. A shared ad-hoc

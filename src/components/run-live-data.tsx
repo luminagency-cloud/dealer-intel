@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MissionResult, ReportSnapshot, Offer, ComplianceGrade, Site } from "@/lib/db";
 import { fmtDateTime } from "@/lib/fmt-date";
+import { usePolling } from "@/hooks/use-polling";
 import { MissionRunPanel, type PanelWorkItem } from "@/components/mission-run-panel";
 import { RunWorkflowStrip } from "@/components/run-workflow-strip";
 import { AnalysisSection } from "@/components/analysis-section";
@@ -26,6 +27,18 @@ interface LiveStatus {
   analysisStartedAt?: Date | null;
   analysisCompletedAt?: Date | null;
 }
+
+/** Shape of `/api/runs/[id]/status`'s JSON — dates still strings, rehydrated
+ *  in `onData` below. */
+type RunStatusPayload = Omit<
+  LiveStatus,
+  "collectionStartedAt" | "collectionCompletedAt" | "analysisStartedAt" | "analysisCompletedAt"
+> & {
+  collectionStartedAt?: string | null;
+  collectionCompletedAt?: string | null;
+  analysisStartedAt?: string | null;
+  analysisCompletedAt?: string | null;
+};
 
 export function RunLiveData({
   runId,
@@ -66,6 +79,7 @@ export function RunLiveData({
   createdLabel,
   error,
   needsChromeRecovery,
+  isPaused,
 }: {
   runId: string;
   initialExecuting: boolean;
@@ -104,6 +118,7 @@ export function RunLiveData({
   createdLabel: string;
   error?: string;
   needsChromeRecovery: boolean;
+  isPaused: boolean;
 }) {
   const [live, setLive] = useState<LiveStatus>({
     executing: initialExecuting,
@@ -134,10 +149,10 @@ export function RunLiveData({
   // a stale heartbeat mid-collection, wedged it the same way — even Run Analysis
   // couldn't wake it, since `analyzing` is only read from props at mount.
   //
-  // A hidden tab polls nothing at all — see the visibility gate below. That is
-  // safe against the latch described above precisely because `visibilitychange`
-  // is a browser event rather than polled state: it always fires on return, so
-  // nothing the poll itself reports can keep the poll switched off.
+  // A hidden tab polls nothing at all — see usePolling's visibility gate. That
+  // is safe against the latch described above precisely because
+  // `visibilitychange` is a browser event rather than polled state: it always
+  // fires on return, so nothing the poll itself reports can keep it switched off.
   //
   // ponytail: flat 15s idle poll, no backoff. Each tick is 4 Neon HTTP queries,
   // so a visible-but-idle tab keeps the endpoint awake indefinitely. Add
@@ -145,44 +160,21 @@ export function RunLiveData({
   // covers the common case (a tab left open and forgotten).
   const pollMs = active ? 3000 : 15000;
 
-  useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | undefined;
-
-    const poll = async () => {
-      try {
-        const res = await fetch(`/api/runs/${runId}/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        // JSON dates arrive as strings; rehydrate the ones rendered as dates.
-        setLive({
-          ...data,
-          collectionStartedAt: data.collectionStartedAt ? new Date(data.collectionStartedAt) : null,
-          collectionCompletedAt: data.collectionCompletedAt ? new Date(data.collectionCompletedAt) : null,
-          analysisStartedAt: data.analysisStartedAt ? new Date(data.analysisStartedAt) : null,
-          analysisCompletedAt: data.analysisCompletedAt ? new Date(data.analysisCompletedAt) : null,
-        });
-      } catch {
-        // ignore transient errors
-      }
-    };
-    // Poll once immediately, then on an interval — but only while the tab is
-    // actually visible. The immediate poll means opening a run that finished
-    // while the tab was closed (or returning to a backgrounded one) doesn't
-    // wait out a whole interval to catch up.
-    const sync = () => {
-      clearInterval(timer);
-      if (document.hidden) return;
-      void poll();
-      timer = setInterval(poll, pollMs);
-    };
-
-    sync();
-    document.addEventListener("visibilitychange", sync);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", sync);
-    };
-  }, [pollMs, runId]);
+  usePolling<RunStatusPayload>(`/api/runs/${runId}/status`, {
+    enabled: true,
+    intervalMs: pollMs,
+    visibilityGated: true,
+    onData: (data) => {
+      // JSON dates arrive as strings; rehydrate the ones rendered as dates.
+      setLive({
+        ...data,
+        collectionStartedAt: data.collectionStartedAt ? new Date(data.collectionStartedAt) : null,
+        collectionCompletedAt: data.collectionCompletedAt ? new Date(data.collectionCompletedAt) : null,
+        analysisStartedAt: data.analysisStartedAt ? new Date(data.analysisStartedAt) : null,
+        analysisCompletedAt: data.analysisCompletedAt ? new Date(data.analysisCompletedAt) : null,
+      });
+    },
+  });
 
   // Sync freshly server-rendered data (offers/grades/analysis timestamps) into
   // live state when the props actually change post-mount — i.e. a server-action
@@ -287,6 +279,7 @@ export function RunLiveData({
           partialAnalysisKeys={new Set(live.partialAnalysisKeys)}
           error={error}
           needsChromeRecovery={needsChromeRecovery}
+          isPaused={isPaused}
         />
       </div>
 

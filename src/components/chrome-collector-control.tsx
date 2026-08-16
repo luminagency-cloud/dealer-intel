@@ -192,12 +192,16 @@ export function ChromeCollectorControl({
   runId,
   canStart,
   needsRecovery,
+  isPaused,
   only,
   compact,
 }: {
   runId: string;
   canStart: boolean;
   needsRecovery: boolean;
+  /** Run is sitting paused (deliberate, not an interrupted tab) — same
+   *  "Resume in Chrome" button as recovery, different notice copy. */
+  isPaused?: boolean;
   /** Scope the job to one dealer+mission instead of the whole run — the
    *  row-level "Re-collect" after the operator fixed a saved URL. */
   only?: { siteId: string; missionId: string };
@@ -210,11 +214,15 @@ export function ChromeCollectorControl({
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const autoStarted = useRef(false);
+  const pauseRequestedRef = useRef(false);
+  const [pauseRequested, setPauseRequested] = useState(false);
 
   async function startChromeCollection() {
     if (busy) return;
     setBusy(true);
     setFailed(false);
+    pauseRequestedRef.current = false;
+    setPauseRequested(false);
     setMessage("Checking Chrome Collector…");
 
     let job:
@@ -278,6 +286,16 @@ export function ChromeCollectorControl({
       }
 
       for (const [index, item] of preparedJob.items.entries()) {
+        if (pauseRequestedRef.current) {
+          setMessage(
+            `Paused after ${index}/${preparedJob.items.length} items. Resume anytime — nothing else was touched.`
+          );
+          await fetch(`/api/collector/runs/${runId}/pause`, {
+            method: "POST",
+          }).catch(() => undefined);
+          router.refresh();
+          return;
+        }
         setMessage(
           `${index + 1}/${preparedJob.items.length}: Opening ${item.siteName} for ${item.missionName} in Chrome…`
         );
@@ -423,23 +441,46 @@ export function ChromeCollectorControl({
           Resume to finish the dealers it never got to.
         </p>
       )}
-      {/* `busy` keeps the button mounted on the driving tab: once its own
-          heartbeat lands, the run reads as executing and `canStart` goes
-          false, which would otherwise yank the progress affordance mid-run. */}
-      {(canStart || busy) && (
-        <button
-          type="button"
-          onClick={claimChromeRun}
-          disabled={busy}
-          className="rounded-md bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy
-            ? "Chrome collecting…"
-            : needsRecovery
-              ? "Resume in Chrome"
-              : "Start in Chrome"}
-        </button>
+      {isPaused && !busy && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-left text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          Collection is paused. Resume to finish the dealers it never got to.
+        </p>
       )}
+      <div className="flex items-center gap-2">
+        {busy && (
+          <button
+            type="button"
+            onClick={() => {
+              pauseRequestedRef.current = true;
+              setPauseRequested(true);
+              setMessage(
+                "Pausing — waiting for the current mission to finish…"
+              );
+            }}
+            disabled={pauseRequested}
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            Pause
+          </button>
+        )}
+        {/* `busy` keeps the button mounted on the driving tab: once its own
+            heartbeat lands, the run reads as executing and `canStart` goes
+            false, which would otherwise yank the progress affordance mid-run. */}
+        {(canStart || busy) && (
+          <button
+            type="button"
+            onClick={claimChromeRun}
+            disabled={busy}
+            className="rounded-md bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy
+              ? "Chrome collecting…"
+              : needsRecovery || isPaused
+                ? "Resume in Chrome"
+                : "Start in Chrome"}
+          </button>
+        )}
+      </div>
       {message && (
         <p
           className={`rounded-md px-3 py-2 text-left text-xs ${

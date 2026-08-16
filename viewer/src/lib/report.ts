@@ -338,10 +338,10 @@ export function cashNarrative(dealers: DealerCol[], rows: GridRow[]): string {
       .filter((_, i) => i !== anchorIdx && rows.some((r) => r.cells[i].offer))
       .map((d) => d.siteName);
     if (advertisers.length > 0)
-      return `${anchor.siteName} does not currently advertise cash discounts; ${advertisers.join(", ")} ${advertisers.length === 1 ? "does" : "do"}.`;
-    return "No cash discounts advertised in this set.";
+      return `${anchor.siteName} does not currently advertise a purchase price; ${advertisers.join(", ")} ${advertisers.length === 1 ? "does" : "do"}.`;
+    return "No advertised purchase prices in this set.";
   }
-  return "Compare advertised cash discounts and rebates below.";
+  return "Compare advertised purchase prices below.";
 }
 
 /** One-sentence insight for the service grid. */

@@ -1,6 +1,6 @@
 {
   "name": "dealer-intel-viewer",
-  "version": "1.1.4",
+  "version": "1.1.6",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
@@ -8,6 +8,8 @@
     "start": "next start -p 3001"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1111.0",
+    "@aws-sdk/s3-request-presigner": "^3.1111.0",
     "@neondatabase/serverless": "^1.1.0",
     "bcryptjs": "^3.0.2",
     "drizzle-orm": "^0.45.2",

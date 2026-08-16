@@ -141,9 +141,11 @@ Status: **implemented and verified against a live run (August 14, 2026)**. See
   logic exists yet), it's the seam for the first one that needs it.
 - "Stop Analysis" relabeled "Pause Analysis".
 
-Remaining: **collection still has no Pause/Resume control** (a runaway
-collection can't be interrupted short of killing the process) — separate
-follow-up, not started, not blocking.
+Collection Pause/Resume: **done (3.15.3)**. Pause button on the run page
+stops the driving tab between work items (never mid-item), flips the run to
+`paused` immediately via `POST /api/collector/runs/[id]/pause`. Resume in
+Chrome re-queues only the unfinished items, same code path `startChromeRun`
+already used for interrupted-tab recovery.
 
 ### Service Coupon Adjudication
 

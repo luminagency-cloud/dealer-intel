@@ -467,6 +467,20 @@ export async function getRunGroupSiteIds(
   return rows.map((r) => r.siteId);
 }
 
+/** Site ids for a SET of run groups, each paired with which group it came
+ *  from — the multi-group version of `getRunGroupSiteIds`. Returns the raw
+ *  (groupId, siteId) pairs rather than a flat list: callers need different
+ *  shapes (a deduped flat site-id list vs. a per-group rollup), and the pairs
+ *  serve both without querying twice. */
+export async function getSiteIdsForRunGroups(
+  runGroupIds: string[]
+): Promise<{ groupId: string; siteId: string }[]> {
+  return getDb()
+    .select({ groupId: runGroupMembers.runGroupId, siteId: runGroupMembers.siteId })
+    .from(runGroupMembers)
+    .where(inArray(runGroupMembers.runGroupId, runGroupIds));
+}
+
 // --- Inventory --------------------------------------------------------------
 
 /** Latest successful inventory result per site, for the given site ids.

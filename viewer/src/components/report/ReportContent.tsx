@@ -3,11 +3,10 @@
 import React from "react";
 
 /**
- * Competitive Market Analysis — full report UI (Phase 11 v2).
- *
- * Rendered server-side by both the standalone /r/[id] route (shareable, no
- * auth) and the admin /reports/[id] view. The component is "use client" only
- * for the copy-link button; everything else is static markup.
+ * Competitive Market Analysis — full report UI. The single rendering surface
+ * for a report: the standalone /r/[id] route (shareable, no auth) and the
+ * authenticated dealer /reports/[id] route both render this — the admin app
+ * no longer keeps its own copy, it links here instead.
  */
 
 import {
@@ -36,19 +35,11 @@ export interface ReportContentProps {
   snapshot: ReportSnapshot;
   offers: SnapshotOffer[];
   primarySiteIds: Set<string>;
-  groupSnapshots?: ReportSnapshot[];
   /** News data from the autos.media news service. Null = service not yet
    *  connected; shows a placeholder. */
   news?: NewsData | null;
   /** Latest inventory result per site, used for the Inventory Snapshot section. */
   inventoryData?: InventoryResult[];
-  /** When true, show admin-only controls (Copy Link, Export CSV). */
-  adminControls?: boolean;
-  /** Absolute public shareable link for the "Copy shareable link" control.
-   *  Omitted when a public viewer origin or share token is not available. */
-  shareUrl?: string;
-  /** Short disabled-state label explaining why no public link can be copied. */
-  shareUrlUnavailableLabel?: string;
   /** Tailwind classes for the outermost wrapper div. Defaults to
    *  "mx-auto max-w-6xl px-4 py-8" (suitable for the standalone public route).
    *  Override in admin context where the layout already provides padding. */
@@ -74,6 +65,21 @@ const REPORT_LABEL_CLASS =
 const REPORT_LINK_CLASS =
   "text-sm font-semibold text-blue-700 hover:underline dark:text-blue-300";
 const REPORT_BORDER_CLASS = "border-zinc-200 dark:border-zinc-800";
+
+/** "View ad" link target for one offer, scoped by the snapshot's own share
+ *  token — this is the one access mode viewer needs (it never renders with
+ *  admin controls, so there's no separate "admin" route to branch to). Ported
+ *  from the main app's `evidenceHref`, which this drifted from: viewer used to
+ *  hardcode `/api/evidence/{id}/file`, a route that only exists in the admin
+ *  app — every "View ad" link here was dead. */
+function evidenceHref(
+  offer: SnapshotOffer,
+  snapshot: ReportSnapshot
+): string | null {
+  if (offer.evidenceUrl) return offer.evidenceUrl;
+  if (!offer.sourceEvidenceId || !snapshot.shareToken) return null;
+  return `/api/report-evidence/${encodeURIComponent(snapshot.shareToken)}/${offer.id}/file`;
+}
 
 // ---------------------------------------------------------------------------
 // Compliance reason cell — clickable failure reasons
@@ -241,7 +247,7 @@ function Narrative({ text }: { text: string }) {
   );
 }
 
-// "Not Advertised" cell style
+// "--" empty-cell style
 const NA_CLASS =
   "text-sm font-semibold italic text-zinc-900 text-center dark:text-zinc-100";
 
@@ -268,7 +274,7 @@ function GridTable({
   dealers,
   rows,
   renderCell,
-  emptyLabel = "Not Advertised",
+  emptyLabel = "--",
   disableRanking = false,
 }: GridTableProps) {
   if (rows.length === 0) {
@@ -370,7 +376,7 @@ function GridLegend({ hasRanking }: { hasRanking: boolean }) {
       <span className="flex items-center gap-1">
         <span className="inline-block h-3 w-3 rounded bg-red-600" /> Last
       </span>
-      <span className="italic">Not Advertised</span>
+      <span className="italic">--</span>
     </div>
   );
 }
@@ -535,10 +541,12 @@ function ServiceDealerCard({
   dealer,
   offers,
   emptyLabel,
+  snapshot,
 }: {
   dealer: DealerCol;
   offers: SnapshotOffer[];
   emptyLabel: string;
+  snapshot: ReportSnapshot;
 }) {
   const usesOfferGrid = offers.length > 1;
   const finalGridRowStart = offers.length % 2 === 0
@@ -569,6 +577,7 @@ function ServiceDealerCard({
             )?.matches ?? {};
             const isLast = index === offers.length - 1;
             const isInFinalGridRow = usesOfferGrid && index >= finalGridRowStart;
+            const adHref = evidenceHref(o, snapshot);
             return (
               <li
                 key={o.id}
@@ -588,9 +597,9 @@ function ServiceDealerCard({
                     {matchMap.serviceOffer}
                   </div>
                 ) : null}
-                {(o.evidenceUrl ?? o.sourceEvidenceId) && (
+                {adHref && (
                   <a
-                    href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
+                    href={adHref}
                     target="_blank"
                     rel="noreferrer"
                     className="mt-1 block text-sm font-semibold text-blue-700 hover:underline dark:text-blue-300"
@@ -608,45 +617,6 @@ function ServiceDealerCard({
 }
 
 // ---------------------------------------------------------------------------
-// Copy-link button (client interaction)
-// ---------------------------------------------------------------------------
-
-function CopyLinkButton({
-  shareUrl,
-  unavailableLabel = "Public link unavailable",
-}: {
-  shareUrl?: string;
-  unavailableLabel?: string;
-}) {
-  const canCopy = Boolean(shareUrl);
-  return (
-    <button
-      disabled={!canCopy}
-      title={
-        canCopy
-          ? "Copy public report link"
-          : unavailableLabel
-      }
-      onClick={() => {
-        if (!shareUrl) return;
-        void navigator.clipboard.writeText(shareUrl);
-        const btn = document.getElementById("copy-link-btn");
-        if (btn) {
-          btn.textContent = "Copied!";
-          setTimeout(() => {
-            btn.textContent = "Copy shareable link";
-          }, 2000);
-        }
-      }}
-      id="copy-link-btn"
-      className="rounded-md border border-white bg-white px-3 py-1.5 text-sm font-semibold text-[#12315c] shadow-sm hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-blue-200 disabled:bg-blue-100 disabled:text-blue-500 disabled:shadow-none"
-    >
-      {canCopy ? "Copy shareable link" : unavailableLabel}
-    </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
@@ -654,12 +624,8 @@ export function ReportContent({
   snapshot,
   offers,
   primarySiteIds,
-  groupSnapshots = [],
   news,
   inventoryData = [],
-  adminControls = false,
-  shareUrl,
-  shareUrlUnavailableLabel,
   containerClassName = "mx-auto max-w-6xl px-4 py-8",
 }: ReportContentProps) {
   // ---------------------------------------------------------------------------
@@ -723,8 +689,8 @@ export function ReportContent({
   const cashGrid = buildGrid(
     dealers,
     cashOffers,
-    (o) => o.cashIncentive,
-    "higher"
+    (o) => o.salePrice,
+    "lower"
   );
 
   // ---------------------------------------------------------------------------
@@ -953,42 +919,26 @@ export function ReportContent({
             <span className="text-white">Service: {kpis.serviceOfferCount}</span>
           </p>
         </div>
-        {(adminControls || summaryItems.length > 0) && (
+        {summaryItems.length > 0 && (
           <div className="border-t border-blue-800/60 px-4 py-5 sm:px-8">
-            {adminControls && (
-              <div className="mb-3 flex items-center justify-end gap-3">
-                <CopyLinkButton
-                  shareUrl={shareUrl}
-                  unavailableLabel={shareUrlUnavailableLabel}
-                />
-                <a
-                  href={`/reports/${snapshot.id}/export`}
-                  className="rounded-md border border-blue-200 bg-[#12315c] px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-[#0f294e]"
-                >
-                  Export CSV
-                </a>
-              </div>
-            )}
-            {summaryItems.length > 0 && (
-              <div id="summary" className="rounded-lg border border-blue-100 bg-white p-5 text-black shadow-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50">
-                <h2 className={`mb-3 ${REPORT_LABEL_CLASS}`}>
-                  Key Takeaways
-                </h2>
-                <ul className="list-disc space-y-2 pl-5 text-base">
-                  {summaryItems.map((item) => (
-                    <li key={item.href}>
-                      <a
-                        href={item.href}
-                        className="font-semibold text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-200"
-                      >
-                        {item.label}
-                      </a>
-                      <span className="text-black dark:text-zinc-50">: {item.text}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <div id="summary" className="rounded-lg border border-blue-100 bg-white p-5 text-black shadow-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50">
+              <h2 className={`mb-3 ${REPORT_LABEL_CLASS}`}>
+                Key Takeaways
+              </h2>
+              <ul className="list-disc space-y-2 pl-5 text-base">
+                {summaryItems.map((item) => (
+                  <li key={item.href}>
+                    <a
+                      href={item.href}
+                      className="font-semibold text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-200"
+                    >
+                      {item.label}
+                    </a>
+                    <span className="text-black dark:text-zinc-50">: {item.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         )}
       </div>
@@ -1044,9 +994,9 @@ export function ReportContent({
                         missing: {missingFields.join(", ")}
                       </div>
                     )}
-                    {(offer.evidenceUrl ?? offer.sourceEvidenceId) && (
+                    {evidenceHref(offer, snapshot) && (
                       <a
-                        href={offer.evidenceUrl ?? `/api/evidence/${offer.sourceEvidenceId}/file`}
+                        href={evidenceHref(offer, snapshot)!}
                         target="_blank"
                         rel="noreferrer"
                         className={REPORT_LINK_CLASS}
@@ -1101,11 +1051,11 @@ export function ReportContent({
         <SectionHeading
           num="4"
           title="Cash &amp; Discount Specials"
-          sub="Ranked by advertised discount amount (larger = better)."
+          sub="Ranked by advertised purchase price (lower = better)."
         />
         {cashOffers.length === 0 ? (
           <div className={REPORT_EMPTY_CLASS}>
-            No cash or discount offers captured this period.
+            No advertised purchase prices captured this period.
           </div>
         ) : (
           <div className={REPORT_PANEL_CLASS}>
@@ -1115,10 +1065,8 @@ export function ReportContent({
                 rows={cashGrid}
                 renderCell={(_cell, offer) => (
                   <div className={REPORT_HEADLINE_CLASS}>
-                    {offer.cashIncentive != null
-                      ? `Up to ${fmtMoney(offer.cashIncentive)} off`
-                      : offer.salePrice != null
-                        ? `Sale price ${fmtMoney(offer.salePrice)}`
+                    {offer.salePrice != null
+                      ? `Purchase price ${fmtMoney(offer.salePrice)}`
                       : offer.rawText?.slice(0, 40) ?? "—"}
                   </div>
                 )}
@@ -1154,7 +1102,8 @@ export function ReportContent({
                   key={dKey}
                   dealer={d}
                   offers={dOffers}
-                  emptyLabel="Not Advertised"
+                  emptyLabel="--"
+                  snapshot={snapshot}
                 />
               );
             })}
@@ -1474,9 +1423,9 @@ export function ReportContent({
                           <ComplianceReasonCell details={details} />
                         </td>
                         <td className="px-4 py-3 align-top">
-                          {(o.evidenceUrl ?? o.sourceEvidenceId) ? (
+                          {evidenceHref(o, snapshot) ? (
                             <a
-                              href={o.evidenceUrl ?? `/api/evidence/${o.sourceEvidenceId}/file`}
+                              href={evidenceHref(o, snapshot)!}
                               target="_blank"
                               rel="noreferrer"
                               className={REPORT_LINK_CLASS}
@@ -1496,52 +1445,6 @@ export function ReportContent({
             })()}
           </div>
           <ReturnToSummary />
-        </section>
-      )}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Snapshot history (admin only)                                       */}
-      {/* ------------------------------------------------------------------ */}
-      {adminControls && groupSnapshots.length > 1 && (
-        <section className="mb-10">
-          <SectionHeading title="Snapshot History" />
-          <div className={REPORT_PANEL_CLASS}>
-            <table className="w-full text-base">
-              <thead>
-                <tr className={`border-b ${REPORT_BORDER_CLASS} ${REPORT_LABEL_CLASS}`}>
-                  <th className="px-4 py-2 text-left font-medium">Published</th>
-                  <th className="px-4 py-2 text-left font-medium">Report</th>
-                  <th className="px-4 py-2 text-right font-medium">Offers</th>
-                  <th className="px-4 py-2 text-right font-medium">Sites</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                {groupSnapshots.map((s) => (
-                  <tr key={s.id} className={s.id === snapshot.id ? "bg-blue-50/50 dark:bg-blue-950/30" : ""}>
-                    <td className="px-4 py-2.5 font-semibold text-black dark:text-zinc-50">
-                      {new Date(s.approvedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {s.id === snapshot.id ? (
-                        <span className="font-semibold text-black dark:text-zinc-50">
-                          {s.label || "This report"} (current)
-                        </span>
-                      ) : (
-                        <a
-                          href={`/reports/${s.id}`}
-                          className={REPORT_LINK_CLASS}
-                        >
-                          {s.label || `Snapshot ${s.id.slice(0, 8)}`}
-                        </a>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-black dark:text-zinc-50">{s.offerCount}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-black dark:text-zinc-50">{s.siteCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </section>
       )}
 

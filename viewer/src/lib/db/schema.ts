@@ -168,6 +168,18 @@ export const newsItems = pgTable(
   }
 );
 
+// Evidence object-storage rows. Viewer only ever reads the stored-object key
+// off an evidence row (to build a presigned R2 URL for a snapshot offer's
+// "View ad" link) — never writes, never lists — so only those columns are
+// declared here, a narrower read-model over the same physical table admin's
+// fuller `evidence` schema owns.
+export const evidence = pgTable("evidence", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  screenshotUrl: text("screenshot_url"),
+  htmlUrl: text("html_url"),
+});
+
+export type Evidence = typeof evidence.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type RunGroup = typeof runGroups.$inferSelect;
 export type ReportSnapshot = typeof reportSnapshots.$inferSelect;

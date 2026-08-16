@@ -6,7 +6,6 @@ import {
   getPrimarySiteIds,
   getUserRunGroups,
   listSnapshotOffers,
-  listSnapshotsForGroup,
   listLatestInventoryForSites,
   getStoredNewsForReport,
 } from "@/lib/db/repository";
@@ -33,14 +32,11 @@ export default async function ReportPage({
     if (!allowed) notFound();
   }
 
-  const [offers, primarySiteIds, groupSnapshots] = await Promise.all([
+  const [offers, primarySiteIds] = await Promise.all([
     listSnapshotOffers(snapshot.id),
     snapshot.runGroupId
       ? getPrimarySiteIds(snapshot.runGroupId)
       : Promise.resolve(new Set<string>()),
-    snapshot.runGroupId
-      ? listSnapshotsForGroup(snapshot.runGroupId)
-      : Promise.resolve([snapshot]),
   ]);
 
   const snapshotSiteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
@@ -69,10 +65,8 @@ export default async function ReportPage({
         snapshot={snapshot}
         offers={offers}
         primarySiteIds={primarySiteIds}
-        groupSnapshots={groupSnapshots}
         news={news}
         inventoryData={inventoryData}
-        adminControls={false}
       />
     </div>
   );

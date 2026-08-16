@@ -188,8 +188,8 @@ path; this just needs to stay true under the new shape.
       all call the same atomic function with different scope lists.
 - [x] "Stop Analysis" relabeled "Pause Analysis"; status string during the
       wait reads "Pausing — waiting for mission to finish" or similar.
-- [ ] Collection gets an equivalent Pause/Resume control (separate follow-up
-      item, not blocking this refactor).
+- [x] Collection gets an equivalent Pause/Resume control (done 3.15.3, see
+      Implementation Roadmap → Collection).
 - [x] `npx tsc --noEmit`, `npm run lint`, `npm run build` pass.
 - [x] Verified against a real run in the running app: full analysis, one
       manual per-row re-analyze, and a pause/resume cycle all produce correct,
@@ -210,24 +210,29 @@ for analysis — `{ id, platforms: string[], extractOffers }`, dispatched via
 yet, so no behavior change today) as the seam for the first platform that
 needs its own DOM handling.
 
-## Other architecture-review candidates (not started)
+## Other architecture-review candidates (done August 15, 2026)
 
-From the same review, ranked but not yet designed in detail:
-
-- **B — shared report module.** `src/components/report/ReportContent.tsx`
-  is copy-pasted into `viewer/`, already behaviorally drifted (different Cash
-  ranking, evidence-access scoping, missing-field handling). Per this session:
-  viewer is the intended source of truth for presentation (it's what
-  customers actually read); the admin app's local view should consume the
-  same shared module as a convenience render, not fork it. Two sets of
-  presentation code is a named violation of the collect / analyze / present
-  three-program shape (see below).
-- **C — shared async job-polling module.** `run-live-data.tsx` and
-  `inventory-table.tsx` each reinvent the same "seed snapshot, poll, merge by
-  key" state machine inline, untestable without mounting the component.
-- **D — make `repository.ts` the actual data-access seam.** Mixes real
-  pass-through wrappers with genuinely deep functions, and `runner.ts` /
-  `actions.ts` bypass it and call `getDb()` directly anyway.
+- **B — report rendering.** Resolved differently than first scoped: instead
+  of a shared package, admin deleted its own copy
+  (`src/components/report/ReportContent.tsx`, and the dead `src/app/r/[id]/`
+  route) and now links out to the real viewer URL. Viewer is the sole
+  renderer. Drift resolved: cash ranking now `salePrice`/lower-is-better
+  everywhere (admin's later change), empty grid cells read "--", a lease
+  missing mileage still flags, and viewer's evidence links (previously dead —
+  pointed at an admin-only route) now work through a ported
+  `viewer/src/app/api/report-evidence/[token]/[offerId]/file` route. Needs
+  `R2_*` credentials added to viewer's environment before evidence links
+  resolve end-to-end.
+- **C — shared async job-polling module.** Done: `src/hooks/use-polling.ts`
+  owns the fetch/interval/visibility/cleanup skeleton; `run-live-data.tsx` and
+  `inventory-table.tsx` keep their own merge logic via an `onData` callback.
+  No behavior change.
+- **D — `repository.ts` seam.** Done for the two genuine duplicates found:
+  `runs/actions.ts`'s `deleteOffer` now calls the existing repository
+  function instead of re-writing it inline; a new `getSiteIdsForRunGroups`
+  replaces the hand-written version in both `runs/actions.ts` and
+  `ops-board.ts`. The other ~90 direct `getDb()` call sites are one-off
+  query shapes, not duplication — left alone, not a full sweep.
 
 ## The three-program shape (confirmed this session)
 

@@ -10,6 +10,7 @@ import {
   runChromeInventoryJob,
 } from "./inventory-chrome";
 import { supportsChromeInventory } from "@/lib/inventory-platforms";
+import { usePolling } from "@/hooks/use-polling";
 
 export type MakeSubtotal = { make: string; inStock: number; inTransit: number | null };
 export type ModelRow = { make: string; model: string; inStock: number | null; inTransit: number | null; status: string };
@@ -95,76 +96,58 @@ export function InventoryTable({
 
   // Progress lives server-side (see inventory-batch.ts) so a started batch
   // keeps running — and this table keeps reflecting it — no matter what the
-  // operator navigates to in the meantime. This effect just polls for
-  // display; it never drives the batch itself.
-  useEffect(() => {
-    if (!activeBatchId) return;
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await fetch(`/api/inventory/batch/${activeBatchId}/status`, {
-          cache: "no-store",
-        });
-        if (!res.ok || cancelled) return;
-        const data: BatchStatusPayload = await res.json();
-        if (cancelled) return;
-
-        setPhases((prev) => {
-          const next = { ...prev };
-          for (const id of data.siteIds) {
-            const result = data.results[id];
-            if (!result) {
-              if (id === data.current) next[id] = { kind: "running" };
-              else if (data.active) next[id] = { kind: "queued" };
-              continue;
-            }
-
-            if (result.status === "queued") {
-              next[id] = { kind: "queued" };
-            } else if (result.status === "running") {
-              next[id] = { kind: "running" };
-            } else if (result.status === "cancelled") {
-              next[id] = { kind: "cancelled" };
-            } else if (result.status === "ok") {
-              next[id] = {
-                kind: "ok",
-                totals: result.totals,
-                makeSubtotals: result.makeSubtotals,
-                models: result.models,
-              };
-            } else {
-              next[id] = {
-                kind: "failed",
-                error:
-                  ("error" in result ? result.error : undefined) ??
-                  { message: "Unknown error", code: "unknown" },
-              };
-            }
+  // operator navigates to in the meantime. This just polls for display; it
+  // never drives the batch itself.
+  usePolling<BatchStatusPayload>(`/api/inventory/batch/${activeBatchId}/status`, {
+    enabled: activeBatchId !== null,
+    intervalMs: 1500,
+    fetchInit: { cache: "no-store" },
+    onData: (data) => {
+      setPhases((prev) => {
+        const next = { ...prev };
+        for (const id of data.siteIds) {
+          const result = data.results[id];
+          if (!result) {
+            if (id === data.current) next[id] = { kind: "running" };
+            else if (data.active) next[id] = { kind: "queued" };
+            continue;
           }
-          return next;
-        });
-        setBatchSiteIds(data.siteIds);
-        setBatchTotal(data.siteIds.length);
-        if (data.startedAt) setBatchStartedAt((prev) => prev ?? new Date(data.startedAt!));
 
-        if (!data.active) {
-          setBatchEndedAt(new Date());
-          setActiveBatchId(null);
-          router.refresh();
+          if (result.status === "queued") {
+            next[id] = { kind: "queued" };
+          } else if (result.status === "running") {
+            next[id] = { kind: "running" };
+          } else if (result.status === "cancelled") {
+            next[id] = { kind: "cancelled" };
+          } else if (result.status === "ok") {
+            next[id] = {
+              kind: "ok",
+              totals: result.totals,
+              makeSubtotals: result.makeSubtotals,
+              models: result.models,
+            };
+          } else {
+            next[id] = {
+              kind: "failed",
+              error:
+                ("error" in result ? result.error : undefined) ??
+                { message: "Unknown error", code: "unknown" },
+            };
+          }
         }
-      } catch {
-        // transient network error — next tick retries
-      }
-    }
+        return next;
+      });
+      setBatchSiteIds(data.siteIds);
+      setBatchTotal(data.siteIds.length);
+      if (data.startedAt) setBatchStartedAt((prev) => prev ?? new Date(data.startedAt!));
 
-    poll();
-    const timer = setInterval(poll, 1500);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [activeBatchId, router]);
+      if (!data.active) {
+        setBatchEndedAt(new Date());
+        setActiveBatchId(null);
+        router.refresh();
+      }
+    },
+  });
 
   async function driveChromeBatch(batchId: string) {
     const controller = new AbortController();

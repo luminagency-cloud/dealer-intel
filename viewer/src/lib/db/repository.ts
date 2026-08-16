@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { getDb } from "./index";
 import {
+  evidence,
   inventoryResults,
   newsItems,
   reportSnapshots,
@@ -8,6 +9,7 @@ import {
   runGroups,
   snapshotOffers,
   userRunGroups,
+  type Evidence,
   type InventoryResult,
   type ReportSnapshot,
   type SnapshotOffer,
@@ -175,6 +177,33 @@ export async function getStoredNewsForReport(
     industry_items: rows.filter((r) => r.brand === null).slice(0, 4).map(toItem),
     brand_groups: [],
   };
+}
+
+/** Evidence for one offer on a PUBLISHED, share-token-scoped snapshot — the
+ *  access-control boundary for viewer's evidence links. Mirrors the main
+ *  app's `getEvidenceForPublicSnapshotOffer`. Used by both viewer report
+ *  routes (the public /r/ route and the authenticated /reports/ route),
+ *  since both already have the snapshot's shareToken in hand — no separate
+ *  admin-vs-public access mode needed here (viewer never renders with admin
+ *  controls). */
+export async function getEvidenceForPublicSnapshotOffer(
+  shareToken: string,
+  snapshotOfferId: string
+): Promise<Evidence | undefined> {
+  const [row] = await getDb()
+    .select({ evidence })
+    .from(snapshotOffers)
+    .innerJoin(
+      reportSnapshots,
+      and(
+        eq(snapshotOffers.snapshotId, reportSnapshots.id),
+        eq(reportSnapshots.shareToken, shareToken),
+        eq(reportSnapshots.clientVisible, true)
+      )
+    )
+    .innerJoin(evidence, eq(evidence.id, snapshotOffers.sourceEvidenceId))
+    .where(eq(snapshotOffers.id, snapshotOfferId));
+  return row?.evidence;
 }
 
 export async function listSnapshotsForGroup(

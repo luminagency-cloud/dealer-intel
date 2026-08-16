@@ -123,6 +123,17 @@ export async function touchChromeHeartbeat(runId: string): Promise<void> {
     .where(eq(collectionRuns.id, runId));
 }
 
+/** Deliberate pause, requested from the driving tab between two work items
+ *  (never mid-item — see `ChromeCollectorControl`'s loop). Only takes effect
+ *  from "running": a race where the run already settled naturally (last item
+ *  just completed) leaves it alone rather than pausing a finished run. */
+export async function pauseChromeRun(runId: string): Promise<void> {
+  await getDb()
+    .update(collectionRuns)
+    .set({ status: "paused" })
+    .where(and(eq(collectionRuns.id, runId), eq(collectionRuns.status, "running")));
+}
+
 export const LANDED_ON_HOMEPAGE_ERROR =
   "Page redirected to the dealer homepage, so this mission captured the wrong " +
   "page. Set a URL on the site's mission config.";
@@ -220,9 +231,13 @@ export async function startChromeRun(
 ): Promise<ChromeCollectionJob> {
   const run = await getCollectionRun(runId);
   if (!run) throw new ChromeCollectorError("Run not found", 404);
-  if (run.status !== "pending" && run.status !== "running") {
+  if (
+    run.status !== "pending" &&
+    run.status !== "running" &&
+    run.status !== "paused"
+  ) {
     throw new ChromeCollectorError(
-      `Chrome runs must be pending or running; this run is ${run.status}`,
+      `Chrome runs must be pending, running, or paused; this run is ${run.status}`,
       409
     );
   }
@@ -284,9 +299,13 @@ export async function startChromeRun(
     };
   }
 
-  // Resuming an already-running run: claim it now so the page reads as live
-  // before the first capture lands.
-  await touchChromeHeartbeat(runId);
+  // Resuming an interrupted or deliberately paused run: claim it now so the
+  // page reads as live before the first capture lands. Explicit status flip
+  // (not just the heartbeat touch) is what un-pauses a paused run.
+  await db
+    .update(collectionRuns)
+    .set({ status: "running", chromeHeartbeatAt: new Date() })
+    .where(eq(collectionRuns.id, runId));
   await finalizeRunIfDone(runId);
 
   const unfinished = await db
