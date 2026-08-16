@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { getDb } from "./index";
+import { isoWeekLabel } from "../iso-week";
 import {
   evidence,
   inventoryResults,
@@ -131,13 +132,45 @@ export async function listLatestInventoryForSites(
   return latest;
 }
 
+/** Everything ReportContent needs for one snapshot. Both report routes (the
+ *  authenticated /reports/ one and the public /r/ share-token one) go through
+ *  here so neither can drift into rendering a partial report — the public
+ *  route previously assembled its own props and silently omitted news and
+ *  inventory. */
+export async function getReportData(snapshot: ReportSnapshot): Promise<{
+  offers: SnapshotOffer[];
+  primarySiteIds: Set<string>;
+  news: import("../news").NewsData | null;
+  inventoryData: InventoryResult[];
+}> {
+  const [offers, primarySiteIds] = await Promise.all([
+    listSnapshotOffers(snapshot.id),
+    snapshot.runGroupId
+      ? getPrimarySiteIds(snapshot.runGroupId)
+      : Promise.resolve(new Set<string>()),
+  ]);
+
+  const siteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
+
+  const makeCounts = new Map<string, number>();
+  for (const o of offers) {
+    if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
+  }
+  const primaryBrand =
+    makeCounts.size > 0 ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
+
+  const [inventoryData, news] = await Promise.all([
+    listLatestInventoryForSites(siteIds),
+    getStoredNewsForReport(primaryBrand),
+  ]);
+
+  return { offers, primarySiteIds, news, inventoryData };
+}
+
 export async function getStoredNewsForReport(
   brand: string | null
 ): Promise<import("../news").NewsData | null> {
-  const now = new Date();
-  const jan4 = new Date(now.getFullYear(), 0, 4);
-  const weekNum = Math.ceil(((now.getTime() - jan4.getTime()) / 86400000 + jan4.getDay() + 1) / 7);
-  const weekKey = `${now.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+  const weekKey = isoWeekLabel(new Date());
   const db = getDb();
   const brandSlug = brand?.toLowerCase() ?? null;
 

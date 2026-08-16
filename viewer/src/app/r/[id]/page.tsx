@@ -1,9 +1,5 @@
 import { notFound } from "next/navigation";
-import {
-  getSnapshotByShareToken,
-  getPrimarySiteIds,
-  listSnapshotOffers,
-} from "@/lib/db/repository";
+import { getSnapshotByShareToken, getReportData } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 
 export const dynamic = "force-dynamic";
@@ -19,18 +15,15 @@ export default async function PublicReportPage({
   const snapshot = await getSnapshotByShareToken(id);
   if (!snapshot) notFound();
 
-  const [offers, primarySiteIds] = await Promise.all([
-    listSnapshotOffers(snapshot.id),
-    snapshot.runGroupId
-      ? getPrimarySiteIds(snapshot.runGroupId)
-      : Promise.resolve(new Set<string>()),
-  ]);
+  const { offers, primarySiteIds, news, inventoryData } = await getReportData(snapshot);
 
   return (
     <ReportContent
       snapshot={snapshot}
       offers={offers}
       primarySiteIds={primarySiteIds}
+      news={news}
+      inventoryData={inventoryData}
     />
   );
 }

@@ -3,11 +3,8 @@ import Link from "next/link";
 import { auth } from "@/auth";
 import {
   getSnapshot,
-  getPrimarySiteIds,
   getUserRunGroups,
-  listSnapshotOffers,
-  listLatestInventoryForSites,
-  getStoredNewsForReport,
+  getReportData,
 } from "@/lib/db/repository";
 import { ReportContent } from "@/components/report/ReportContent";
 
@@ -32,25 +29,7 @@ export default async function ReportPage({
     if (!allowed) notFound();
   }
 
-  const [offers, primarySiteIds] = await Promise.all([
-    listSnapshotOffers(snapshot.id),
-    snapshot.runGroupId
-      ? getPrimarySiteIds(snapshot.runGroupId)
-      : Promise.resolve(new Set<string>()),
-  ]);
-
-  const snapshotSiteIds = [...new Set(offers.map((o) => o.siteId).filter(Boolean) as string[])];
-  const inventoryData = await listLatestInventoryForSites(snapshotSiteIds);
-
-  const makeCounts = new Map<string, number>();
-  for (const o of offers) {
-    if (o.vehicleMake) makeCounts.set(o.vehicleMake, (makeCounts.get(o.vehicleMake) ?? 0) + 1);
-  }
-  const primaryBrand = makeCounts.size > 0
-    ? [...makeCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    : null;
-
-  const news = await getStoredNewsForReport(primaryBrand);
+  const { offers, primarySiteIds, news, inventoryData } = await getReportData(snapshot);
 
   return (
     <div>
