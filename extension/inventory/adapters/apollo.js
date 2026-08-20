@@ -82,7 +82,7 @@
    * query matches what the site would have asked for itself; only the three
    * availability flags are ours.
    */
-  async function fetchFilters(tabId, identity, state) {
+  async function fetchFiltersOnce(tabId, identity, state) {
     return execute(
       tabId,
       async (endpoint, pageFilters, accountId, campaignId, availability) => {
@@ -169,6 +169,25 @@
     );
   }
 
+  /**
+   * The same request, retried once when the browser never got an answer.
+   *
+   * `status: 0` is a THROWN fetch, not a refused one — it is what an in-flight
+   * request looks like when the page navigates out from under it, which these
+   * stores do on first load (non-www -> www). A refusal the server actually
+   * sent (404, 403, 500) is a real answer and is returned as-is.
+   *
+   * This used to guard only the in-transit call, so the on-lot call — the one
+   * whose failure fails the whole dealer — was the one without a retry.
+   */
+  async function fetchFilters(tabId, identity, state, runtime) {
+    const first = await fetchFiltersOnce(tabId, identity, state);
+    if (first?.ok || (first && first.status !== 0)) return first;
+    await runtime.sleep(1_000);
+    runtime.throwIfCancelled();
+    return fetchFiltersOnce(tabId, identity, state);
+  }
+
   // -------------------------------------------------------------------------
   // Collection
   // -------------------------------------------------------------------------
@@ -206,11 +225,12 @@
     };
 
     runtime.throwIfCancelled();
-    const inStock = await fetchFilters(tabId, identity, {
-      inStock: true,
-      inTransit: false,
-      inProduction: false,
-    });
+    const inStock = await fetchFilters(
+      tabId,
+      identity,
+      { inStock: true, inTransit: false, inProduction: false },
+      runtime
+    );
     if (!inStock?.ok) {
       throw new Error(
         `Apollo filter API failed (HTTP ${inStock?.status ?? 0})${
@@ -219,26 +239,20 @@
       );
     }
 
-    const transitState = { inStock: false, inTransit: true, inProduction: false };
     runtime.throwIfCancelled();
-    let inTransit = await fetchFilters(tabId, identity, transitState);
-    // Status 0 is a thrown fetch rather than a refused one, and it has shown up
-    // on a single store while the identical call succeeded everywhere else in
-    // the same batch. Losing transit costs more than one retry: a model that is
-    // all in-transit disappears from the breakdown entirely, so the report ends
-    // up short of rows, not just short of a column.
-    if (!inTransit?.ok) {
-      await runtime.sleep(1_000);
-      runtime.throwIfCancelled();
-      inTransit = await fetchFilters(tabId, identity, transitState);
-    }
+    const inTransit = await fetchFilters(
+      tabId,
+      identity,
+      { inStock: false, inTransit: true, inProduction: false },
+      runtime
+    );
     // In-transit is a second opinion, not the headline number. A store that
     // answers the on-lot call but not this one still has usable on-lot data,
     // so report transit as unresolved rather than failing the dealer.
     const transitKnown = Boolean(inTransit?.ok);
     if (!transitKnown) {
       warnings.push(
-        `Apollo in-transit query failed twice (HTTP ${inTransit?.status ?? 0}${
+        `Apollo in-transit query failed (HTTP ${inTransit?.status ?? 0}${
           inTransit?.error ? `: ${inTransit.error}` : ""
         }); transit left unresolved and transit-only models are missing.`
       );

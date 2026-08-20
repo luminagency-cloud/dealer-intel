@@ -99,6 +99,31 @@ const activeInventorySessionRecovery = closeActiveSession();
  * the next dealer's session, the page's CLOSE_SESSION on run end, or
  * `activeInventorySessionRecovery` on the next worker start.
  */
+/**
+ * Are these two URLs the same dealer's site?
+ *
+ * `www.` is ignored. Dealers are stored both ways — an operator's saved
+ * inventory path routinely carries the `www.` host the browser redirected them
+ * to while `item.url` does not — and a strict origin comparison read that as
+ * "another site". The stored SRP was then silently discarded in favour of the
+ * homepage, and the collection ran against a page with no inventory on it.
+ *
+ * Scheme and port still have to match: this is a guard against navigating to
+ * somebody else's site, not a guess at what the operator meant.
+ */
+function sameDealerOrigin(left, right) {
+  const key = (value) => {
+    try {
+      const url = new URL(value);
+      return `${url.protocol}//${url.hostname.replace(/^www\./i, "")}:${url.port}`;
+    } catch {
+      return null;
+    }
+  };
+  const a = key(left);
+  return Boolean(a) && a === key(right);
+}
+
 async function ensureSiteSession(item, landingUrl, lifetimeMs) {
   await activeInventorySessionRecovery;
   if (!item?.url || !item?.siteId) {
@@ -109,13 +134,7 @@ async function ensureSiteSession(item, landingUrl, lifetimeMs) {
   // to another site, so anything off-origin falls back to the dealer homepage.
   const opensAt = (() => {
     if (!landingUrl) return item.url;
-    try {
-      return new URL(landingUrl).origin === new URL(item.url).origin
-        ? landingUrl
-        : item.url;
-    } catch {
-      return item.url;
-    }
+    return sameDealerOrigin(landingUrl, item.url) ? landingUrl : item.url;
   })();
 
   if (activeSession?.siteId === item.siteId) {
@@ -135,13 +154,7 @@ async function ensureSiteSession(item, landingUrl, lifetimeMs) {
       // navigates this tab around the dealer's own site (SRP, per-make filter
       // URLs), and a site that redirects http->https or adds a trailing slash
       // would otherwise be yanked back to the homepage on every call.
-      const sameSite = (() => {
-        try {
-          return new URL(tab.url || "").origin === new URL(item.url).origin;
-        } catch {
-          return false;
-        }
-      })();
+      const sameSite = sameDealerOrigin(tab.url, item.url);
       if (!sameSite) {
         // No `active: true`: this tab is the only tab in its own collection
         // window, so activating it only serves to steal the operator's focus.

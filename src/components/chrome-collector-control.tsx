@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { withCollectorLock } from "@/lib/collector-lock";
 
 const REQUEST_TYPE = "DEALER_INTEL_EXTENSION_REQUEST";
 const RESPONSE_TYPE = "DEALER_INTEL_EXTENSION_RESPONSE";
@@ -385,7 +386,13 @@ export function ChromeCollectorControl({
           setMessage("Chrome collection is active in another Dealer Intel tab.");
           return;
         }
-        await startChromeCollection();
+        // The extension has one browser session. An inventory run already
+        // driving it would lose its tab to this run's first dealer.
+        await withCollectorLock(startChromeCollection, () =>
+          setMessage(
+            "An inventory run is using the Chrome Collector session. Inventory runs are short — wait for it to finish, then start this run again."
+          )
+        );
       }
     );
   }

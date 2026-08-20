@@ -1,6 +1,6 @@
 import { getDb, inventoryResults, sites } from "@/lib/db";
 import { getISOWeekLabel } from "@/lib/cycle";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
   brandsToMakeAllowList,
@@ -47,6 +47,76 @@ if (globalState.__activeInventoryBatch === undefined) {
   globalState.__activeInventoryBatch = null;
 }
 
+/**
+ * How long a batch may go without ANY dealer changing state before it is
+ * treated as abandoned.
+ *
+ * The bound is on the batch's last progress, not on a row's age: a dealer
+ * queued behind twenty others legitimately waits a long time, but the batch
+ * around it does not stand still. The longest legitimate gap is one dealer's
+ * whole collection — `collectionBudgetMs` in the extension, 45s plus 45s per
+ * make plus session headroom, so about six minutes for the widest allow-list
+ * we run. Twice that leaves room for a slow store without leaving a genuinely
+ * dead batch sitting there.
+ */
+const ORPHANED_BATCH_MS = 12 * 60 * 1_000;
+
+/**
+ * Fail the rows of any batch nothing is driving any more.
+ *
+ * Queued work only ever moves because a Dealer Intel tab is holding the
+ * browser lock for its batch and draining the queue. When that tab is closed,
+ * reloaded away, or never claimed the batch at all, the rows stay queued and
+ * the batch keeps reporting itself active — with no visible collection window
+ * and no timeout to end it, because the per-dealer timeout only starts once a
+ * dealer is actually handed to the extension. This is that missing bound.
+ */
+async function reapOrphanedBatches() {
+  const db = getDb();
+  const pending = await db
+    .selectDistinct({ batchId: inventoryResults.batchId })
+    .from(inventoryResults)
+    .where(inArray(inventoryResults.status, ["queued", "running"]));
+  if (pending.length === 0) return;
+
+  const batchIds = pending.map((row) => row.batchId);
+  const progress = await db
+    .select({
+      batchId: inventoryResults.batchId,
+      lastProgress: max(inventoryResults.collectedAt),
+    })
+    .from(inventoryResults)
+    .where(inArray(inventoryResults.batchId, batchIds))
+    .groupBy(inventoryResults.batchId);
+
+  const cutoff = new Date(Date.now() - ORPHANED_BATCH_MS);
+  const orphaned = progress
+    .filter((row) => row.lastProgress !== null && row.lastProgress < cutoff)
+    .map((row) => row.batchId);
+  if (orphaned.length === 0) return;
+
+  await db
+    .update(inventoryResults)
+    .set({
+      status: "failed",
+      collectedAt: new Date(),
+      error: {
+        message:
+          "No Chrome Collector picked this dealer up. The visible collection window never opened, or the Dealer Intel tab driving the run was closed. Press Run again.",
+        code: "chrome_collector_unavailable",
+      },
+    })
+    .where(
+      and(
+        inArray(inventoryResults.batchId, orphaned),
+        inArray(inventoryResults.status, ["queued", "running"])
+      )
+    );
+
+  const active = globalState.__activeInventoryBatch;
+  if (active && orphaned.includes(active.id)) globalState.__activeInventoryBatch = null;
+}
+
 async function clearStaleActiveBatch() {
   const active = globalState.__activeInventoryBatch;
   if (!active) return;
@@ -84,6 +154,7 @@ export async function getActiveInventoryBatch(): Promise<{
   siteIds: string[];
   startedAt: Date;
 } | null> {
+  await reapOrphanedBatches();
   await clearStaleActiveBatch();
   const active = globalState.__activeInventoryBatch;
   if (active) {
@@ -126,6 +197,7 @@ export interface InventoryBatchStatus {
 /** Latest result per site within one batch (one row per site, updated
  *  queued -> running -> ok/failed as work progresses). */
 export async function getInventoryBatchStatus(batchId: string): Promise<InventoryBatchStatus> {
+  await reapOrphanedBatches();
   const active = globalState.__activeInventoryBatch;
   const isThisBatch = active?.id === batchId;
 

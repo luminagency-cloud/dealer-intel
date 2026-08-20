@@ -105,9 +105,21 @@
    *   - the model counts total no more than the store's own count for that
    *     make (an unfiltered read totals the whole store, so it cannot).
    *
-   * Either alone proves the page narrowed. Requiring both would fail honest
-   * stores: some themes never render the facet control as checked, and some
-   * publish no per-make counts.
+   *   - the per-make read is smaller than the store's own unfiltered model
+   *     read, which an unfiltered read cannot be.
+   *
+   * Any one alone proves the page narrowed. Requiring more than one would fail
+   * honest stores: some themes never render the facet control as checked, and
+   * some publish no per-make counts.
+   *
+   * That last form is the one that keeps the guard from failing closed. The
+   * first two both depend on the make facet — on its checked state, or on it
+   * publishing a count — and when a store's make facet offers neither, EVERY
+   * make failed the guard at once and the dealer ended the run with no model
+   * rows at all. Every multi-make Dealer Inspire store failed this way while
+   * every single-brand store passed, because a single-brand store never gets
+   * this far. Comparing against the unfiltered read asks the page a question
+   * it can always answer.
    *
    * The guard only means anything where a store has more than one make to
    * confuse. On a single-brand store the unfiltered read IS that make's read,
@@ -121,11 +133,21 @@
    * @param {string[]} [options.selectedMakes] makes the page's own markup
    *   reports as selected AFTER filtering. Must be read from the DOM, never
    *   from the URL — the URL only ever repeats what we put there.
+   * @param {number|null} [options.storeModelTotal] the model facet total read
+   *   on the SAME page before any make filter applied — the whole store. A
+   *   per-make read that comes back this big is the read the guard exists to
+   *   catch; anything smaller narrowed.
    * @returns {{scoped: boolean, reason: string|null}} `scoped` false means the
    *   counts belong to the store rather than to this make and must be dropped.
    */
   function checkMakeScope(options = {}) {
-    const { make, modelTotal, storeMakes = [], selectedMakes = [] } = options;
+    const {
+      make,
+      modelTotal,
+      storeMakes = [],
+      selectedMakes = [],
+      storeModelTotal = null,
+    } = options;
     const ok = { scoped: true, reason: null };
 
     const offered = storeMakes.filter((row) => normalizeKey(row?.name || row?.value));
@@ -140,16 +162,24 @@
 
     const own = offered.find(matches);
     const count = Number(own?.count);
-    if (!Number.isFinite(count)) {
-      return {
-        scoped: false,
-        reason: `the make facet neither reports ${make} as selected nor publishes a ${make} count, so ${modelTotal} model vehicles could not be confirmed as ${make} alone`,
-      };
-    }
     // Tolerance, not equality: a status-split pass reads legitimately FEWER
     // vehicles than the make's all-status facet count, and counts drift a
     // little between two page loads. Only an over-count is evidence.
-    if (Number(modelTotal) <= count + 2) return ok;
+    if (Number.isFinite(count) && Number(modelTotal) <= count + 2) return ok;
+
+    // Same tolerance, same direction: the unfiltered read is the ceiling, so
+    // only landing at or above it is evidence of a filter that never applied.
+    const whole = Number(storeModelTotal);
+    if (Number.isFinite(whole) && whole > 0 && Number(modelTotal) <= whole - 2) return ok;
+
+    if (!Number.isFinite(count)) {
+      return {
+        scoped: false,
+        reason: `the make facet neither reports ${make} as selected nor publishes a ${make} count, and ${modelTotal} model vehicles is the whole store's unfiltered read (${
+          Number.isFinite(whole) ? whole : "unknown"
+        }), so they could not be confirmed as ${make} alone`,
+      };
+    }
     return {
       scoped: false,
       reason: `model counts total ${modelTotal} against ${count} ${make} in the store's own make facet, and the page does not report ${make} as selected; the make filter did not apply`,

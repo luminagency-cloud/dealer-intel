@@ -11,6 +11,7 @@ import {
 } from "./inventory-chrome";
 import { supportsChromeInventory } from "@/lib/inventory-platforms";
 import { usePolling } from "@/hooks/use-polling";
+import { withCollectorLock } from "@/lib/collector-lock";
 
 export type MakeSubtotal = { make: string; inStock: number; inTransit: number | null };
 export type ModelRow = { make: string; model: string; inStock: number | null; inTransit: number | null; status: string };
@@ -248,10 +249,26 @@ export function InventoryTable({
       { ifAvailable: true },
       async (lock) => {
         if (!lock) {
-          setChromeMessage("Inventory collection is active in another Dealer Intel tab.");
+          // Held by the drive already running this batch — usually this very
+          // tab, which is why naming another tab was misleading. That drive
+          // re-reads the queue after each dealer, so it picks these up.
+          setChromeMessage(
+            "Added to the inventory run already in progress; these dealers start when the current one finishes."
+          );
           return;
         }
-        await driveChromeBatch(batchId);
+        // Same single extension session the offer collector drives. Whoever
+        // holds it keeps it for the whole drive.
+        await withCollectorLock(
+          () => driveChromeBatch(batchId),
+          () => {
+            setChromeBusy(false);
+            setChromeFailed(true);
+            setChromeMessage(
+              "An offer collection run is using the Chrome Collector session. Wait for it to finish, then start these dealers again."
+            );
+          }
+        );
       }
     );
   }

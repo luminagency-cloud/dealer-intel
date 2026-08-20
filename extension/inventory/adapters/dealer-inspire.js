@@ -263,13 +263,24 @@
    * happy path pays nothing for the guard. Selection is taken from the markup
    * (`selectedInDom`) rather than from `selected`, which also counts the URL.
    */
-  async function verifyMakeScope(tabId, make, modelTotal, storeMakes, runtime) {
-    const byCount = inventoryTally.checkMakeScope({ make, modelTotal, storeMakes });
+  async function verifyMakeScope(tabId, make, modelTotal, storeMakes, runtime, storeModelTotal) {
+    const byCount = inventoryTally.checkMakeScope({
+      make,
+      modelTotal,
+      storeMakes,
+      storeModelTotal,
+    });
     if (byCount.scoped) return byCount;
     const selectedMakes = (await readFacetRows(tabId, "make", runtime))
       .filter((row) => row.selectedInDom)
       .map((row) => row.value || row.name);
-    return inventoryTally.checkMakeScope({ make, modelTotal, storeMakes, selectedMakes });
+    return inventoryTally.checkMakeScope({
+      make,
+      modelTotal,
+      storeMakes,
+      selectedMakes,
+      storeModelTotal,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -335,6 +346,18 @@
       );
     }
 
+    // The whole store, read from the same model facet the per-make passes read
+    // and before any make refinement is on. It is the ceiling the scope guard
+    // measures each per-make read against, and it is the only evidence of
+    // narrowing available on a store whose make facet publishes no counts.
+    // Read once per dealer, on the page we are already sitting on.
+    const storeModelTotal = (await readModelCounts(tabId, "", runtime)).total || null;
+    if (storeModelTotal === null) {
+      warnings.push(
+        "Dealer Inspire published no unfiltered model facet total; per-make reads could not be measured against the whole store."
+      );
+    }
+
     const models = [];
     const makeSubtotals = [];
 
@@ -375,7 +398,14 @@
       }
 
       const inStock = await readModelCounts(tabId, make, runtime);
-      const scope = await verifyMakeScope(tabId, make, inStock.total, availableMakes, runtime);
+      const scope = await verifyMakeScope(
+        tabId,
+        make,
+        inStock.total,
+        availableMakes,
+        runtime,
+        storeModelTotal
+      );
       if (!scope.scoped) {
         warnings.push(`${make}: Dealer Inspire ${scope.reason}; recorded as zero.`);
         makeSubtotals.push({ make, inStock: 0, inTransit: null });
@@ -399,7 +429,8 @@
           make,
           inTransit.total,
           availableMakes,
-          runtime
+          runtime,
+          storeModelTotal
         );
         if (!transitScope.scoped) {
           warnings.push(
@@ -417,8 +448,16 @@
       });
     }
 
+    // Carry the per-make warnings into the failure. Every `continue` above
+    // pushed the reason that make came back empty, and throwing a bare
+    // sentence dropped all of them: the stored result said "no model rows"
+    // and could not say whether the store offered the make, refused the
+    // refinement, or failed the scope guard.
+    const explain = (message) =>
+      warnings.length > 0 ? `${message}. Why: ${warnings.join(" | ")}` : message;
+
     if (models.length === 0) {
-      throw new Error("Dealer Inspire collection produced no model rows");
+      throw new Error(explain("Dealer Inspire collection produced no model rows"));
     }
 
     const totalInStock = makeSubtotals.reduce((sum, row) => sum + row.inStock, 0);
@@ -427,7 +466,7 @@
       ? makeSubtotals.reduce((sum, row) => sum + row.inTransit, 0)
       : null;
     if (totalInStock <= 0) {
-      throw new Error("Dealer Inspire reconciled on-lot total was zero");
+      throw new Error(explain("Dealer Inspire reconciled on-lot total was zero"));
     }
 
     return {

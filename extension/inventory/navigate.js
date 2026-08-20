@@ -58,13 +58,39 @@
   const HREF_INCLUDE =
     /new-inventory|new-vehicles|new-vehicle-inventory|inventory|searchnew\.aspx/i;
 
+  // `chrome.scripting.executeScript` fails outright while the top frame is
+  // being replaced — a non-www -> www redirect, a consent hop, an SPA route
+  // swap. Chrome answers "Frame with ID 0 was removed", or returns a frame
+  // whose result is `undefined` because it died mid-script.
+  //
+  // Neither is evidence about the PAGE, but every caller here read it as one:
+  // one teardown during the landing-page inspection wrote the SRP off, marked
+  // its URL as tried, and left the resolver with nothing but the homepage.
+  // The frame comes back a moment later — wait for it and ask again.
+  const FRAME_TORN_DOWN = /frame\s+(?:with\s+id\s+\d+\s+)?was\s+removed|no\s+frame\s+with\s+id/i;
+  const EXECUTE_ATTEMPTS = 3;
+  const EXECUTE_RETRY_MS = 600;
+
   async function execute(tabId, func, args = []) {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func,
-      args,
-    });
-    return result;
+    for (let attempt = 1; ; attempt += 1) {
+      const last = attempt >= EXECUTE_ATTEMPTS;
+      try {
+        const frames = await chrome.scripting.executeScript({
+          target: { tabId },
+          func,
+          args,
+        });
+        // No injected script here returns `undefined` on purpose: the readers
+        // return objects and the discovery scan returns `null`. So an absent
+        // result means the frame went away, not that the page said nothing.
+        const result = frames?.[0]?.result;
+        if (result !== undefined || last) return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (last || !FRAME_TORN_DOWN.test(message)) throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, EXECUTE_RETRY_MS));
+    }
   }
 
   function absoluteUrl(base, path) {
@@ -423,6 +449,9 @@
     // case this tier IS the whole navigation and nothing below ever runs.
     runtime.throwIfCancelled();
     const here = await currentUrl(tabId).catch(() => null);
+    // Did the landing tier reach a verdict at all? An inspection that threw
+    // says nothing about the URL, so it must not poison `attempted` below.
+    let landingInspected = false;
     // Give a real SRP the same readiness poll a navigated-to candidate gets;
     // a homepage landing (unknown platform, no stored path) is checked once
     // and abandoned, since polling it for seconds only delays the fallback.
@@ -432,6 +461,7 @@
       landed = landedOnCandidate
         ? await pollReadiness(tabId, inspect, runtime)
         : await inspect(tabId);
+      landingInspected = true;
     } catch (error) {
       rethrowIfCancelled(error);
       record("Landing page", null, `page inspection failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -453,8 +483,14 @@
     // below do not reload the identical page they just watched fail — with the
     // session opening on the platform default path, tier 3 would otherwise be
     // a guaranteed repeat of tier 1.
-    for (const tried of [here, preferredLandingUrl(item, platform)]) {
-      if (tried && !attempted.includes(tried)) attempted.push(tried);
+    //
+    // Only when the page actually answered. If the inspection threw, the tiers
+    // below are the retry, and suppressing them as "already tried" is what
+    // turned one transient frame teardown into a dead dealer.
+    if (landingInspected) {
+      for (const tried of [here, preferredLandingUrl(item, platform)]) {
+        if (tried && !attempted.includes(tried)) attempted.push(tried);
+      }
     }
 
     // Tier 2 — the path the operator stored for this dealer.

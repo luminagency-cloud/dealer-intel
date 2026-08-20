@@ -666,12 +666,22 @@ and render them as an Inventory Snapshot section. Snapshot history is shown for
 admin users when a run group has prior snapshots; true current-vs-prior report
 deltas are still backlog.
 
+The Brand News section reads `news_items` rows keyed by ISO week. The admin app
+writes that key (`getISOWeekLabel`, `src/lib/cycle.ts`); the deployed viewer
+reads it (`isoWeekLabel`, `viewer/src/lib/iso-week.ts`). Viewer is a separate
+Vercel project and cannot import from `src/`, so the function exists twice on
+purpose. `scripts/verify-iso-week.ts` fails if the two ever disagree — run it
+after touching either one.
+
 Key files:
 
 - `src/lib/snapshot.ts`
-- `src/app/(admin)/reports/`
-- `src/components/report/ReportContent.tsx`
-- `viewer/`
+- `src/app/(admin)/reports/` — management only: publish, share link, CSV export.
+  It does not render report content.
+- `viewer/` — the only report rendering path, deployed on Vercel. Both viewer
+  routes (`/r/[token]` public, `/reports/[id]` signed-in) build their props
+  through `getReportData()` in `viewer/src/lib/db/repository.ts`, so neither
+  can drift into rendering a partial report.
 
 ## Operations
 

@@ -158,26 +158,53 @@ async function postResult(batchId: string, body: unknown) {
   if (!response.ok) throw new Error(await responseError(response));
 }
 
+async function fetchJobItems(batchId: string): Promise<ChromeInventoryItem[]> {
+  const response = await fetch(`/api/inventory/batch/${batchId}/job`, {
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  const job = (await response.json()) as { items: ChromeInventoryItem[] };
+  return job.items;
+}
+
+/**
+ * Drain this batch's queue until nothing is left to do.
+ *
+ * Re-reading the queue after each dealer is not a refinement — it is the only
+ * way a dealer queued mid-run ever gets collected. Pressing Run while a batch
+ * is active deliberately appends to the SAME batch rather than starting a
+ * second one, and the browser lock guarding that batch id is held right here,
+ * so no second driver can ever claim the new dealer. Reading the list once at
+ * the top left that dealer sitting at "queued" for good, with the batch still
+ * reporting itself active and nothing driving it.
+ *
+ * `attempted` is what makes the loop terminate: a dealer this drive has
+ * already opened is never opened again, so a row that cannot be settled ends
+ * the drain instead of spinning on it.
+ */
 export async function runChromeInventoryJob(
   batchId: string,
   onProgress: (message: string) => void,
   signal?: AbortSignal
 ): Promise<{ succeeded: number; failed: number }> {
-  const jobResponse = await fetch(`/api/inventory/batch/${batchId}/job`, {
-    cache: "no-store",
-  });
-  if (!jobResponse.ok) throw new Error(await responseError(jobResponse));
-  const job = (await jobResponse.json()) as {
-    items: ChromeInventoryItem[];
-  };
   let succeeded = 0;
   let failed = 0;
+  const attempted = new Set<string>();
 
   try {
-    for (const [index, item] of job.items.entries()) {
+    for (;;) {
       signal?.throwIfAborted();
+      const queue = (await fetchJobItems(batchId)).filter(
+        (candidate) => !attempted.has(candidate.siteId)
+      );
+      const item = queue[0];
+      if (!item) break;
+      attempted.add(item.siteId);
+
+      const position = attempted.size;
+      const total = position + queue.length - 1;
       onProgress(
-        `${index + 1}/${job.items.length}: Opening ${item.siteName} and navigating to New Inventory…`
+        `${position}/${total}: Opening ${item.siteName} and navigating to New Inventory…`
       );
       await postResult(batchId, { action: "running", siteId: item.siteId });
       try {
@@ -201,9 +228,7 @@ export async function runChromeInventoryJob(
           }
           throw new Error(message);
         }
-        onProgress(
-          `${index + 1}/${job.items.length}: Saving ${item.siteName} inventory…`
-        );
+        onProgress(`${position}/${total}: Saving ${item.siteName} inventory…`);
         await postResult(batchId, {
           action: "complete",
           siteId: item.siteId,
